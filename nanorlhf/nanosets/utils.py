@@ -5,6 +5,8 @@ from typing import Sequence
 
 from nanorlhf.nanosets.core.buffer import Buffer
 
+DEFAULT_BATCH_SIZE = 1000
+
 
 def normalize_index(i: int, n: int) -> int:
     if n < 0:
