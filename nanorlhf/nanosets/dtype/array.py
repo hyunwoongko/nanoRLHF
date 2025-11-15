@@ -1,109 +1,78 @@
 from abc import ABC, abstractmethod
-from typing import Optional
-from typing import TypeVar, Generic
+from typing import Optional, Sequence
 
 from nanorlhf.nanosets.core.bitmap import Bitmap
+from nanorlhf.nanosets.core.buffer import Buffer
 from nanorlhf.nanosets.dtype.dtype import DataType
+from nanorlhf.nanosets.utils import normalize_index, unpack_int32
 
 
 class Array(ABC):
-    """
-    Abstract base class for all array types.
 
-    Args:
-        dtype (DataType): data type of the array
-        length (int): length of the array
-        validity (Optional[Bitmap]): validity bitmap, if None all elements are valid
-    """
-
-    def __init__(self, dtype: DataType, length: int, validity: Optional[Bitmap] = None):
+    def __init__(
+        self,
+        dtype: DataType,
+        length: int,
+        values: Optional[Buffer] = None,
+        validity: Optional[Bitmap] = None,
+        indices: Optional[Buffer] = None,
+    ):
         self.dtype = dtype
         self.length = length
+        self.values = values
         self.validity = validity
+        self.indices = indices
 
-    def __len__(self):
-        """
-        Get the length of the array.
-
-        Returns:
-            int: length of the array
-        """
-        return self.length
+    def is_contiguous(self):
+        return self.indices is None
 
     def is_null(self, i: int) -> bool:
-        """
-        Check if the i-th element is null.
-
-        Args:
-            i (int): index of the element
-
-        Returns:
-            bool: True if the element is null, False otherwise
-        """
         if self.validity is None:
             return False
-        return not self.validity.is_valid(i)
+
+        i = normalize_index(i, self.length)
+        if self.is_contiguous():
+            return not self.validity[i]
+
+        base_i = unpack_int32(self.indices, i)
+        return not self.validity[base_i]
+
+    def base_index(self, i: int) -> int:
+        i = normalize_index(i, self.length)
+        if self.is_contiguous():
+            return i
+        return unpack_int32(self.indices, i)
+
+    def __len__(self):
+        return self.length
+
+    def __setitem__(self, key, value):
+        raise RuntimeError(f"`{self.__class__.__name__}` is immutable")
 
     @abstractmethod
-    def to_pylist(self) -> list:
-        """
-        Convert the array to a Python list, respecting null values.
+    def __getitem__(self, item):
+        raise NotImplementedError
 
-        Returns:
-            list: Python list representation of the array
-        """
+    @abstractmethod
+    def take(self, indices: Sequence):
+        raise NotImplementedError
+
+    @abstractmethod
+    def to_list(self):
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def from_pylist(cls, data: list) -> "Array":
-        """
-        Create an Array from a Python list.
-
-        Args:
-            data (list): Python list to convert
-
-        Returns:
-            Array: Converted Array
-        """
+    def from_list(cls, data: list):
         raise NotImplementedError
 
 
-# element type
-E = TypeVar('E')
-
-# array type
-# - bound=Array: `A` must be a subclass of Array
-# - covariant=True: `A` can be a more derived type than specified
-A = TypeVar('A', bound=Array, covariant=True)
-
-
-class ArrayBuilder(Generic[E, A], ABC):
-    """
-    Abstract base class for all array builder classes.
-    When we build an arbitrary array, we usually don't know the length in advance.
-    So we use a builder to incrementally build the array.
-    """
+class ArrayBuilder(ABC):
 
     @abstractmethod
-    def append(self, value: E) -> "ArrayBuilder[E, A]":
-        """
-        Append a single value to the builder.
-
-        Args:
-            value (E): value to append
-
-        Returns:
-            ArrayBuilder: self for method chaining
-        """
+    def append(self, value):
         raise NotImplementedError
 
     @abstractmethod
-    def finish(self) -> A:
-        """
-        Finalize the builder and return the built array.
-
-        Returns:
-            A: built array
-        """
+    def finish(self) -> Array:
         raise NotImplementedError

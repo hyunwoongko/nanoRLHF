@@ -25,7 +25,7 @@ def main(tmp_dir="data/ipc_test"):
 
     # build
     rows = gen_rows(1000)
-    batch = RecordBatch.from_pylist(rows)
+    batch = RecordBatch.from_list(rows)
     table = Table([batch])
 
     # write
@@ -36,7 +36,7 @@ def main(tmp_dir="data/ipc_test"):
     table2 = read_table(path)
 
     # verify
-    assert table2.to_pylist() == table.to_pylist()
+    assert table2.to_list() == table.to_list()
     print("✅ IPC round-trip passed:", path)
 
 

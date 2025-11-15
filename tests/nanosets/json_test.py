@@ -39,7 +39,7 @@ def main(tmp_dir: str = "data/json_test"):
 
     # 1) Build a RecordBatch from Python rows (schema inferred inside)
     rows = generate_rows(1000)
-    batch = RecordBatch.from_pylist(rows)
+    batch = RecordBatch.from_list(rows)
     table = Table([batch])
 
     # 2) Save as JSON (with schema) and JSONL (rows only)
@@ -54,9 +54,9 @@ def main(tmp_dir: str = "data/json_test"):
     table_from_jsonl = from_jsonl(jsonl_path)
 
     # 4) Verify round-trip equality against original logical rows
-    original_rows = table.to_pylist()
-    rows_from_json = table_from_json.to_pylist()
-    rows_from_jsonl = table_from_jsonl.to_pylist()
+    original_rows = table.to_list()
+    rows_from_json = table_from_json.to_list()
+    rows_from_jsonl = table_from_jsonl.to_list()
 
     assert rows_from_json == original_rows, "JSON round-trip mismatch"
     assert rows_from_jsonl == original_rows, "JSONL round-trip mismatch"

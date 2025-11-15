@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Tuple, List
 
 from nanorlhf.nanosets.table.field import Field
 
@@ -27,10 +27,16 @@ class Schema:
 
     fields: Tuple[Field, ...]
 
-    def names(self):
+    def names(self) -> List[str]:
         """Return a list of field names in order."""
         return [f.name for f in self.fields]
 
     def index(self, name: str) -> int:
         """Return the index of the field with the given name."""
-        return self.names().index(name)
+        names = self.names()
+        if name not in names:
+            raise KeyError(f"Field {name!r} not found in schema")
+        return names.index(name)
+
+    def __len__(self) -> int:
+        return len(self.fields)

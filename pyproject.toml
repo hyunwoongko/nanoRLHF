@@ -15,6 +15,7 @@ dependencies = [
   "triton",
   "cloudpickle",
   "zstandard",
+  "transformers"
 ]
 
 [project.urls]
@@ -23,3 +24,7 @@ Repository = "https://github.com/hyunwoongko/nanorlhf"
 
 [tool.setuptools.packages.find]
 include = ["nanorlhf*"]
+
+[tool.black]
+line-length = 119
+skip-string-normalization = true

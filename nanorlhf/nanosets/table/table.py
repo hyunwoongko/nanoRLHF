@@ -1,143 +1,199 @@
-from typing import List, Optional, Dict, Any
+from bisect import bisect_right
+from typing import List, Optional, Dict, Any, Sequence, Iterable
 
+from nanorlhf.nanosets.dtype.array import Array
 from nanorlhf.nanosets.table.record_batch import RecordBatch
 from nanorlhf.nanosets.table.schema import Schema
+from nanorlhf.nanosets.utils import normalize_index
 
 
 class Table:
-    """
-    A `Table` is a logical collection of one or more `RecordBatch` objects
-    that all share the same `Schema`.
-
-    Args:
-        batches (list[RecordBatch]): The list of `RecordBatch` instances forming this table.
-
-    Notes:
-        - There must be at least one batch.
-        - All batches must share the exact same `Schema`.
-        - `self.length` is the sum of row counts across all batches.
-
-    Examples:
-        >>> from nanorlhf.nanosets.table.schema import Schema
-        >>> from nanorlhf.nanosets.table.field import Field
-        >>> from nanorlhf.nanosets.dtype.dtype import INT32, FLOAT32, STRING
-        >>> from nanorlhf.nanosets.dtype.primitive_array import PrimitiveArray
-        >>> from nanorlhf.nanosets.dtype.string_array import StringArray
-
-        >>>
-        >>> # Define schema
-        >>> schema = Schema((
-        ...     Field("x", INT32),
-        ...     Field("y", FLOAT32),
-        ...     Field("z", STRING),
-        ... ))
-        >>>
-        >>> # Create arrays
-        >>> arr_x = PrimitiveArray.from_pylist([1, 2, 3], dtype=INT32)
-        >>> arr_y = PrimitiveArray.from_pylist([0.1, 0.2, 0.3], dtype=FLOAT32)
-        >>> arr_z = StringArray.from_pylist(["hi", "there", "!"])
-        >>>
-        >>> # Create Table
-        >>> table = Table.from_arrays(schema, [arr_x, arr_y, arr_z])
-        >>> print(table.to_pylist())
-        [{'x': 1, 'y': 0.1, 'z': 'hi'}, {'x': 2, 'y': 0.2, 'z': 'there'}, {'x': 3, 'y': 0.3, 'z': '!'}]
-
-    Discussion:
-        Q. When to use `Table` vs `RecordBatch`?
-            Use `RecordBatch` for a single chunk (e.g., a streaming unit or a compute partition).
-            Use `Table` when you need a unified logical dataset across multiple chunks,
-            while preserving batch-level execution benefits.
-    """
-
     def __init__(self, batches: List[RecordBatch]):
-        assert batches, "Table must have at least one RecordBatch"
-        self.schema = batches[0].schema
+        if not batches:
+            raise ValueError("Table must have at least one RecordBatch")
+
+        schema = batches[0].schema
         for b in batches:
-            assert b.schema == self.schema, "All RecordBatches must have the same schema"
-        self.batches = batches
-        self.length = sum(b.length for b in batches)
+            if b.schema != schema:
+                raise ValueError("All RecordBatches must have the same schema")
 
-    @classmethod
-    def from_pylist(cls, rows: List[Optional[Dict[str, Any]]]) -> "Table":
-        """
-        Construct a `Table` from a list of Python dictionaries, one per row.
-
-        Args:
-            rows (list[dict]): List of row dictionaries mapping field name -> value.
-
-        Returns:
-            Table: A `Table` instance containing the data from the input rows.
-        """
-        batch = RecordBatch.from_pylist(rows)
-        return cls([batch])
+        self.schema: Schema = schema
+        self.batches: List[RecordBatch] = batches
+        self.length: int = sum(b.length for b in batches)
 
     @classmethod
     def from_batches(cls, batches: List[RecordBatch]) -> "Table":
-        """
-        Construct a `Table` from a list of `RecordBatch` instances.
-
-        Args:
-            batches (list[RecordBatch]): List of `RecordBatch` instances to form the table.
-
-        Returns:
-            Table: A `Table` instance containing the data from the input batches.
-        """
         return cls(batches)
 
-    def to_pylist(self) -> List[dict]:
-        """
-        Convert the entire `Table` into a list of Python dictionaries, one per row.
+    @classmethod
+    def from_arrays(cls, schema: Schema, columns: List[Array]) -> "Table":
+        batch = RecordBatch(schema, columns)
+        return cls([batch])
 
-        Returns:
-            list[dict]: A list of row dictionaries mapping field name -> value.
+    @classmethod
+    def from_list(cls, rows: List[Optional[Dict[str, Any]]], *, strict_keys: bool = False) -> "Table":
+        batch = RecordBatch.from_list(rows, strict_keys=strict_keys)
+        return cls([batch])
 
-        Discussion:
-            Implementation details:
-                1) For each batch, each column is converted once via `to_pylist()`.
-                2) Rows are assembled by indexing into those per-column Python lists.
-                3) This keeps per-element overhead minimal within a batch,
-                   but still constructs Python objects for each row.
+    @classmethod
+    def concat(cls, tables: List["Table"]) -> "Table":
+        if not tables:
+            raise ValueError("No tables to concatenate.")
 
-                Example:
-                    Suppose a table has:
-                        x = [1, 2, 3]
-                        y = [0.1, 0.2, 0.3]
-                        z = ["hi", "arrow", "world"]
+        schema = tables[0].schema
+        for t in tables:
+            if t.schema != schema:
+                raise ValueError("All tables must share the same schema to concatenate.")
 
-                    Step 1: Each column is converted to a Python list:
-                        cols = [
-                            [1, 2, 3],
-                            [0.1, 0.2, 0.3],
-                            ["hi", "arrow", "world"]
-                        ]
+        batches: List[RecordBatch] = []
+        for t in tables:
+            batches.extend(t.batches)
 
-                    Step 2: Each row is assembled as a dictionary:
-                        Row 0 → {'x': 1, 'y': 0.1, 'z': 'hi'}
-                        Row 1 → {'x': 2, 'y': 0.2, 'z': 'arrow'}
-                        Row 2 → {'x': 3, 'y': 0.3, 'z': 'world'}
+        return cls.from_batches(batches)
 
-                    Step 3: The result is a list of dictionaries:
-                        [
-                            {'x': 1, 'y': 0.1, 'z': 'hi'},
-                            {'x': 2, 'y': 0.2, 'z': 'arrow'},
-                            {'x': 3, 'y': 0.3, 'z': 'world'}
-                        ]
+    def num_rows(self) -> int:
+        return self.length
 
-            Warning:
-                For large datasets, this operation can be memory and allocation heavy.
-                Prefer columnar operations or batch-wise iteration where possible.
+    def num_columns(self) -> int:
+        return len(self.schema.fields)
 
-        Examples:
-            >>> rows = table.to_pylist()
-            >>> rows[0]
-            {'x': 1, 'y': 0.1, 'z': 'hi'}
-        """
-        rows = []
+    def column_names(self) -> List[str]:
+        return self.schema.names()
+
+    def iter_batches(self) -> Iterable[RecordBatch]:
+        return iter(self.batches)
+
+    def column(self, i_or_name) -> List[Array]:
+        cols: List[Array] = []
         for b in self.batches:
-            cols = [c.to_pylist() for c in b.columns]
+            cols.append(b.column(i_or_name))
+        return cols
+
+    def slice(self, offset: int, length: int) -> "Table":
+        if length < 0:
+            raise ValueError("length must be non-negative")
+
+        n = self.length
+        if offset < 0:
+            offset = n + offset
+        if not (0 <= offset <= n):
+            raise IndexError(f"offset {offset} out of range [0, {n}]")
+
+        end = offset + length
+        if end > n:
+            raise IndexError(f"slice end {end} out of range [0, {n}]")
+
+        if length == 0:
+            first_batch = self.batches[0]
+            empty_columns = [col.take([]) for col in first_batch.columns]
+            empty_batch = RecordBatch(self.schema, empty_columns)
+            return Table.from_batches([empty_batch])
+
+        remaining = length
+        batch_start_global = 0
+        new_batches: List[RecordBatch] = []
+
+        for b in self.batches:
+            b_len = b.length
+            batch_end_global = batch_start_global + b_len
+
+            if batch_end_global <= offset:
+                batch_start_global = batch_end_global
+                continue
+
+            local_start = max(0, offset - batch_start_global)
+            local_available = b_len - local_start
+            local_len = min(remaining, local_available)
+
+            new_batches.append(b.slice(local_start, local_len))
+
+            remaining -= local_len
+            if remaining <= 0:
+                break
+
+            batch_start_global = batch_end_global
+
+        return Table.from_batches(new_batches)
+
+    def take(self, indices: Sequence[int]) -> "Table":
+        if not indices:
+            first_batch = self.batches[0]
+            empty_columns = [col.take([]) for col in first_batch.columns]
+            empty_batch = RecordBatch(self.schema, empty_columns)
+            return Table.from_batches([empty_batch])
+
+        n = self.length
+        norm_indices = [normalize_index(idx, n) for idx in indices]
+
+        batch_starts: List[int] = []
+        current = 0
+        for b in self.batches:
+            batch_starts.append(current)
+            current += b.length
+
+        new_batches: List[RecordBatch] = []
+
+        current_batch_idx: Optional[int] = None
+        current_local_indices: List[int] = []
+        prev_local: Optional[int] = None
+
+        def flush():
+            nonlocal current_batch_idx, current_local_indices, prev_local
+            if current_batch_idx is None or not current_local_indices:
+                return
+            base_batch = self.batches[current_batch_idx]
+            new_batches.append(base_batch.take(current_local_indices))
+            current_batch_idx = None
+            current_local_indices = []
+            prev_local = None
+
+        for gi in norm_indices:
+            batch_idx = bisect_right(batch_starts, gi) - 1
+            if batch_idx < 0 or batch_idx >= len(self.batches):
+                raise IndexError(f"Global index {gi} not mapped to any batch.")
+            local_idx = gi - batch_starts[batch_idx]
+
+            if current_batch_idx is None:
+                current_batch_idx = batch_idx
+                current_local_indices = [local_idx]
+                prev_local = local_idx
+            else:
+                if batch_idx == current_batch_idx and prev_local is not None and local_idx == prev_local + 1:
+                    current_local_indices.append(local_idx)
+                    prev_local = local_idx
+                else:
+                    flush()
+                    current_batch_idx = batch_idx
+                    current_local_indices = [local_idx]
+                    prev_local = local_idx
+
+        flush()
+
+        if not new_batches:
+            first_batch = self.batches[0]
+            empty_columns = [col.take([]) for col in first_batch.columns]
+            empty_batch = RecordBatch(self.schema, empty_columns)
+            return Table.from_batches([empty_batch])
+
+        return Table.from_batches(new_batches)
+
+    def select(self, names: List[str]) -> "Table":
+        new_batches = [b.select(names) for b in self.batches]
+        return Table.from_batches(new_batches)
+
+    def to_list(self) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+
+        for b in self.batches:
+            if b.num_columns() == 0:
+                rows.extend({} for _ in range(b.length))
+                continue
+
+            cols = [c.to_list() for c in b.columns]
             for r in range(b.length):
-                row = {}
+                row: Dict[str, Any] = {}
                 for f, col in zip(b.schema.fields, cols):
                     row[f.name] = col[r]
                 rows.append(row)
+
         return rows

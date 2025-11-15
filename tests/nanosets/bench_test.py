@@ -132,7 +132,7 @@ def partial_from_jsonl_stream(path: str, field: str):
 def ensure_nano(path_nano: str, rows):
     """Write NANO-IPC file once if file does not exist."""
     if not os.path.exists(path_nano):
-        batch = RecordBatch.from_pylist(rows)
+        batch = RecordBatch.from_list(rows)
         table = Table([batch])
         with open(path_nano, "wb") as fp:
             write_table(fp, table)
@@ -149,7 +149,7 @@ def partial_from_nano_column(table: Table, column_name: str):
     out = []
     for b in table.batches:
         col = b.columns[idx]
-        out.extend(col.to_pylist())
+        out.extend(col.to_list())
     return out
 
 

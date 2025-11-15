@@ -1,6 +1,5 @@
 import os
 import random
-from enum import Enum
 from typing import Optional, List
 
 import numpy as np
@@ -12,17 +11,10 @@ from nanorlhf.nanotron.distributed.initializers import (
     ModelParallelGroupInitializer,
     TensorParallelGroupInitializer,
     PipelineParallelGroupInitializer,
+    TiedEmbeddingGroupInitializer,
 )
+from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanotron.distributed.seed import add_seed, set_mode
-
-
-class ParallelMode(Enum):
-    """Enum class for parallelization mode."""
-    GLOBAL = "global"
-    DATA = "data"
-    MODEL = "model"
-    TENSOR = "tensor"
-    PIPELINE = "pipeline"
 
 
 class MPU:
@@ -78,45 +70,43 @@ class MPU:
         >>> # get prev global rank
         >>> mpu.get_prev_global_rank(ParallelMode.DATA)
 
-    Discussion:
-        Q. How model and data parallelism are organized?
-            Let's say we have a total of 16 GPUs denoted g0, ... g15,
-            and we use 2 GPUs to parallelize the model tensors,
-            and 4 GPUs to parallelize the model pipeline.
+        Discussion:
+            Q. How model and data parallelism are organized?
+                Let's say we have a total of 16 GPUs denoted g0, ... g15,
+                and we use 2 GPUs to parallelize the model tensors,
+                and 4 GPUs to parallelize the model pipeline.
 
-            The present method will create 8 tensor parallel groups,
-            and 4 pipeline parallel groups and 8 data parallel groups as:
+                The present method will create 8 tensor parallel groups,
+                and 4 pipeline parallel groups and 8 data parallel groups as:
 
-            - width: 4 pipeline parallel groups:
-                [g0, g4, g8, g12], [g1, g5, g9, g13], [g2, g6, g10, g14], [g3, g7, g11, g15]
+                - width: 4 pipeline parallel group
+                    [g0, g2, g4, g6], [g1, g3, g5, g7], [g8, g10, g12, g14], [g9, g11, g13, g15]
+                - height: 8 tensor parallel group
+                    [g0, g1], [g2, g3], [g4, g5], [g6, g7], [g8, g9], [g10, g11], [g12, g13], [g14, g15]
+                - depth: 8 data parallel group
+                    [g0, g8], [g1, g9], [g2, g10], [g3, g11], [g4, g12], [g5, g13], [g6, g14], [g7, g15]
 
-            - height: 8 tensor parallel groups:
-                [g0, g1], [g2, g3], [g4, g5], [g6, g7], [g8, g9], [g10, g11], [g12, g13], [g14, g15]
+                                [g08, g10, g12, g14]
+                              /  |              /  |
+                             [g00, g02, g04, g06]  |
+                             |   |             |   |
+                3D parallel  |  [g09, g11, g13, g15]
+                             |  /              |  /
+                             [g01, g03, g05, g07]
 
-            - depth: 8 data parallel groups:
-                [g0, g2], [g1, g3], [g4, g6], [g5, g7], [g8, g10], [g9, g11], [g12, g14], [g13, g15]
+                             +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
+                      model  | g00 |  |   g00    |  |   g02    |  |   g04    |  |   g06    |  | g06 |
+                data         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+  ===> forward
+                      model  | g01 |  |   g01    |  |   g03    |  |   g05    |  |   g07    |  | g07 |
+                             +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
+                            embedding   pipeline      pipeline      pipeline      pipeline   embedding
 
-                            [g02, g06, g10, g14]
-                          /  |              /  |
-                         [g00, g04, g08, g12]  |
-                         |   |             |   |
-            3D parallel  |  [g03, g07, g11, g15]
-                         |  /              |  /
-                         [g01, g05, g09, g13]
-
-                         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
-                  model  | g00 |  |   g00    |  |   g04    |  |   g08    |  |   g12    |  | g12 |
-            data         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+  ===> forward
-                  model  | g01 |  |   g01    |  |   g05    |  |   g09    |  |   g13    |  | g13 |
-                         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
-                        embedding   pipeline      pipeline      pipeline      pipeline   embedding
-
-                         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
-                  model  | g02 |  |   g02    |  |   g06    |  |   g10    |  |   g14    |  | g14 |
-            data         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+  ===> forward
-                  model  | g03 |  |   g03    |  |   g07    |  |   g11    |  |   g15    |  | g15 |
-                         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
-                        embedding   pipeline      pipeline      pipeline      pipeline   embedding
+                             +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
+                      model  | g08 |  |   g08    |  |   g10    |  |   g12    |  |   g14    |  | g14 |
+                data         +-----+  +----------+  +----------+  +----------+  +----------+  +-----+  ===> forward
+                      model  | g09 |  |   g09    |  |   g11    |  |   g13    |  |   g15    |  | g15 |
+                             +-----+  +----------+  +----------+  +----------+  +----------+  +-----+
+                            embedding   pipeline      pipeline      pipeline      pipeline   embedding
     """
 
     @classmethod
@@ -181,7 +171,7 @@ class MPU:
         pipeline_parallel_size: int = 1,
         tensor_parallel_size: int = 1,
         backend: str = "nccl",
-        seed: bool = 42,
+        seed: int = 42,
         local_rank: Optional[int] = None,
     ):
         """
@@ -239,7 +229,7 @@ class MPU:
         pipeline_parallel_size: int = 1,
         tensor_parallel_size: int = 1,
         backend: str = "nccl",
-        seed: bool = 42,
+        seed: int = 42,
     ):
         """
         Initialize parallel context from OpenMPI launcher.
@@ -302,16 +292,14 @@ class MPU:
         seed: int,
     ):
         assert (
-            world_size ==
-            data_parallel_size
-            * pipeline_parallel_size
-            * tensor_parallel_size
+            world_size
+            == data_parallel_size * pipeline_parallel_size * tensor_parallel_size
         ), (
-            f"Expected the world size {world_size} to "
-            f"data parallel size {data_parallel_size} * "
-            f"pipeline parallel size {pipeline_parallel_size} * "
-            f"tensor parallel size {tensor_parallel_size}, "
-            f"but got {data_parallel_size * pipeline_parallel_size * tensor_parallel_size}."
+            f"Expected the world size `{world_size}` to "
+            f"data parallel size ({data_parallel_size}) * "
+            f"pipeline parallel size ({pipeline_parallel_size}) * "
+            f"tensor parallel size ({tensor_parallel_size}), "
+            f"but got `{data_parallel_size * pipeline_parallel_size * tensor_parallel_size}`."
         )
 
         self._global_ranks = {}
@@ -340,10 +328,9 @@ class MPU:
     # sanity check
     @staticmethod
     def _check_parallel_mode(mode: ParallelMode) -> None:
-        if mode not in ParallelMode:
+        if not isinstance(mode, ParallelMode):
             raise ValueError(
-                f"Invalid parallel mode: {mode}. "
-                f"Expected one of {[m.value for m in ParallelMode]}."
+                f"Invalid parallel mode: {mode}. Expected one of {[m.value for m in ParallelMode]}."
             )
 
     # world sizes
@@ -602,13 +589,13 @@ class MPU:
     def get_cpu_group(self, mode: ParallelMode) -> Optional[dist.ProcessGroup]:
         """
         Get the CPU process group for the given parallel mode.
-        
+
         Args:
             mode (ParallelMode): The parallel mode.
-            
+
         Returns:
             torch.distributed.ProcessGroup: The CPU process group for the given parallel mode.
-            
+
         Examples:
             >>> mpu = ...
             >>> mpu.get_cpu_group(ParallelMode.DATA)
@@ -620,11 +607,11 @@ class MPU:
     def add_cpu_group(self, mode: ParallelMode, group: torch.distributed.ProcessGroup):
         """
         Add the CPU process group for the given parallel mode.
-        
+
         Args:
             mode (ParallelMode): The parallel mode.
             group (torch.distributed.ProcessGroup): The CPU process group.
-            
+
         Examples:
             >>> process_group = ...
             >>> mpu = ...
@@ -669,35 +656,31 @@ class MPU:
 
     def make_ranks_to_devices(self):
         """
-        Make a mapping from ranks to devices.
-
-        Discussion:
-            This function creates a mapping from the combination of local ranks
-            in different parallel modes to the corresponding global rank (device).
-            It gathers the local ranks from all processes and constructs a dictionary
-            where the keys are tuples of (parallel mode, local rank) pairs and the values
-            are the global ranks. This mapping is useful for identifying which global
-            rank corresponds to a specific combination of local ranks across different
-            parallel modes.
+        Make a mapping from (fixed-ordered modes -> local ranks) to global device (rank).
+        Ensures all ranks use the SAME order & length, so all_gather never mismatches.
         """
-        rank_tensor = torch.zeros(len(self._local_ranks), dtype=torch.long).cuda()
-
-        for idx, local_rank in enumerate(self._local_ranks.values()):
-            rank_tensor[idx] = local_rank
-
-        rank_tensor_list = [
-            torch.zeros(rank_tensor.size(), dtype=torch.long).cuda()
-            for _ in range(self.get_world_size(ParallelMode.GLOBAL))
+        ordered_modes = [
+            ParallelMode.GLOBAL,
+            ParallelMode.DATA,
+            ParallelMode.MODEL,
+            ParallelMode.TENSOR,
+            ParallelMode.PIPELINE,
+            ParallelMode.TIED_EMBEDDING,
         ]
 
-        dist.all_gather(tensor_list=rank_tensor_list, tensor=rank_tensor)
+        vals = []
+        for mode in ordered_modes:
+            vals.append(self._local_ranks.get(mode, 0))
+        rank_tensor = torch.tensor(vals, dtype=torch.long, device="cuda")
 
-        for _rank, _rank_tensor in enumerate(rank_tensor_list):
-            modes_and_ranks = {
-                mode: rank
-                for mode, rank in zip(self._local_ranks.keys(), _rank_tensor.tolist())
-            }
-            self._ranks_to_device[tuple(modes_and_ranks.items())] = _rank
+        world = self.get_world_size(ParallelMode.GLOBAL)
+        gather_list = [torch.empty_like(rank_tensor) for _ in range(world)]
+        dist.all_gather(gather_list, rank_tensor)
+
+        self._ranks_to_device.clear()
+        for global_rank, rt in enumerate(gather_list):
+            modes_and_ranks = tuple((mode, int(val)) for mode, val in zip(ordered_modes, rt.tolist()))
+            self._ranks_to_device[modes_and_ranks] = global_rank
 
     def ranks2device(self, ranks: dict) -> Optional[int]:
         """
@@ -732,20 +715,24 @@ class MPU:
 
             return device: 1
         """
-        ranks_key = {mode: None for mode in self._local_ranks.keys()}
+        ordered_modes = [
+            ParallelMode.GLOBAL,
+            ParallelMode.DATA,
+            ParallelMode.MODEL,
+            ParallelMode.TENSOR,
+            ParallelMode.PIPELINE,
+            ParallelMode.TIED_EMBEDDING,
+        ]
 
-        for mode in self._local_ranks.keys():
+        key = []
+        for mode in ordered_modes:
             if mode in ranks:
-                ranks_key[mode] = ranks[mode]
+                key.append((mode, ranks[mode]))
             else:
-                ranks_key[mode] = self.get_local_rank(mode)
+                key.append((mode, self._local_ranks.get(mode, 0)))
 
-        ranks_key = tuple(ranks_key.items())
-
-        if ranks_key in self._ranks_to_device:
-            return self._ranks_to_device[ranks_key]
-        else:
-            return None
+        key = tuple(key)
+        return self._ranks_to_device.get(key, None)
 
     # init distributed group
     def init_global_dist(
@@ -841,6 +828,7 @@ class MPU:
             ModelParallelGroupInitializer(**initializer_param).init_dist_group(),
             TensorParallelGroupInitializer(**initializer_param).init_dist_group(),
             PipelineParallelGroupInitializer(**initializer_param).init_dist_group(),
+            TiedEmbeddingGroupInitializer(**initializer_param).init_dist_group(),
         ]
 
         for initializer_result in initializer_results:

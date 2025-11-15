@@ -1,337 +1,210 @@
-import struct
-from typing import Any, Iterable, Optional, TypeVar
-from typing import List
+from typing import Optional, Union, Sequence, List, Iterable, Any
 
 from nanorlhf.nanosets.core.bitmap import Bitmap
 from nanorlhf.nanosets.core.buffer import Buffer
 from nanorlhf.nanosets.dtype.array import Array, ArrayBuilder
-from nanorlhf.nanosets.dtype.dtype import LIST, PrimitiveType
-from nanorlhf.nanosets.dtype.primitive_array import infer_primitive_dtype, PrimitiveArrayBuilder
-from nanorlhf.nanosets.dtype.string_array import StringArrayBuilder
-
-ChildE = TypeVar("ChildE")
-
-
-def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
-    """
-    Infer a builder for elements of a `ListArray` column.
-
-    Args:
-        rows (List[Optional[Iterable[Any]]]): A list where each item is an iterable
-            (list/tuple) of child elements, or `None` to represent a null list.
-
-    Returns:
-        Builder: A builder instance suitable for the list's element type.
-
-    Discussion:
-        Q. How does this function work?
-            The function inspects the provided list rows and returns an appropriate builder:
-              - Primitive elements (`bool`/`int`/`float`): `PrimitiveArrayBuilder(infer_primitive_dtype(...))`
-              - String elements (`str`): `StringArrayBuilder()`
-              - Nested lists: `ListArrayBuilder(infer_child_builder(rewritten_inner_rows))`
-              - Dict elements: `StructArrayBuilder(<inferred struct fields>)`
-    """
-    # 1. Find a representative non-null element to choose a branch.
-    sample: Any = None
-    for r in rows:
-        if r is None:
-            continue
-        for e in r:
-            if e is not None:
-                sample = e
-                break
-        if sample is not None:
-            break
-
-    if sample is None:
-        raise ValueError("Cannot infer element type: all rows are None or empty.")
-
-    # 2. Branch by the sample's type.
-    # 2.1. Nested lists
-    if isinstance(sample, (list, tuple)):
-        # Build "inner rows":
-        #     each child list becomes one inner row for the nested ListArrayBuilder.
-        inner_rows: List[Optional[Iterable[Any]]] = []
-        for r in rows:
-            if r is None:
-                continue  # null outer list contributes no child lists
-            for sub in r:
-                if sub is None:
-                    inner_rows.append(None)  # null inner list
-                elif isinstance(sub, (list, tuple)):
-                    inner_rows.append(sub)  # an inner list (possibly empty)
-                else:
-                    raise TypeError(
-                        f"Expected nested list elements, found {type(sub).__name__}"
-                    )
-        inner_child = infer_child_builder(inner_rows)
-        return ListArrayBuilder(inner_child)
-
-    # 2.2. Dict → struct
-    if isinstance(sample, dict):
-        dict_elems: List[Optional[dict]] = []
-        for row in rows:
-            if row is None:
-                continue
-            for elem in row:
-                if elem is None:
-                    dict_elems.append(None)
-                elif isinstance(elem, dict):
-                    dict_elems.append(elem)
-                else:
-                    raise TypeError(f"Mixed element types: expected dict, got {type(elem).__name__}")
-        from nanorlhf.nanosets.dtype.struct_array import get_struct_array_builder_from_rows
-        return get_struct_array_builder_from_rows(dict_elems)
-
-    # 2.3. Strings
-    if isinstance(sample, str):
-        # Validate all non-null elements across rows are str
-        for r in rows:
-            if r is None:
-                continue
-            for e in r:
-                if e is None:
-                    continue
-                if not isinstance(e, str):
-                    raise TypeError(
-                        f"Mixed element types: expected str, got {type(e).__name__}"
-                    )
-        return StringArrayBuilder()
-
-    # 2.4. Primitives (bool/int/float)
-    if isinstance(sample, (bool, int, float)):
-        # Collect primitive values (and None) and ensure there are no foreign types.
-        prims: List[Optional[PrimitiveType]] = []
-        for r in rows:
-            if r is None:
-                continue
-            for e in r:
-                if e is None:
-                    prims.append(None)
-                    continue
-                if isinstance(e, (bool, int, float)):
-                    prims.append(e)
-                else:
-                    raise TypeError(
-                        f"Mixed element types: expected primitive, got {type(e).__name__}"
-                    )
-
-        # Decide BOOL / INT64 / FLOAT64
-        dt = infer_primitive_dtype(prims)
-        return PrimitiveArrayBuilder(dt)
-
-    # 2.5. Otherwise unsupported
-    raise TypeError(f"Unsupported element type for list: {type(sample).__name__}")
+from nanorlhf.nanosets.dtype.dtype import LIST
+from nanorlhf.nanosets.dtype.dtype_inference import infer_child_builder
+from nanorlhf.nanosets.utils import normalize_index, unpack_int32, pack_int32
 
 
 class ListArray(Array):
-    """
-    `ListArray` holds variable-length lists of elements.
 
-    Args:
-        offsets (Buffer): Start/end position boundaries of each list.
-        values (Array): Child array holding the actual list elements.
-        validity (Optional[Bitmap]): Validity bitmap; if `None` all elements are valid.
+    def __init__(
+        self,
+        offsets: Buffer,
+        length: int,
+        child: Array,
+        validity: Optional[Bitmap] = None,
+        indices: Optional[Buffer] = None,
+    ):
+        if len(offsets) % 4 != 0:
+            raise ValueError("offsets buffer size must be a multiple of 4 (int32)")
 
-    Discussion:
-        Q. How is this similar to `StringArray`?
-            Both `ListArray` and `StringArray` use the same "offsets + values" pattern.
+        base_length = len(offsets) // 4 - 1
+        if base_length < 0:
+            raise ValueError("offsets buffer must contain at least one entry")
 
-            - `StringArray`
-                - offsets: `int32[n+1]`
-                - values : `uint8` buffer holding all UTF-8 bytes
-                - element `i` = `bytes[offsets[i] : offsets[i+1]]`
+        total_elems = unpack_int32(offsets, base_length)
+        if total_elems > len(child):
+            raise ValueError(f"offsets refer to {total_elems} child elements, but child length is {len(child)}")
 
-            - `ListArray`
-                - offsets: `int32[n+1]`
-                - values : a *child `Array`* that concatenates all list items
-                - element `i` = `child[offsets[i] : offsets[i+1]]`  (a sublist)
+        if indices is None:
+            logical_length = length
+            if logical_length != base_length:
+                raise ValueError(f"length mismatch: base_length={base_length}, length argument={length}")
+        else:
+            if len(indices) % 4 != 0:
+                raise ValueError("indices buffer size must be a multiple of 4 (int32)")
+            logical_length = len(indices) // 4
 
-            Example (`ListArray`):
-                Suppose `values = [10, 11, 12, 13, 14]` and `offsets = [0, 2, 5]`.
-
-                Then:
-                  row 0 -> `values[0:2]` -> `[10, 11]`
-                  row 1 -> `values[2:5]` -> `[12, 13, 14]`
-
-            The key difference is that `StringArray`'s `values` is a primitive
-            byte buffer (`np.uint8`) for text, whereas `ListArray`'s `values` is an arbitrary `Array`.
-            It can itself be a `PrimitiveArray`, `StringArray`, another `ListArray`, or a `StructArray`.
-            This makes nested structures like `List<List<int32>>` or `List<Struct{...}>` natural.
-    """
-
-    def __init__(self, offsets: Buffer, values: Array, validity: Optional[Bitmap] = None):
-        if (len(offsets.data) % 4) != 0:
-            raise ValueError("offsets buffer length must be a multiple of 4 bytes (int32).")
-
-        num_offsets = len(offsets.data) // 4
-
-        if num_offsets < 1:
-            raise ValueError("offsets must contain at least 1 int32 (length n+1).")
-
-        num_lists = num_offsets - 1
-        super().__init__(LIST, num_lists, validity)
+        super().__init__(LIST, logical_length, child.values, validity, indices)
 
         self.offsets = offsets
-        self.values = values
+        self.child = child
+        self.base_length = base_length
 
-    def offset_at(self, i: int) -> int:
-        """
-        Read `int32` `offset[i]` (little-endian) without NumPy.
+    def __getitem__(self, key: Union[int, slice]):
+        if isinstance(key, int):
+            if self.is_null(key):
+                return None
 
-        Args:
-            i (int): Index of the offset to read.
+            idx = self.base_index(key)
+            if not (0 <= idx < self.base_length):
+                raise IndexError(f"base index {idx} out of range [0, {self.base_length})")
 
-        Returns:
-            int: The `i`-th offset value.
-        """
-        return struct.unpack_from("<i", self.offsets.data, i * 4)[0]
+            start = unpack_int32(self.offsets, idx)
+            end = unpack_int32(self.offsets, idx + 1)
 
-    def to_pylist(self) -> List[Optional[List]]:
-        """
-        Convert the `ListArray` to a Python list of lists, respecting null values.
+            if start < 0 or end < start or end > len(self.child):
+                raise ValueError(f"Invalid child range: start={start}, end={end}, child_length={len(self.child)}")
 
-        Returns:
-            List[Optional[List]]: Python list representation of the array.
+            if start == end:
+                return []
 
-        Discussion:
-            Q. How does this method work?
-                This supposes 2D lists. For example, if the `ListArray` represents
-                `[1, 2, None, 3, 4, 5]` with offsets `[0, 2, 2, 5]`, the output will be:
-                ```
-                [
-                    [1, 2],
-                    None,
-                    [3, 4, 5]
-                ]
-                ```
-        """
-        output = []
-        child_pylist = self.values.to_pylist()
+            sub_array = self.child.take(range(start, end))
+            return sub_array.to_list()
 
+        if isinstance(key, slice):
+            start, stop, step = key.indices(self.length)
+            return self.take(range(start, stop, step))
+
+        raise TypeError(f"Invalid index type: {type(key).__name__}")
+
+    def take(self, indices: Sequence[int]) -> "ListArray":
+        num_items = len(indices)
+        if num_items == 0:
+            empty_offsets = pack_int32([0])
+            return ListArray(
+                offsets=empty_offsets,
+                length=0,
+                child=self.child,
+                validity=None,
+                indices=None,
+            )
+
+        normalized = [normalize_index(i, self.length) for i in indices]
+        is_contiguous_slice = all(normalized[k] + 1 == normalized[k + 1] for k in range(num_items - 1))
+
+        if is_contiguous_slice:
+            start = normalized[0]
+            length = num_items
+
+            if self.is_contiguous():
+                base_start = start
+                base_end = start + length
+
+                child_start = unpack_int32(self.offsets, base_start)
+                child_end = unpack_int32(self.offsets, base_end)
+                new_child = self.child.take(range(child_start, child_end))
+
+                local_offsets: List[int] = []
+                for i in range(base_start, base_end + 1):
+                    off = unpack_int32(self.offsets, i)
+                    local_offsets.append(off - child_start)
+
+                new_offsets = pack_int32(local_offsets)
+                new_validity = self.validity.slice(start, length) if self.validity else None
+                return ListArray(
+                    offsets=new_offsets,
+                    child=new_child,
+                    length=length,
+                    validity=new_validity,
+                    indices=None,
+                )
+
+            else:
+                index_offset = start * 4
+                index_length = length * 4
+
+                sub_indices = self.indices.slice(index_offset, index_length)  # type: ignore[arg-type]
+                new_validity = self.validity.slice(start, length) if self.validity else None
+                return ListArray(
+                    offsets=self.offsets,
+                    length=length,
+                    child=self.child,
+                    validity=new_validity,
+                    indices=sub_indices,
+                )
+
+        base_indices = normalized if self.is_contiguous() else [unpack_int32(self.indices, i) for i in normalized]
+        new_indices = pack_int32(base_indices)
+        return ListArray(
+            offsets=self.offsets,
+            length=len(base_indices),
+            child=self.child,
+            validity=self.validity,
+            indices=new_indices,
+        )
+
+    def to_list(self) -> List[Optional[list]]:
+        out: List[Optional[list]] = []
         for i in range(self.length):
             if self.is_null(i):
-                output.append(None)
+                out.append(None)
             else:
-                start = int(self.offset_at(i))
-                end = int(self.offset_at(i + 1))
-                output.append(child_pylist[start:end])
-        return output
+                out.append(self[i])
+        return out
 
     @classmethod
-    def from_pylist(cls, data: List[Optional[Iterable[Any]]]) -> "ListArray":
-        """
-        Build a `ListArray` from a Python list of iterables (or `None`), with type inference.
-
-        Args:
-            data (List[Optional[Iterable[Any]]]): A list where each item is an iterable
-                (list/tuple) of child elements or `None` to represent a null list.
-                Elements may be primitives, strings, or nested lists (arbitrary depth).
-
-        Returns:
-            ListArray: Immutable list column with an optional validity bitmap.
-
-        Examples:
-            >>> prims = ListArray.from_pylist([[1, 2], None, [3, 4, 5]])
-            >>> nested = ListArray.from_pylist([[[1], [2]], None, [[3, 4], []]])
-            >>> strings = ListArray.from_pylist([["foo", "bar"], None, ["baz"]])
-
-        Discussion:
-            Q. How does this classmethod work?
-                This function infers the element type of the list column and constructs a
-                `ListArrayBuilder` with an appropriate child builder:
-
-                - Primitive elements (`bool`/`int`/`float`): `PrimitiveArrayBuilder(infer_primitive_dtype(...))`
-                - String elements (`str`): `StringArrayBuilder()`
-                - Nested lists: `ListArrayBuilder(<recursively inferred child builder>)`
-                - Dict elements: `StructArrayBuilder(<inferred struct fields>)`
-        """
+    def from_list(cls, data: List[Optional[Iterable[Any]]]) -> "ListArray":
         child_builder = infer_child_builder(data)
-        array_builder = ListArrayBuilder(child_builder)
+        builder = ListArrayBuilder(child_builder)
         for row in data:
-            array_builder.append(row)
-            # row can be None (null list) or any iterable (including empty)
-        return array_builder.finish()
+            builder.append(row)
+
+        return builder.finish()
 
 
-class ListArrayBuilder(ArrayBuilder[Iterable[ChildE], ListArray]):
-    """
-    Incrementally builds a `ListArray` for arbitrary element types
-    by composing a child builder.
-
-    Args:
-        child_builder (Builder): Builder for the child element type.
-
-    Discussion:
-        Q. How does this relate to `StringArrayBuilder`?
-            They share the same architectural pattern:
-              1) Maintain cumulative offsets of length `n+1` starting at `0`.
-              2) Track per-row validity and pack it into a 1-bit bitmap via `_pack_bitmap`.
-              3) Freeze internal buffers on `finish()` to produce an immutable `Array`.
-
-            In short:
-                - `StringArrayBuilder`
-                    offsets: `int32[n+1]` over UTF-8 byte length
-                    values : `uint8` flat byte buffer of all strings
-                    finish : returns `StringArray(offsets, values, validity)`
-
-                - `ListArrayBuilder`
-                    offsets: `int32[n+1]` over element counts per list row
-                    values : produced by `value_builder.finish()` — an arbitrary child `Array`
-                    finish : returns `ListArray(offsets, child, validity)`
-    """
+class ListArrayBuilder(ArrayBuilder):
 
     def __init__(self, child_builder: ArrayBuilder):
         self.child_builder = child_builder
-        self.offsets = [0]
-        self.validity = []
+        self.offsets: List[int] = [0]
+        self.validity: List[int] = []
+        self.length: int = 0
 
-    def append(self, seq: Optional[Iterable[Any]]) -> "ListArrayBuilder":
-        """
-        Append a single list (or `None`) to the builder.
-
-        Args:
-            seq (Optional[Iterable[Any]]): List to append, or `None` for null.
-
-        Returns:
-            ListArrayBuilder: `self` for method chaining.
-        """
-        if seq is None:
+    def append(self, value: Optional[Iterable[Any]]) -> "ListArrayBuilder":
+        if value is None:
             self.validity.append(0)
             self.offsets.append(self.offsets[-1])
+            self.length += 1
             return self
 
+        if isinstance(value, (str, bytes, bytearray)) or not hasattr(value, "__iter__"):
+            raise TypeError(
+                f"ListArrayBuilder.append expects an iterable (non-string) or None, got {type(value).__name__}"
+            )
+
         self.validity.append(1)
+        start_count = self.offsets[-1]
         count = 0
-        for x in seq:
-            self.child_builder.append(x)
+        for elem in value:
+            self.child_builder.append(elem)
             count += 1
-        self.offsets.append(self.offsets[-1] + count)
+
+        self.offsets.append(start_count + count)
+        self.length += 1
+        return self
 
     def finish(self) -> ListArray:
-        """
-        Finalize the builder and return the built `ListArray`.
 
-        Returns:
-            ListArray: Built `ListArray`.
-        """
-        num_offsets = len(self.offsets)
-        raw_offsets = bytearray(num_offsets * 4)
+        num_items = self.length
+        if len(self.validity) != num_items:
+            raise ValueError(f"validity length {len(self.validity)} does not match number of items {num_items}")
+        if len(self.offsets) != num_items + 1:
+            raise ValueError(
+                f"offsets length must be num_items + 1, got offsets={len(self.offsets)}, num_items={num_items}"
+            )
 
-        # Pack offsets into the bytearray
-        byte_offset = 0
-        for offset in self.offsets:
-            struct.pack_into("<i", raw_offsets, byte_offset, offset)
-            byte_offset += 4
-
-        frozen_offsets = bytes(raw_offsets)
-        offsets_buffer = Buffer.from_bytes(frozen_offsets)
-
-        # Finalize child array
+        offsets_buffer = pack_int32(self.offsets)
         child_array = self.child_builder.finish()
+        validity_bitmap = Bitmap.from_list(self.validity)
 
-        # Validity bitmap (if any nulls)
-        validity = Bitmap.from_pylist(self.validity)
-
-        # Create and return ListArray
-        return ListArray(offsets_buffer, child_array, validity)
+        return ListArray(
+            offsets=offsets_buffer,
+            length=num_items,
+            child=child_array,
+            validity=validity_bitmap,
+            indices=None,
+        )

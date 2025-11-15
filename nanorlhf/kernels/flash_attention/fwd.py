@@ -16,7 +16,7 @@ import triton.language as tl
 @triton.jit
 def flash_attn_kernel_fwd(
     q_ptr, k_ptr, v_ptr, o_ptr,
-    bh, seq_len_q, seq_len_kv,
+    seq_len_q, seq_len_kv,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
     stride_v_bh, stride_v_seq, stride_v_dim,
@@ -263,7 +263,7 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
 
     flash_attn_kernel_fwd[grid](
         q_merged, k_merged, v_merged, o,
-        bh, seq_len_q, seq_len_kv,
+        seq_len_q, seq_len_kv,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
         stride_v_bh, stride_v_seq, stride_v_dim,

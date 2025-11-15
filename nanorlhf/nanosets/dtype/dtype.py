@@ -27,6 +27,7 @@ FLOAT64 = DataType("float64")
 STRING = DataType("string")
 LIST = DataType("list")
 STRUCT = DataType("struct")
+TENSOR = DataType("tensor")
 
 # Struct format (little-endian)
 #   '<' means little-endian

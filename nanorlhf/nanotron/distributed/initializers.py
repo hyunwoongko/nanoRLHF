@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 
 import torch.distributed as dist
 
-from nanorlhf.nanotron.distributed.mpu import ParallelMode
+from nanorlhf.nanotron.distributed.mode import ParallelMode
 
 
 class ProcessGroupInitializer(ABC):
@@ -33,7 +33,7 @@ class ProcessGroupInitializer(ABC):
 
     @abstractmethod
     def init_dist_group(self):
-        """ Initialize the process group."""
+        """Initialize the process group."""
         raise NotImplementedError
 
 
@@ -205,6 +205,9 @@ class PipelineParallelGroupInitializer(ProcessGroupInitializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.data_group_size = self.world_size // self.data_parallel_size
+        assert (
+            self.data_group_size % self.pipeline_parallel_size == 0
+        ), f"Invalid config: (world={self.world_size}, dp={self.data_parallel_size}, pp={self.pipeline_parallel_size})"
         self.pipeline_stage_size = self.data_group_size // self.pipeline_parallel_size
 
     def init_dist_group(self):
@@ -255,6 +258,52 @@ class PipelineParallelGroupInitializer(ProcessGroupInitializer):
                         }
                     )
 
+        return dist_settings
+
+
+class TiedEmbeddingGroupInitializer(ProcessGroupInitializer):
+    """
+    Make groups of [first_rank, last_rank] within each pipeline-parallel group (per data-parallel slice).
+    If pipeline size == 1, the group is the single rank.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.data_group_size = self.world_size // self.data_parallel_size
+        assert self.data_group_size % self.pipeline_parallel_size == 0
+        self.pipeline_stage_size = self.data_group_size // self.pipeline_parallel_size
+
+    def init_dist_group(self):
+        dist_settings = list()
+        for i in range(self.data_parallel_size):
+            for j in range(self.pipeline_stage_size):
+                pipe_ranks = list(
+                    range(
+                        i * self.data_group_size + j,
+                        (i + 1) * self.data_group_size,
+                        self.pipeline_stage_size,
+                    )
+                )
+                if len(pipe_ranks) == 1:
+                    embedding_ranks = pipe_ranks
+                else:
+                    embedding_ranks = [pipe_ranks[0], pipe_ranks[-1]]
+
+                group = dist.new_group(embedding_ranks)
+                group_cpu = (
+                    dist.new_group(embedding_ranks, backend="gloo")
+                    if dist.get_backend() != "gloo" else group
+                )
+                if self.rank in embedding_ranks:
+                    local_rank = embedding_ranks.index(self.rank)
+                    dist_settings.append({
+                        "local_rank": local_rank,
+                        "group_world_size": len(embedding_ranks),
+                        "process_group": group,
+                        "cpu_group": group_cpu,
+                        "ranks_in_group": embedding_ranks,
+                        "mode": ParallelMode.TIED_EMBEDDING,
+                    })
         return dist_settings
 
 

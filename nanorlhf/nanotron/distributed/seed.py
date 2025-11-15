@@ -95,13 +95,9 @@ class SeedManager:
             seed (int): The seed value to set.
             overwrite (bool): Whether to overwrite an existing seed for the mode. Default is False.
         """
-        assert isinstance(
-            mode, ParallelMode
-        ), "A valid ParallelMode must be provided"
+        assert isinstance(mode, ParallelMode), "A valid ParallelMode must be provided"
         if overwrite is False:
-            assert (
-                mode not in self._seed_states
-            ), f"The seed for {mode} has been added"
+            assert mode not in self._seed_states, f"The seed for {mode} has been added"
         elif mode in self._seed_states:
             print(f"Warnning: {mode} seed has been overwritten.", flush=True)
 
@@ -217,13 +213,13 @@ def seed(mode: ParallelMode):
     Args:
         mode (ParallelMode): The parallel mode to switch to temporarily.
     """
+    prev = _SEED_MANAGER.current_mode
+    _SEED_MANAGER.set_mode(mode)
     try:
-        # set to new mode
-        current_mode = _SEED_MANAGER.current_mode
-        yield _SEED_MANAGER.set_mode(mode)
+        yield
     finally:
-        # recover
-        _SEED_MANAGER.set_mode(current_mode)
+        if prev is not None:
+            _SEED_MANAGER.set_mode(prev)
 
 
 def with_seed(func, mode: ParallelMode):
