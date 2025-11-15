@@ -1,4 +1,3 @@
-import os
 import random
 from typing import List, Optional, Union, Callable, Dict, Any, Sequence
 
@@ -6,14 +5,7 @@ from nanorlhf.nanosets.io.ipc import read_table, write_table
 from nanorlhf.nanosets.io.json_io import from_json, from_jsonl, to_json, to_jsonl
 from nanorlhf.nanosets.table.record_batch import RecordBatch
 from nanorlhf.nanosets.table.table import Table
-from nanorlhf.nanosets.utils import DEFAULT_BATCH_SIZE
-
-
-def _ext(path: str) -> str:
-    base = os.path.basename(path)
-    if "." not in base:
-        return ""
-    return base.rsplit(".", 1)[1].lower()
+from nanorlhf.nanosets.utils import DEFAULT_BATCH_SIZE, ext
 
 
 class Dataset:
@@ -151,7 +143,7 @@ def load_dataset(
     batch_size: Optional[int] = DEFAULT_BATCH_SIZE,
 ) -> Dataset:
     def _load_one(file: str) -> Table:
-        e = _ext(file)
+        e = ext(file)
         if e == "json":
             return from_json(file, batch_size=batch_size)
         if e in ("jsonl", "ndjson"):
