@@ -243,8 +243,11 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
     @classmethod
     def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, scatter_tensor: bool = True):
         module = plan.module
-        rank = mpu.get_local_rank(ParallelMode.TENSOR)
 
+        if not hasattr(module, "weight") or module.weight is None or module.weight.dim() != 2:
+            return module
+
+        rank = mpu.get_local_rank(ParallelMode.TENSOR)
         with torch.no_grad():
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
@@ -360,6 +363,9 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
     @classmethod
     def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
         module = plan.module
+
+        if not hasattr(module, "weight") or module.weight is None or module.weight.dim() != 2:
+            return module
 
         with torch.no_grad():
             if not plan.is_reversed:

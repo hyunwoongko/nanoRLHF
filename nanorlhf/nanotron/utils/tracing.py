@@ -307,7 +307,7 @@ class ModelParallelTracer:
         if not isinstance(weight, torch.Tensor):
             return None
 
-        if weight.dim() == 1:
+        if module_type == ModuleType.NORM or weight.dim() == 1:
             return SlicingType.REPLICATE
 
         if module_type == ModuleType.ATTENTION:

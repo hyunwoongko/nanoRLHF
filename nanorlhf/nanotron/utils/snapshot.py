@@ -117,7 +117,7 @@ class ModuleSnapshotGenerator:
         """
         try:
             self._install()
-            _ = model.orig_forward(**inputs)
+            _ = model.__nanotron_forward__(**inputs)
         except EarlyStop:
             pass
         finally:

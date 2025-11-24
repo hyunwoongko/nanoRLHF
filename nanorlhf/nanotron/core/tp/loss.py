@@ -74,9 +74,13 @@ class VocabParallelCrossEntropyLoss(_Loss):
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor):
         loss = VocabParallelCrossEntropyFunction.apply(logits, targets, self.mpu)
+        valid_count = (targets != self.ignore_index).sum()
         loss[targets == self.ignore_index] = 0.0
         if self.reduce_mean:
-            loss = loss.sum() / (targets != self.ignore_index).sum()
+            if valid_count > 0:
+                loss = loss.sum() / valid_count
+            else:
+                loss = loss.sum() * 0.0
         return loss
 
 

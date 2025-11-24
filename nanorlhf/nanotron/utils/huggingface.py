@@ -50,10 +50,6 @@ def post_process_hf_model(
     logits: torch.Tensor,
     payload: Dict[str, Any],
 ) -> ModelOutput:
-    config = model.config
-    class_name = model.__class__.__qualname__
-    batch_size = logits.shape[0]
-
     input_ids = payload["user_inputs"].get("input_ids", None)
     labels = payload["user_inputs"].get("labels", None)
     last_hidden_state = payload.get("hidden_states", None)
@@ -63,7 +59,12 @@ def post_process_hf_model(
             last_hidden_state=last_hidden_state,
             past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
         )
-    elif is_causal_lm(model):
+
+    config = model.config
+    class_name = model.__class__.__qualname__
+    batch_size = logits.shape[0]
+
+    if is_causal_lm(model):
         labels = nn.functional.pad(labels, (0, 1), value=-100)
         shift_labels = labels[..., 1:].contiguous().view(-1).to(logits.device)
         shift_logits = logits.view(-1, logits.size(-1))

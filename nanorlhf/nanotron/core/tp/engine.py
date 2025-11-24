@@ -37,7 +37,7 @@ ATTRS_TO_UPDATE = [
 class TensorParallelWrapper(ParallelizationWrapper):
 
     def __init__(self, model: nn.Module, mpu: MPU):
-        super().__init__(model, mpu, parallelization_priority=2)
+        super().__init__(model, mpu, parallelization_priority=1)
         self.world_size = self.mpu.get_world_size(ParallelMode.TENSOR)
         self.rank = self.mpu.get_local_rank(ParallelMode.TENSOR)
         self.device = torch.cuda.current_device()
@@ -107,6 +107,14 @@ class TensorParallelWrapper(ParallelizationWrapper):
             for attr in ATTRS_TO_UPDATE:
                 if hasattr(module, attr):
                     original_value = getattr(module, attr)
+                    if original_value < self.world_size:
+                        raise RuntimeError(
+                            f"After tensor parallelism, the attribute '{attr}' "
+                            f"in the module '{module.__class__.__qualname__}' would be zero. "
+                            f"That means this model is too small to be "
+                            f"tensor parallelized across {self.world_size} GPUs. "
+                            f"({attr}={original_value}, tp_world_size={self.world_size})."
+                        )
                     updated_value = fn(original_value)
                     setattr(module, attr, updated_value)
 

@@ -92,7 +92,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
     """
 
     def __init__(self, model: nn.Module, mpu: MPU, micro_batch_size: int = 1):
-        super().__init__(model, mpu, parallelization_priority=3)
+        super().__init__(model, mpu, parallelization_priority=0)
         # distributed related
         self.p2p = P2P(mpu, mode=ParallelMode.PIPELINE)
         self.device = torch.device(torch.cuda.current_device())
@@ -121,6 +121,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
     def _forward(self, *args, **kwargs):
         """Do forward pass with pipeline parallelism."""
         _kwargs = to_kwargs(self.model_forward, args, kwargs)
+        _kwargs["use_cache"] = False
 
         self.micro_offset = 0
         self.micro_batches = self._split_batches(_kwargs)

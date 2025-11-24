@@ -9,54 +9,7 @@ import torch.distributed as dist
 from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanotron.distributed.mpu import MPU
 
-_NoneType = type(None)
-
-_TORCH_ID_TO_DTYPE = [
-    torch.float32,
-    torch.float64,
-    torch.complex64,
-    torch.complex128,
-    torch.float16,
-    torch.bfloat16,
-    torch.uint8,
-    torch.int8,
-    torch.int16,
-    torch.int32,
-    torch.int64,
-    torch.bool,
-]
-
-_TORCH_DTYPE_TO_ID = {dtype: idx for idx, dtype in enumerate(_TORCH_ID_TO_DTYPE)}
-
-_ID_TO_DTYPE = [
-    bool,
-    int,
-    float,
-    complex,
-    str,
-    type,
-    list,
-    tuple,
-    set,
-    dict,
-    _NoneType,
-    torch.Size,
-    torch.Tensor,
-]
-
-_DTYPE_TO_ID = {dtype: idx for idx, dtype in enumerate(_ID_TO_DTYPE)}
-
-_SUPPORTED_ATOMS = (
-    bool,
-    int,
-    float,
-    complex,
-    str,
-    type,
-    _NoneType,
-    torch.Size,
-    torch.Tensor,
-)
+NoneType = type(None)
 
 
 def _is_hashable(x) -> bool:
@@ -217,6 +170,51 @@ class P2P:
         self.mode = mode
         self.group = mpu.get_group(mode)
 
+        self.torch_id_to_dtype = [
+            torch.float32,
+            torch.float64,
+            torch.complex64,
+            torch.complex128,
+            torch.float16,
+            torch.bfloat16,
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+            torch.bool,
+        ]
+        self.id_to_dtype = [
+            bool,
+            int,
+            float,
+            complex,
+            str,
+            type,
+            list,
+            tuple,
+            set,
+            dict,
+            NoneType,
+            torch.Size,
+            torch.Tensor,
+            MicroLossTensor,
+        ]
+        self.supported_atoms = (
+            bool,
+            int,
+            float,
+            complex,
+            str,
+            type,
+            NoneType,
+            torch.Size,
+            torch.Tensor,
+            MicroLossTensor,
+        )
+        self.dtype_to_id = {dtype: idx for idx, dtype in enumerate(self.id_to_dtype)}
+        self.torch_dtype_to_id = {dtype: idx for idx, dtype in enumerate(self.torch_id_to_dtype)}
+
         self.instructions = {
             bool: {"send": self._send_bool, "recv": self._recv_bool},
             int: {"send": self._send_int, "recv": self._recv_int},
@@ -228,7 +226,7 @@ class P2P:
             tuple: {"send": self._send_tuple, "recv": self._recv_tuple},
             set: {"send": self._send_set, "recv": self._recv_set},
             dict: {"send": self._send_dict, "recv": self._recv_dict},
-            _NoneType: {"send": self._send_none, "recv": self._recv_none},
+            NoneType: {"send": self._send_none, "recv": self._recv_none},
             torch.Size: {"send": self._send_size, "recv": self._recv_size},
             torch.Tensor: {"send": self._send_tensor, "recv": self._recv_tensor},
             MicroLossTensor: {"send": self._send_tensor, "recv": self._recv_tensor},
@@ -361,7 +359,7 @@ class P2P:
         Returns:
             Any: The sanitized data.
         """
-        if isinstance(data, _SUPPORTED_ATOMS):
+        if isinstance(data, self.supported_atoms):
             return data
         if isinstance(data, set):
             return self._pack_pyset(data)
@@ -398,7 +396,7 @@ class P2P:
         """
         data = self._sanitize_for_p2p(data)
         _type = type(data)
-        assert _type in _ID_TO_DTYPE, f"unsupported type: {_type}"
+        assert _type in self.id_to_dtype, f"unsupported type: {_type}"
         self.instructions[_type]["send"](
             data,
             dst_rank=dst_rank,
@@ -417,20 +415,20 @@ class P2P:
             list, tuple, set, dict, NoneType, torch.Size, torch.Tensor.
         """
         _type = self.instructions[type]["recv"](src_rank=src_rank)
-        assert _type in _ID_TO_DTYPE, f"unsupported type: {_type}"
+        assert _type in self.id_to_dtype, f"unsupported type: {_type}"
         return self.instructions[_type]["recv"](src_rank=src_rank)
 
     def _send_type(self, data: type, dst_rank: int, send_type: bool = False):
         assert isinstance(data, type), f"Wrong type: {data} must be {type} type."
-        t = torch.tensor([_DTYPE_TO_ID[data]], dtype=torch.long, device=_current_device())
+        t = torch.tensor([self.dtype_to_id[data]], dtype=torch.long, device=_current_device())
         dist.send(t, dst=dst_rank, group=self.group)
 
     def _recv_type(self, src_rank: int) -> type:
         t = torch.tensor([0], dtype=torch.long, device=_current_device())
         dist.recv(t, src=src_rank, group=self.group)
-        return _ID_TO_DTYPE[t.item()]
+        return self.id_to_dtype[t.item()]
 
-    def _send_none(self, data: _NoneType, dst_rank: int, send_type: bool = False):
+    def _send_none(self, data: NoneType, dst_rank: int, send_type: bool = False):
         """
         Send nothing, just assert data is None.
 
@@ -439,11 +437,11 @@ class P2P:
             dst_rank (int): The destination rank to send the data to.
             send_type (bool): Whether to send the type information.
         """
-        assert isinstance(data, _NoneType), f"Wrong type: {data} must be {_NoneType}."
+        assert isinstance(data, NoneType), f"Wrong type: {data} must be {NoneType}."
         if send_type:
-            self._send_type(_NoneType, dst_rank)
+            self._send_type(NoneType, dst_rank)
 
-    def _recv_none(self, src_rank: int) -> _NoneType:
+    def _recv_none(self, src_rank: int):
         """
         Just return None.
 
@@ -635,7 +633,7 @@ class P2P:
         if send_type is True:
             self._send_type(torch.Tensor, dst_rank=dst_rank)
 
-        dtype = torch.tensor(_TORCH_DTYPE_TO_ID[data.dtype], dtype=torch.long, device=_current_device())
+        dtype = torch.tensor(self.torch_dtype_to_id[data.dtype], dtype=torch.long, device=_current_device())
         dist.send(dtype, dst=dst_rank, group=self.group)
 
         requires_grad = torch.tensor(1 if data.requires_grad else 0, dtype=torch.long, device=_current_device())
@@ -664,7 +662,7 @@ class P2P:
         """
         dtype = torch.tensor([0], dtype=torch.long, device=_current_device())
         dist.recv(dtype, src=src_rank, group=self.group)
-        dtype = _TORCH_ID_TO_DTYPE[dtype.item()]
+        dtype = self.torch_id_to_dtype[dtype.item()]
 
         requires_grad = torch.tensor([0], dtype=torch.long, device=_current_device())
         dist.recv(requires_grad, src=src_rank, group=self.group)
@@ -702,7 +700,7 @@ class P2P:
 
         for item in data:
             _type = type(item)
-            assert _type in _ID_TO_DTYPE, f"unsupported type: {_type}"
+            assert _type in self.id_to_dtype, f"unsupported type: {_type}"
             self.instructions[_type]["send"](
                 item,
                 dst_rank=dst_rank,
@@ -725,7 +723,7 @@ class P2P:
 
         for _ in range(len_list):
             _type = self.instructions[type]["recv"](src_rank=src_rank)
-            assert _type in _ID_TO_DTYPE, f"unsupported type: {_type}"
+            assert _type in self.id_to_dtype, f"unsupported type: {_type}"
             _item = self.instructions[_type]["recv"](src_rank=src_rank)
             output_list.append(self._maybe_reconstruct_special(_item))
         return output_list
@@ -848,8 +846,8 @@ class P2P:
 
         for key, val in data.items():
             _type_key, _type_val = type(key), type(val)
-            assert _type_key in _ID_TO_DTYPE, f"unsupported type: {_type_key}"
-            assert _type_val in _ID_TO_DTYPE, f"unsupported type: {_type_val}"
+            assert _type_key in self.id_to_dtype, f"unsupported type: {_type_key}"
+            assert _type_val in self.id_to_dtype, f"unsupported type: {_type_val}"
             self.instructions[_type_key]["send"](
                 key,
                 dst_rank=dst_rank,
@@ -877,11 +875,11 @@ class P2P:
 
         for _ in range(len_dict):
             _type_key = self.instructions[type]["recv"](src_rank=src_rank)
-            assert _type_key in _ID_TO_DTYPE, f"unsupported type: {_type_key}"
+            assert _type_key in self.id_to_dtype, f"unsupported type: {_type_key}"
             _key = self.instructions[_type_key]["recv"](src_rank=src_rank)
 
             _type_val = self.instructions[type]["recv"](src_rank=src_rank)
-            assert _type_val in _ID_TO_DTYPE, f"unsupported type: {_type_val}"
+            assert _type_val in self.id_to_dtype, f"unsupported type: {_type_val}"
             _val = self.instructions[_type_val]["recv"](src_rank=src_rank)
 
             _key = self._maybe_reconstruct_special(_key)

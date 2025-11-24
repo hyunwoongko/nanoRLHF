@@ -7,31 +7,30 @@ from nanorlhf.nanotron.distributed.p2p import P2P
 
 
 class MicroLossTensor(torch.Tensor):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.p2p = None
-        self.buffer = None
-        self.buffer_id = None
-        self.num_stages = None
-        self.stage_id = None
-        self.prev_stage = None
-        self.next_stage = None
-        self.is_first_stage = None
-        self.is_last_stage = None
+    p2p = None
+    buffer = None
+    buffer_id = None
+    num_stages = None
+    stage_id = None
+    prev_stage = None
+    next_stage = None
+    is_first_stage = None
+    is_last_stage = None
 
-    def set_arguments(self, mpu: MPU, buffer: PipelineBuffer, buffer_id: int):
-        self.p2p = P2P(mpu, mode=ParallelMode.PIPELINE)
-        self.buffer = buffer
-        self.buffer_id = buffer_id
-        self.num_stages = mpu.get_world_size(ParallelMode.PIPELINE)
-        self.stage_id = mpu.get_local_rank(ParallelMode.PIPELINE)
+    @classmethod
+    def set_arguments(cls, mpu: MPU, buffer: PipelineBuffer, buffer_id: int):
+        cls.p2p = P2P(mpu, mode=ParallelMode.PIPELINE)
+        cls.buffer = buffer
+        cls.buffer_id = buffer_id
+        cls.num_stages = mpu.get_world_size(ParallelMode.PIPELINE)
+        cls.stage_id = mpu.get_local_rank(ParallelMode.PIPELINE)
 
         stage_to_rank = mpu.get_ranks_in_group(ParallelMode.PIPELINE)
-        self.prev_stage = stage_to_rank[self.stage_id - 1] if self.stage_id > 0 else None
-        self.next_stage = stage_to_rank[self.stage_id + 1] if self.stage_id < self.num_stages - 1 else None
+        cls.prev_stage = stage_to_rank[cls.stage_id - 1] if cls.stage_id > 0 else None
+        cls.next_stage = stage_to_rank[cls.stage_id + 1] if cls.stage_id < cls.num_stages - 1 else None
 
-        self.is_first_stage = self.stage_id == 0
-        self.is_last_stage = self.stage_id == self.num_stages - 1
+        cls.is_first_stage = cls.stage_id == 0
+        cls.is_last_stage = cls.stage_id == cls.num_stages - 1
 
     def backward(self, **kwargs):
         if not self.is_last_stage:
