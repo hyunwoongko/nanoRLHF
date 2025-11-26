@@ -1,5 +1,6 @@
 # nanorlhf
 
+## Motivation
 A few years ago, it still made sense for an individual to think “I’ll just train my own model.”
 I had no GPUs of my own, but thanks to some open-source libraries I’d built, I was lucky enough to work with excellent teams like Hugging Face, the DeepSpeed team, and EleutherAI.
 Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM.
@@ -21,8 +22,7 @@ They are meant to be small, readable, PyTorch-only references that show how RLHF
 These projects will never have the scale or efficiency of company-level systems, but I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can positively influence others.
 
 
-## Contents
-
+## Contents 
 | Packages                                                                          | Description                                                 | Reference                                                                                                                                   | Examples                                                                            |
 |-----------------------------------------------------------------------------------|-------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
 | [`nanosets`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanosets) | Scratch implementation of zero-copy dataset library         | [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)                                               | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanosets.py) |
