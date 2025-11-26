@@ -19,7 +19,7 @@ def _get_any_param_dtype(model: nn.Module) -> torch.dtype:
     return torch.float32
 
 
-def load_zero3_flat_param(model, state_dict):
+def _load_zero3_flat_param(model, state_dict):
     reducer = getattr(model, "__nanotron_zero_reducer__", None)
     if reducer is None:
         raise RuntimeError("from_parallelized(ZeRO-3): __nanotron_zero_reducer__ not found on model")
@@ -100,7 +100,7 @@ def _save_parallelized_with_merge(
                 raise RuntimeError("save_parallelized(ZeRO-3): __nanotron_zero_reducer__.flat_param not found")
             flat_param = reducer.flat_param.detach().cpu()
             state_dict_zero3 = {"flat_param": flat_param}
-            load_zero3_flat_param(model_to_save, state_dict_zero3)
+            _load_zero3_flat_param(model_to_save, state_dict_zero3)
 
         model_to_save.deparallelize()
         state_dict_merged = model_to_save.state_dict()
@@ -111,7 +111,6 @@ def _save_parallelized_with_merge(
         dtype = _get_any_param_dtype(model_to_save)
         model_to_save.config.torch_dtype = str(dtype).split(".")[-1]
         model_to_save.config.architectures = [model_to_save.__class__.__name__]
-
         if save_config and tp_rank == 0 and pp_rank == 0 and dp_rank == 0:
             model_to_save.config.save_pretrained(save_directory)
 
@@ -154,7 +153,6 @@ def _save_parallelized_without_merge(
         dtype = _get_any_param_dtype(self)
         self.config.torch_dtype = str(dtype).split(".")[-1]
         self.config.architectures = [self.__class__.__name__]
-
         if save_config and tp_rank == 0 and pp_rank == 0 and dp_rank == 0:
             self.config.save_pretrained(save_directory)
 
@@ -170,7 +168,6 @@ def _save_parallelized_without_merge(
         reducer = getattr(self, "__nanotron_zero_reducer__", None)
         if reducer is None or not hasattr(reducer, "flat_param"):
             raise RuntimeError("save_parallelized(ZeRO-3): __nanotron_zero_reducer__.flat_param not found")
-
         flat_param = reducer.flat_param.detach().cpu()
         shard_state = {"flat_param": flat_param}
 
@@ -272,6 +269,6 @@ def from_parallelized(
         if zero_stg != 3:
             self.load_state_dict(state_dict, strict=strict)
         else:
-            load_zero3_flat_param(self, state_dict)
+            _load_zero3_flat_param(self, state_dict)
 
         logger.info("All model parameters loaded successfully from checkpoint.")
