@@ -193,6 +193,10 @@ class ParallelizationWrapper(ABC):
         delattr(self.model, "from_parallelized")
         restore_embedding_resizing(self.model)
 
+        delattr(self.model, "__nanotron__mp_plan__")
+        delattr(self.model, "__nanotron_wrappers__")
+        delattr(self.model, "__nanotron_mpu__")
+
 
 def register_wrapper(
     module: nn.Module,
