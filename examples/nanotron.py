@@ -204,6 +204,7 @@ if __name__ == '__main__':
             shuffle=shuffle_by_loader,
             pin_memory=True,
             drop_last=True,
+            sampler=sampler,
         )
 
         # create model and optimizer
