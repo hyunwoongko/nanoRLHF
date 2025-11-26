@@ -195,7 +195,6 @@ class ParallelizationWrapper(ABC):
 
         delattr(self.model, "__nanotron__mp_plan__")
         delattr(self.model, "__nanotron_wrappers__")
-        delattr(self.model, "__nanotron_mpu__")
 
 
 def register_wrapper(
@@ -208,9 +207,6 @@ def register_wrapper(
         module.__nanotron_wrappers__[mode] = wrapper
     else:
         setattr(module, "__nanotron_wrappers__", {mode: wrapper})
-
-    if not hasattr(module, "__nanotron_mpu__"):
-        setattr(module, "__nanotron_mpu__", mpu)
 
     setattr(module, "__nanotron__mp_plan__", wrapper.mp_plan)
     setattr(module, "parallelize", wrapper.parallelize)
