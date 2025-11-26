@@ -44,11 +44,6 @@ class CausalLMDataset(Dataset):
         }
 
 
-def set_hf_gpt2_padding(tokenizer):
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-
 def set_determinism(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -199,7 +194,8 @@ def main():
     ), f"world_size({world_size}) != tp*pp*dp ({args.tp}*{args.pp}*{args.dp})"
 
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
-    set_hf_gpt2_padding(tokenizer)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     set_determinism(args.seed)
 
     data = datasets.load_dataset("google-research-datasets/poem_sentiment", split="train")

@@ -170,19 +170,15 @@ def _save_parallelized_without_merge(
             raise RuntimeError("save_parallelized(ZeRO-3): __nanotron_zero_reducer__.flat_param not found")
         flat_param = reducer.flat_param.detach().cpu()
         shard_state = {"flat_param": flat_param}
-
-        weights_name = f"pytorch_model_zero3_dp{dp_rank}.bin"
-        output_model_file = os.path.join(save_directory, weights_name)
+        output_model_file = os.path.join(save_directory, f"pytorch_model_zero3_dp{dp_rank}.bin")
         save_function(shard_state, output_model_file)
 
     elif tp_world_size > 1 or pp_world_size > 1:
-        weights_name = f"pytorch_model_tp{tp_rank}_pp{pp_rank}.bin"
-        output_model_file = os.path.join(save_directory, weights_name)
+        output_model_file = os.path.join(save_directory, f"pytorch_model_tp{tp_rank}_pp{pp_rank}.bin")
         save_function(state_dict, output_model_file)
 
     elif dp_rank == 0:
-        weights_name = "pytorch_model.bin"
-        output_model_file = os.path.join(save_directory, weights_name)
+        output_model_file = os.path.join(save_directory, "pytorch_model.bin")
         save_function(state_dict, output_model_file)
 
     if output_model_file is not None:

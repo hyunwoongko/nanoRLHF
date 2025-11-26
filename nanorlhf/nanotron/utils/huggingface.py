@@ -67,12 +67,10 @@ def post_process_hf_model(
     input_ids = payload["user_inputs"].get("input_ids", None)
     labels = payload["user_inputs"].get("labels", None)
     last_hidden_state = payload.get("hidden_states", None)
+    past_key_values = payload["module_list_kwargs"].get("past_key_values", None)
 
     if logits is None:
-        return BaseModelOutputWithPast(
-            last_hidden_state=last_hidden_state,
-            past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
-        )
+        return BaseModelOutputWithPast(last_hidden_state=last_hidden_state, past_key_values=past_key_values)
 
     config = model.config
     class_name = model.__class__.__qualname__
@@ -80,11 +78,7 @@ def post_process_hf_model(
 
     if labels is None:
         output_type = get_output_type(model)
-        return output_type(
-            logits=logits,
-            hidden_states=last_hidden_state,
-            past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
-        )
+        return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
 
     if is_causal_lm(model):
         labels = nn.functional.pad(labels, (0, 1), value=-100)
@@ -92,10 +86,7 @@ def post_process_hf_model(
         shift_logits = logits.view(-1, logits.size(-1))
         loss = maybe_vocab_parallel_cross_entropy(shift_logits, shift_labels, mpu)
         return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            hidden_states=last_hidden_state,  # noqa
-            past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
+            loss=loss, logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values  # noqa
         )
     elif class_name.endswith("SequenceClassification"):
         if config.pad_token_id is None and batch_size != 1:
@@ -137,20 +128,13 @@ def post_process_hf_model(
             raise RuntimeError(f"Invalid problem type: {config.problem_type}")
 
         return SequenceClassifierOutputWithPast(
-            loss=loss,
-            logits=pooled_logits,
-            hidden_states=last_hidden_state,
-            past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
+            loss=loss, logits=pooled_logits, hidden_states=last_hidden_state, past_key_values=past_key_values  # noqa
         )
     elif class_name.endswith("TokenClassification"):
         labels = labels.view(-1).to(logits.device)
         shift_logits = logits.view(-1, config.num_labels).float()
         loss = torch.nn.functional.cross_entropy(shift_logits, labels)
-        return TokenClassifierOutput(
-            loss=loss,
-            logits=logits,
-            hidden_states=last_hidden_state,  # noqa
-        )
+        return TokenClassifierOutput(loss=loss, logits=logits, hidden_states=last_hidden_state)  # noqa
     elif class_name.endswith("QuestionAnswering"):
         total_loss = None
         start_positions = payload["user_inputs"].get("start_positions", None)
@@ -170,10 +154,7 @@ def post_process_hf_model(
             end_loss = torch.nn.functional.cross_entropy(end_logits, end_positions)
             total_loss = (start_loss + end_loss) / 2
         return QuestionAnsweringModelOutput(
-            loss=total_loss,
-            start_logits=start_logits,
-            end_logits=end_logits,
-            hidden_states=last_hidden_state,
+            loss=total_loss, start_logits=start_logits, end_logits=end_logits, hidden_states=last_hidden_state
         )
     else:
         raise NotImplementedError(
