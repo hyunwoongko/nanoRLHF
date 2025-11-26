@@ -2,7 +2,7 @@
 
 <p align="center">
 
-[![title_image](assets/title_image.png)](https://github.com/karpathy/nanoGPT)
+[![title](assets/title.png)](https://github.com/karpathy/nanoGPT)
 
 </p>
 
