@@ -19,7 +19,7 @@ Instead of "How do I compete with that?", I started thinking "What can a single 
 That brought me back to what Andrej Karpathy did with his "nano" series: small, from-scratch implementations that teach, rather than compete.
 The nanorlhf I'm developing follows that idea.
 They are not meant to be the fastest or most complete frameworks.
-They are meant to be small, readable, PyTorch-only references that show how RLHF and LLM infrastructure actually work, and later come with notebooks and free lectures.
+They are meant to be small, readable, PyTorch-only references that show how RLHF and LLM infrastructure actually work, and later come with notebooks and free video lectures.
 These projects will never have the scale or efficiency of company-level systems, but I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can positively influence others.
 
 
