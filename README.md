@@ -13,7 +13,8 @@ Modern LLM frameworks like Megatron-LM or verl are maintained by full-time teams
 An individual can still hack together a good framework after work, but it is very hard to keep up with the maintenance and feature velocity of a dedicated corporate team.
 Projects like OpenRLHF showed what a small group can do, but once a similar library with stronger backing appears, it naturally becomes the default choice.
 
-So I changed the question.
+So recently, I barely did any open-source work. I felt that even if I built something, it would be hard to create anything meaningful because I lacked capital and time.
+Now I changed the question.
 Instead of "How do I compete with that?", I started thinking "What can a single person, with no GPUs and a few hours a day after work, still do that is genuinely useful?"
 That brought me back to what Andrej Karpathy did with his "nano" series: small, from-scratch implementations that teach, rather than compete.
 And nanorlhf I'm developing follows that idea.
