@@ -44,6 +44,20 @@ def run_layer(layer: nn.Module, inputs: Dict[str, Any]) -> torch.Tensor:
     return hidden_states
 
 
+def get_output_type(model: nn.Module):
+    class_name = model.__class__.__qualname__
+    if is_causal_lm(model):
+        return CausalLMOutputWithPast
+    elif class_name.endswith("SequenceClassification"):
+        return SequenceClassifierOutputWithPast
+    elif class_name.endswith("TokenClassification"):
+        return TokenClassifierOutput
+    elif class_name.endswith("QuestionAnswering"):
+        return QuestionAnsweringModelOutput
+    else:
+        return BaseModelOutputWithPast
+
+
 def post_process_hf_model(
     model: nn.Module,
     mpu: MPU,
@@ -63,6 +77,14 @@ def post_process_hf_model(
     config = model.config
     class_name = model.__class__.__qualname__
     batch_size = logits.shape[0]
+
+    if labels is None:
+        output_type = get_output_type(model)
+        return output_type(
+            logits=logits,
+            hidden_states=last_hidden_state,
+            past_key_values=payload["module_list_kwargs"].get("past_key_values", None),
+        )
 
     if is_causal_lm(model):
         labels = nn.functional.pad(labels, (0, 1), value=-100)

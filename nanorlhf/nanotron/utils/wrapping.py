@@ -1,13 +1,16 @@
 import copy
+import os
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import List
+from functools import partial
+from typing import List, Union, Optional, Dict, Any, Callable
 
 import torch
 from torch import nn
 
 from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanotron.distributed.mpu import MPU
+from nanorlhf.nanotron.utils.checkpoint import save_parallelized, from_parallelized
 from nanorlhf.nanotron.utils.tracing import ModelParallelTracer
 
 
@@ -106,11 +109,52 @@ class ParallelizationWrapper(ABC):
             else:
                 buffer.data = buffer.to(torch.cuda.current_device())
 
+        def save_parallelized_method(
+            save_directory: Union[str, os.PathLike],
+            save_config: bool = True,
+            state_dict: Optional[Dict[str, Any]] = None,
+            save_function: Callable = torch.save,
+            merge_checkpoints: bool = False,
+        ):
+            return save_parallelized(
+                self=self.model,
+                mpu=self.mpu,
+                save_directory=save_directory,
+                save_config=save_config,
+                state_dict=state_dict,
+                save_function=save_function,
+                merge_checkpoints=merge_checkpoints,
+            )
+
+        def from_parallelized_method(
+            load_directory: Union[str, os.PathLike],
+            strict: bool = False,
+        ):
+            return from_parallelized(
+                self=self.model,
+                mpu=self.mpu,
+                load_directory=load_directory,
+                strict=strict,
+            )
+
+        setattr(self.model, "save_parallelized", save_parallelized_method)
+        setattr(self.model, "from_parallelized", from_parallelized_method)
+
     def deparallelize(self):
+        if hasattr(self.model, "__nanotron_wrappers__"):
+            self.model.__nanotron_wrappers__ = OrderedDict(
+                sorted(
+                    self.model.__nanotron_wrappers__.items(),
+                    key=lambda item: item[1].parallelization_priority,
+                    reverse=False,
+                    # (mode, wrapper)
+                )
+            )
         if hasattr(self.model, "__nanotron_wrappers__"):
             for wrapper in self.model.__nanotron_wrappers__.values():
                 if hasattr(wrapper, "_deparallelize"):
                     wrapper._deparallelize()
+
             if hasattr(self.model, "__nanotron_forward__"):
                 setattr(self.model, "forward", self.model.__nanotron_forward__)
                 delattr(self.model, "__nanotron_forward__")
@@ -124,6 +168,9 @@ class ParallelizationWrapper(ABC):
             buffer.data = buffer.data.to(torch.device("cpu"))
             if hasattr(buffer, "__nanotron_parallel__"):
                 delattr(buffer, "__nanotron_parallel__")
+
+        delattr(self.model, "save_parallelized")
+        delattr(self.model, "from_parallelized")
 
 
 def register_wrapper(

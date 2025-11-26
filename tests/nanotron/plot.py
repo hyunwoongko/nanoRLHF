@@ -8,8 +8,7 @@ import matplotlib.pyplot as plt
 
 
 def main():
-    # 현재 디렉토리에서 loss_*.json 찾기
-    json_files = sorted(glob.glob("loss_*.json"))
+    json_files = sorted(glob.glob("losses/loss_*.json"))
     if not json_files:
         print("No loss_*.json files found in current directory.")
         return
@@ -36,7 +35,6 @@ def main():
         print("No valid loss data found.")
         return
 
-    # 그래프 그리기 (모든 loss를 한 그래프에 overlay)
     plt.figure(figsize=(10, 5))
     for label, losses in all_losses.items():
         steps = range(len(losses))
@@ -49,7 +47,7 @@ def main():
     plt.legend()
     plt.tight_layout()
 
-    out_path = "loss_overlay.png"
+    out_path = "losses/loss_overlay.png"
     plt.savefig(out_path)
     plt.close()
     print(f"[save] wrote {out_path}")

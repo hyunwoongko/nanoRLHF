@@ -47,27 +47,38 @@ class DataParallelWrapper(ParallelizationWrapper):
 
     def get_zero_optimizer(self, optimizer: torch.optim.Optimizer) -> Union[torch.optim.Optimizer, ZeroOptimizer]:
         pp_world_size = self.mpu.get_world_size(ParallelMode.PIPELINE)
-        if self.zero_stage >= 2 and pp_world_size > 2:
-            raise ValueError(
-                f"ZeRO stage {self.zero_stage} is not supported when pipeline parallel size > 2 "
-                f"(got pp_world_size={pp_world_size}). Use zero_stage <= 1 in this configuration."
-            )
+        tp_world_size = self.mpu.get_world_size(ParallelMode.TENSOR)
+
+        if self.zero_stage == 2:
+            if pp_world_size > 1:
+                raise ValueError(
+                    f"ZeRO stage {self.zero_stage} is not supported when pipeline parallel size > 1 "
+                    f"(got pp_world_size={pp_world_size}). Use zero_stage <= 1 in this configuration."
+                )
+        elif self.zero_stage == 3:
+            if pp_world_size > 1 or tp_world_size > 1:
+                raise ValueError(
+                    f"ZeRO stage 3 is not supported when tensor parallel > 1 or pipeline parallel size > 1 "
+                    f"(got tp_world_size={tp_world_size}, pp_world_size={pp_world_size}). "
+                    f"Use zero_stage <= 1 in this configuration."
+                )
+
         first_param = next((p for p in self.model.parameters() if p.requires_grad), None)
         if first_param is None:
             raise ValueError("Model has no trainable parameters.")
         if self.zero_stage == 0:
             return optimizer
-        if self.zero_stage == 1:
-            return ZeroOptimizerStage1(optimizer, self.mpu, model=self.model)
-        if self.zero_stage == 2:
-            return ZeroOptimizerStage2(optimizer, self.mpu, model=self.model)
-        if self.zero_stage == 3:
+        elif self.zero_stage == 1:
+            zero_opt = ZeroOptimizerStage1(optimizer, self.mpu, model=self.model)
+        elif self.zero_stage == 2:
+            zero_opt = ZeroOptimizerStage2(optimizer, self.mpu, model=self.model)
+        elif self.zero_stage == 3:
             metas, total_numel = self._build_zero3_param_metas()
             if not torch.cuda.is_available():
                 raise ValueError("ZeRO stage 3 requires CUDA.")
             device = torch.device(torch.cuda.current_device())
             dtype = first_param.dtype
-            opt3 = ZeroOptimizerStage3(
+            zero_opt = ZeroOptimizerStage3(
                 optimizer,
                 self.mpu,
                 param_metas=metas,
@@ -77,19 +88,20 @@ class DataParallelWrapper(ParallelizationWrapper):
             )
             self._zero3_param_metas = metas
             self._zero3_total_numel = total_numel
-            self._zero3_flat_param = opt3.flat_param
-            self._zero3_shard_size = opt3.shard_size
-            return opt3
-        raise ValueError(f"Unsupported ZeRO stage: {self.zero_stage}")
+            self._zero3_flat_param = zero_opt.flat_param
+            self._zero3_shard_size = zero_opt.shard_size
+        else:
+            raise ValueError(f"Unsupported ZeRO stage: {self.zero_stage}")
+
+        setattr(self.model, "__nanotron_zero_optimizer__", zero_opt)
+        return zero_opt
 
     def _parallelize(self):
         dp_rank = self.mpu.get_local_rank(ParallelMode.DATA)
         dp_world_size = self.mpu.get_world_size(ParallelMode.DATA)
         tag_module(self.model, ParallelMode.DATA, dp_rank)
-
         if dp_world_size == 1 and self.zero_stage == 0:
             return
-
         if self.zero_stage == 3:
             if (
                 self._zero3_param_metas is None
@@ -98,7 +110,6 @@ class DataParallelWrapper(ParallelizationWrapper):
                 or self._zero3_shard_size is None
             ):
                 raise ValueError("ZeRO stage 3 requires optimizer to be created through DataParallel first.")
-
             metas = self._zero3_param_metas
             total_numel = self._zero3_total_numel
             flat_param = self._zero3_flat_param
@@ -109,21 +120,22 @@ class DataParallelWrapper(ParallelizationWrapper):
                 self.mpu,
                 zero_stage=3,
                 accum_steps=self.accum_steps,
-                flat_param=flat_param,
+                flat_param=flat_param,  # noqa
                 param_metas=metas,
                 total_numel=total_numel,
                 shard_size=shard_size,
             )
 
             group = self.mpu.get_group(ParallelMode.DATA)
-            padded_len = dp_world_size * shard_size
-
-            if self._zero3_gather_buffer is None:
+            dp_world_size = self.mpu.get_world_size(ParallelMode.DATA)
+            full_gather_numel = dp_world_size * shard_size
+            if self._zero3_gather_buffer is None or self._zero3_gather_buffer.numel() != full_gather_numel:
                 self._zero3_gather_buffer = torch.empty(
-                    padded_len,
+                    full_gather_numel,
                     device=flat_param.device,
                     dtype=flat_param.dtype,
                 )
+
             gather_buffer = self._zero3_gather_buffer
 
             def _zero3_fwd_pre(_m, _in):
@@ -133,7 +145,7 @@ class DataParallelWrapper(ParallelizationWrapper):
                 offset = 0
                 for meta in metas:
                     n = meta.numel
-                    meta.param.data = flat_full[offset: offset + n].view(meta.shape)
+                    meta.param.data = flat_full[offset : offset + n].view(meta.shape)
                     offset += n
 
             self._zero3_hook_handle = self.model.register_forward_pre_hook(_zero3_fwd_pre)
@@ -144,21 +156,55 @@ class DataParallelWrapper(ParallelizationWrapper):
                 zero_stage=self.zero_stage,
                 accum_steps=self.accum_steps,
             )
-
         setattr(self.model, "__nanotron_zero_reducer__", reducer)
         self._zero_reducer = reducer
 
     def _deparallelize(self):
+        if self.zero_stage == 3 and self._zero3_flat_param is not None:
+            dp_group = self.mpu.get_group(ParallelMode.DATA)
+            dp_world = self.mpu.get_world_size(ParallelMode.DATA)
+
+            flat_local = self._zero3_flat_param.data
+            device = flat_local.device
+            dtype = flat_local.dtype
+
+            metas = self._zero3_param_metas
+            total = self._zero3_total_numel
+            shard_size = self._zero3_shard_size
+
+            if metas is None or total is None or shard_size is None:
+                raise RuntimeError("ZeRO3 deparallelize: missing metadata")
+
+            if dp_world > 1:
+                gather_buf = torch.empty(
+                    dp_world * shard_size,
+                    device=device,
+                    dtype=dtype,
+                )
+                dist.all_gather_into_tensor(gather_buf, flat_local, group=dp_group)
+                flat_full = gather_buf[:total]
+            else:
+                flat_full = flat_local[:total]
+
+            offset = 0
+            for meta in metas:
+                n = meta.numel
+                chunk = flat_full[offset: offset + n].view(meta.shape)
+                meta.param.data = chunk.clone()
+                offset += n
+
+            self._zero3_param_metas = None
+            self._zero3_total_numel = None
+            self._zero3_flat_param = None
+            self._zero3_shard_size = None
+            self._zero3_gather_buffer = None
+
         if self._zero3_hook_handle is not None:
             self._zero3_hook_handle.remove()
             self._zero3_hook_handle = None
         if hasattr(self.model, "__nanotron_zero_reducer__"):
             delattr(self.model, "__nanotron_zero_reducer__")
-        if self._zero_reducer is not None and hasattr(self._zero_reducer, "close"):
-            try:
-                self._zero_reducer.close()
-            except Exception:
-                pass
+        if hasattr(self.model, "__nanotron_zero_optimizer__"):
+            delattr(self.model, "__nanotron_zero_optimizer__")
         self._zero_reducer = None
-        self._zero3_gather_buffer = None
 

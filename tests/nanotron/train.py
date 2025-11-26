@@ -1,6 +1,7 @@
+import argparse
+import json
 import os
-from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import List, Dict
 
 import datasets
 import torch
@@ -10,15 +11,11 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from nanorlhf.nanotron.distributed.mpu import MPU
-from nanorlhf.nanotron.distributed.mode import ParallelMode
-from nanorlhf.nanotron.api import PipelineParallel, TensorParallel, DataParallel
-
-MAX_LEN = 256
+from nanorlhf.nanotron import PipelineParallel, TensorParallel, DataParallel, MPU, ParallelMode
 
 
-class RowCausalLMDataset(Dataset):
-    def __init__(self, rows: List[str], tokenizer: AutoTokenizer, max_length: int = MAX_LEN):
+class CausalLMDataset(Dataset):
+    def __init__(self, rows: List[str], tokenizer: AutoTokenizer, max_length: int):
         self.rows = rows
         self.tok = tokenizer
         self.max_length = max_length
@@ -39,18 +36,12 @@ class RowCausalLMDataset(Dataset):
         input_ids = enc["input_ids"].squeeze(0)
         attention_mask = enc["attention_mask"].squeeze(0)
         labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
         return {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
             "labels": labels,
         }
-
-
-def collate_fn(batch: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
-    out = {}
-    for k in batch[0].keys():
-        out[k] = torch.stack([b[k] for b in batch], dim=0)
-    return out
 
 
 def set_hf_gpt2_padding(tokenizer):
@@ -66,31 +57,7 @@ def set_determinism(seed: int):
     torch.backends.cudnn.allow_tf32 = False
 
 
-@dataclass
-class Args:
-    model_name: str = "Qwen/Qwen2.5-1.5B"
-    steps: int = 100
-    batch_size: int = 8
-    lr: float = 5e-8
-    seed: int = 1234
-    micro_batch_size: int = 2
-    use_cache: bool = False
-    max_length: int = MAX_LEN
-
-    tp: int = 1
-    pp: int = 1
-    dp: int = 1
-    stg: int = 0
-
-
-def train_baseline(
-    args: Args,
-    model,
-    optimizer,
-    loader,
-    device,
-    steps: int,
-) -> List[float]:
+def train_baseline(args, model, optimizer, loader, device, steps: int) -> List[float]:
     model.train()
     model.to(device)
 
@@ -121,15 +88,7 @@ def train_baseline(
     return losses
 
 
-def train_parallel(
-    args: Args,
-    model,
-    optimizer,
-    loader,
-    device,
-    steps: int,
-    mpu: MPU,
-) -> List[float]:
+def train_parallel(args, model, optimizer, loader, device, steps: int, mpu: MPU) -> List[float]:
     model.train()
     dp_rank = mpu.get_local_rank(ParallelMode.DATA)
     pp_rank = mpu.get_local_rank(ParallelMode.PIPELINE)
@@ -144,11 +103,9 @@ def train_parallel(
 
     dp_size = args.dp
     assert dp_size == mpu.get_world_size(ParallelMode.DATA)
-
     assert args.batch_size % dp_size == 0, "batch_size must be divisible by dp_size"
     local_batch_size = args.batch_size // dp_size
     assert local_batch_size > 0, "local batch size must be > 0"
-
     if args.pp > 1:
         assert (
             local_batch_size % args.micro_batch_size == 0
@@ -156,7 +113,6 @@ def train_parallel(
 
     losses: List[float] = []
     it = iter(loader)
-    dp_group = mpu.get_group(ParallelMode.DATA)
 
     for _ in pbar:
         try:
@@ -169,10 +125,11 @@ def train_parallel(
             batch[k] = batch[k].to(device, non_blocking=True)
 
         if dp_size > 1:
-            start = dp_rank * local_batch_size
-            end = start + local_batch_size
+            # This is same as DistributedSampler.
+            start_idx = dp_rank * local_batch_size
+            end_idx = start_idx + local_batch_size
             for k in batch:
-                batch[k] = batch[k][start:end]
+                batch[k] = batch[k][start_idx:end_idx]
 
         optimizer.zero_grad(set_to_none=True)
 
@@ -191,11 +148,10 @@ def train_parallel(
 
         if dp_size > 1:
             loss_sum = local_loss.clone()
-            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=dp_group)
+            dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=mpu.get_group(ParallelMode.DATA))
             global_loss = loss_sum / dp_size
         else:
             global_loss = local_loss
-
         last_loss_val = float(global_loss.cpu())
 
         optimizer.step()
@@ -214,7 +170,6 @@ def train_parallel(
 def save_losses_json(losses: List[float], label: str, out_dir: str = "."):
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"loss_{label}.json")
-    import json
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"label": label, "losses": losses}, f, indent=2)
@@ -222,38 +177,19 @@ def save_losses_json(losses: List[float], label: str, out_dir: str = "."):
 
 
 def main():
-    import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen2.5-7B")
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-0.6B")
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=5e-8)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--micro-batch-size", type=int, default=2)
-    parser.add_argument("--max-length", type=int, default=MAX_LEN)
-    parser.add_argument("--use-cache", action="store_true")
-
+    parser.add_argument("--max-length", type=int, default=256)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--stg", type=int, default=0)
-
-    args_ns = parser.parse_args()
-    args = Args(
-        model_name=args_ns.model_name,
-        steps=args_ns.steps,
-        batch_size=args_ns.batch_size,
-        lr=args_ns.lr,
-        seed=args_ns.seed,
-        micro_batch_size=args_ns.micro_batch_size,
-        use_cache=args_ns.use_cache,
-        max_length=args_ns.max_length,
-        tp=args_ns.tp,
-        pp=args_ns.pp,
-        dp=args_ns.dp,
-        stg=args_ns.stg,
-    )
+    args = parser.parse_args()
 
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
     rank = int(os.environ.get("RANK", "0"))
@@ -262,85 +198,75 @@ def main():
         world_size == args.tp * args.pp * args.dp
     ), f"world_size({world_size}) != tp*pp*dp ({args.tp}*{args.pp}*{args.dp})"
 
-    set_determinism(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     set_hf_gpt2_padding(tokenizer)
+    set_determinism(args.seed)
 
     data = datasets.load_dataset("google-research-datasets/poem_sentiment", split="train")
     rows = list(data["verse_text"])
-    dataset = RowCausalLMDataset(rows, tokenizer, max_length=args.max_length)
-    loader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=True,
-        collate_fn=collate_fn,
-        drop_last=True,
-    )
+    dataset = CausalLMDataset(rows, tokenizer, max_length=args.max_length)
 
-    if world_size == 1 and args.tp == 1 and args.pp == 1 and args.dp == 1 and args.stg == 0:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if world_size == 1:
+        assert args.dp == 1 and args.pp == 1 and args.tp == 1, "tp, pp, dp must be 1 in single GPU mode"
+
+        loader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=True,
+            drop_last=True,
+        )
+
         model_base = AutoModelForCausalLM.from_pretrained(args.model_name)
-        model_base.config.use_cache = args.use_cache
         model_base.config.pad_token_id = tokenizer.pad_token_id
         opt_base = AdamW(model_base.parameters(), lr=args.lr)
 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         baseline_losses = train_baseline(args, model_base, opt_base, loader, device, args.steps)
-
         label = f"tp{args.tp}_pp{args.pp}_dp{args.dp}_stg{args.stg}"
-        save_losses_json(baseline_losses, label, out_dir=".")
+        save_losses_json(baseline_losses, label, out_dir="./losses")
         return
 
     mpu = MPU.from_torch(
         data_parallel_size=args.dp,
         pipeline_parallel_size=args.pp,
         tensor_parallel_size=args.tp,
-        backend="nccl",
         seed=args.seed,
     )
-    mpu.set_device()
-    device = torch.device(torch.cuda.current_device())
 
     model = AutoModelForCausalLM.from_pretrained(args.model_name)
-    model.config.use_cache = args.use_cache
     model.config.pad_token_id = tokenizer.pad_token_id
     optimizer = AdamW(model.parameters(), lr=args.lr)
 
-    if torch.distributed.get_rank() == 0:
-        print(model)
-        print("\n\n")
-
-    model = PipelineParallel(
-        model,
-        mpu=mpu,
-        micro_batch_size=args.micro_batch_size,
-    )
-    model = TensorParallel(
-        model,
-        mpu=mpu,
-    )
-    model, optimizer = DataParallel(
-        model,
-        optimizer,
-        zero_stage=args.stg,
-        mpu=mpu,
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        pin_memory=True,
+        drop_last=True,
+        num_workers=0,
     )
 
+    if rank == 0:
+        print(f"{model}\n\n")
+
+    model = TensorParallel(model, mpu=mpu)
+    model = PipelineParallel(model, mpu=mpu, micro_batch_size=args.micro_batch_size)
+    model, optimizer = DataParallel(model, mpu=mpu, optimizer=optimizer, zero_stage=args.stg)
     model.parallelize()
 
-    if torch.distributed.get_rank() == 0:
-        print(model)
-        print("\n\n")
+    if rank == 0:
+        print(f"{model}\n\n")
 
+    device = torch.device(torch.cuda.current_device())
     losses = train_parallel(args, model, optimizer, loader, device, args.steps, mpu)
 
     if rank == 0 and len(losses) > 0:
         label = f"tp{args.tp}_pp{args.pp}_dp{args.dp}_stg{args.stg}"
-        save_losses_json(losses, label, out_dir=".")
+        save_losses_json(losses, label, out_dir="./losses")
 
-    if dist.is_initialized():
-        dist.barrier()
+    dist.barrier()
     mpu.destroy()
 
 
