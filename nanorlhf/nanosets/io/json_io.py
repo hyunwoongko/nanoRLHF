@@ -12,12 +12,12 @@ TableLike = Union[Table, RecordBatch]
 
 def iter_rows(obj: TableLike) -> Iterable[Row]:
     if isinstance(obj, RecordBatch):
-        for row in obj.to_pylist():
+        for row in obj.to_list():
             yield row
         return
     if isinstance(obj, Table):
         for batch in obj.batches:
-            for row in batch.to_pylist():
+            for row in batch.to_list():
                 yield row
         return
     raise TypeError(f"Unsupported object: {type(obj).__name__}")
