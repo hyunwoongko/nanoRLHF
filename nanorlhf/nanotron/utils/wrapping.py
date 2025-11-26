@@ -197,12 +197,7 @@ class ParallelizationWrapper(ABC):
         delattr(self.model, "__nanotron_wrappers__")
 
 
-def register_wrapper(
-    module: nn.Module,
-    mode: ParallelMode,
-    wrapper: ParallelizationWrapper,
-    mpu: MPU,
-):
+def register_wrapper(module: nn.Module, mode: ParallelMode, wrapper: ParallelizationWrapper):
     if hasattr(module, "__nanotron_wrappers__"):
         module.__nanotron_wrappers__[mode] = wrapper
     else:
