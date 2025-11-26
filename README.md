@@ -1,24 +1,24 @@
 # nanorlhf
-A few years ago, it still made sense for an individual to think “I’ll just train my own model.” 
-I had no GPUs of my own, but thanks to some open-source libraries I’d built, I was lucky enough to work with great teams like Hugging Face, the DeepSpeed team, and EleutherAI. 
-Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM. 
-That was meaningful back then. 
 
-In 2025, though, companies train models like Qwen3 on tens of trillions of tokens with what is likely tens of thousands of GPUs, then release them for free. 
+A few years ago, it still made sense for an individual to think “I’ll just train my own model.”
+I had no GPUs of my own, but thanks to some open-source libraries I’d built, I was lucky enough to work with excellent teams like Hugging Face, the DeepSpeed team, and EleutherAI.
+Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM.
+That was meaningful back then.
+In 2025, though, companies train models like Qwen3 on tens of trillions of tokens with what is likely tens of thousands of GPUs, then release them for free.
 In that world, a small, weaker model trained by one person on a few hundred GPUs does not move the needle very much.
 
-The same thing is happening with libraries. 
-Modern LLM frameworks like Megatron-LM or verl are maintained by full-time company teams. 
-An individual can still hack together a good framework at free time after work, but it is very hard to keep up with the maintenance and feature velocity of a dedicated corporate team. 
-Projects like OpenRLHF showed what a small group can do, but once a similar library with stronger backing like verl appears, it naturally becomes the default choice.
+The same thing is happening with libraries.
+Modern LLM frameworks like Megatron-LM or verl are maintained by full-time teams.
+An individual can still hack together a good framework after work, but it is very hard to keep up with the maintenance and feature velocity of a dedicated corporate team.
+Projects like OpenRLHF showed what a small group can do, but once a similar library with stronger backing appears, it naturally becomes the default choice.
 
-So I changed the question. Instead of "How do I compete with that?", I started thinking "What can a single person, with no GPUs and a few hours a day, still do that is genuinely useful?" 
-That brought me back to what Andrej Karpathy did with his “nano” series: small, from-scratch implementations that teach, rather than compete. 
-nanorlhf I’m building follow that idea. 
-
-They are not meant to be the fastest or most complete frameworks. 
-They are meant to be small, readable, PyTorch-only references that show how RLHF and LLM infrastructure actually work, and later come with notebooks and free lectures. 
-I may not be able to out-train or out-scale companies, but I believe this can still help more people understand what is happening under the hood.
+So I changed the question.
+Instead of “How do I compete with that?”, I started thinking “What can a single person, with no GPUs and a few hours a day, still do that is genuinely useful?”
+That brought me back to what Andrej Karpathy did with his “nano” series: small, from-scratch implementations that teach, rather than compete.
+nanorlhf, and the other “nano” libraries I’m building, follow that idea.
+They are not meant to be the fastest or most complete frameworks.
+They are meant to be small, readable, PyTorch-only references that show how RLHF and LLM infrastructure actually work, and later come with notebooks and free lectures.
+These projects will never have the scale or efficiency of company-level systems, but I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can positively influence others.
 
 
 ## Contents
