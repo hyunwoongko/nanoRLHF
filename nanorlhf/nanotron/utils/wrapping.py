@@ -34,6 +34,29 @@ def tag_modules(modules: List[nn.Module], mode: ParallelMode, local_rank: int):
         tag_module(module, mode, local_rank)
 
 
+def restrict_embedding_resizing(model):
+    def resize_token_embeddings(new_num_tokens: Optional[int] = None, **kwargs):
+        raise RuntimeError(
+            "you can't use ``model.resize_token_embeddings()`` after calling `model.parallelize()`\n"
+            "please resize token embedding size before parallelization."
+        )
+
+    setattr(model, "__nanotron_resize_token_embeddings__", model.resize_token_embeddings)
+    setattr(model, "resize_token_embeddings", partial(resize_token_embeddings, self=model))
+    return model
+
+
+def restore_embedding_resizing(model):
+    if hasattr(model, "__nanotron_resize_token_embeddings__"):
+        setattr(
+            model,
+            "resize_token_embeddings",
+            model.__nanotron_resize_token_embeddings__,
+        )
+        delattr(model, "__nanotron_resize_token_embeddings__")
+    return model
+
+
 class ParallelizationWrapper(ABC):
     def __init__(self, model: nn.Module, mpu: MPU, parallelization_priority: int):
         self.mpu = mpu
@@ -139,6 +162,7 @@ class ParallelizationWrapper(ABC):
 
         setattr(self.model, "save_parallelized", save_parallelized_method)
         setattr(self.model, "from_parallelized", from_parallelized_method)
+        restrict_embedding_resizing(self.model)
 
     def deparallelize(self):
         if hasattr(self.model, "__nanotron_wrappers__"):
@@ -171,6 +195,7 @@ class ParallelizationWrapper(ABC):
 
         delattr(self.model, "save_parallelized")
         delattr(self.model, "from_parallelized")
+        restore_embedding_resizing(self.model)
 
 
 def register_wrapper(
