@@ -17,7 +17,7 @@ So recently, I barely did any open-source work. I felt that even if I built some
 Now I changed the question.
 Instead of "How do I compete with that?", I started thinking "What can a single person, with no GPUs and a few hours a day after work, still do that is genuinely useful?"
 That brought me back to what Andrej Karpathy did with his "nano" series: small, from-scratch implementations that teach, rather than compete.
-And nanorlhf I'm developing follows that idea.
+The nanorlhf I'm developing follows that idea.
 They are not meant to be the fastest or most complete frameworks.
 They are meant to be small, readable, PyTorch-only references that show how RLHF and LLM infrastructure actually work, and later come with notebooks and free lectures.
 These projects will never have the scale or efficiency of company-level systems, but I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can positively influence others.
