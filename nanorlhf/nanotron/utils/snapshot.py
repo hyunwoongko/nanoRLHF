@@ -104,7 +104,6 @@ class ModuleSnapshotGenerator:
         """Uninstall the wrapper and restore the original forward method."""
         self.module.forward = self._module_orig_forward
 
-    @torch.no_grad()
     def generate(self, model: nn.Module, inputs: Dict[str, Any]):
         """
         Generate a snapshot by running the model with the provided inputs.
