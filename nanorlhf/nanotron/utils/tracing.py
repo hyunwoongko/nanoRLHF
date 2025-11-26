@@ -235,6 +235,7 @@ class ModelParallelTracer:
         return ModuleType.OTHER
 
     def _detect_attention_type(self, attention_parent: nn.Module) -> Dict[int, AttentionType]:
+        # TODO: add deepseek style MLA detection
         parent_name = attention_parent.__class__.__qualname__
         children = list(self._iter_2d_weight_children(attention_parent))
         N = len(children)

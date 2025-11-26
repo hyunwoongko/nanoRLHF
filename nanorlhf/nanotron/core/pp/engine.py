@@ -66,8 +66,8 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                     >>>     for micro_output in model(**batch):
                     >>>         micro_outputs.append(micro_output)          # ← Store intermediate outputs
                     >>>     for micro_output in reversed(micro_outputs):
-                    >>>         micro_output.loss.backward()                # ← Backward pass (Pipeline Flush)
-                    >>>     optimizer.step()                                # ← Update weights
+                    >>>         micro_output.loss.backward()                # ← Backward pass
+                    >>>     optimizer.step()                                # ← Update weights (Pipeline Flush)
 
             - 1F1B (One Forward One Backward):
                  1F1B interleaves forward and backward. A device runs a forward on one micro-batch and then runs
