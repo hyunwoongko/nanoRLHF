@@ -1,6 +1,10 @@
 # nanorlhf
 
-![](assets/title_image.png)
+<p align="center">
+
+[![title_image](assets/title_image.png)](https://github.com/karpathy/nanoGPT)
+
+</p>
 
 This project aims to perform RLHF training from scratch, implementing almost all core components manually except for PyTorch. Each module is a minimal, educational reimplementation of large-scale systems focusing on clarity and core concepts rather than production readiness. This includes SFT and RL training pipeline with evaluation, for training a small Qwen3 model on open-source math datasets.
 
