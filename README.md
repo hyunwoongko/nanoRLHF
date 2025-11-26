@@ -5,7 +5,6 @@ A few years ago, it still made sense for an individual to think “I’ll just t
 I had no GPUs of my own, but thanks to some open-source libraries I’d built, I was lucky enough to work with excellent teams like Hugging Face, the DeepSpeed team, and EleutherAI.
 Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM.
 That was meaningful back then.
-
 In 2025, though, companies train models like Qwen3 on tens of trillions of tokens with what is likely tens of thousands of GPUs, then release them for free.
 In that world, a small, weaker model trained by one person on a few GPUs does not move the needle very much.
 
