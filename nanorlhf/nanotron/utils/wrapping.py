@@ -48,11 +48,7 @@ def restrict_embedding_resizing(model):
 
 def restore_embedding_resizing(model):
     if hasattr(model, "__nanotron_resize_token_embeddings__"):
-        setattr(
-            model,
-            "resize_token_embeddings",
-            model.__nanotron_resize_token_embeddings__,
-        )
+        setattr(model, "resize_token_embeddings", model.__nanotron_resize_token_embeddings__)
         delattr(model, "__nanotron_resize_token_embeddings__")
     return model
 
