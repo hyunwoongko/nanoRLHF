@@ -17,8 +17,8 @@ def flash_attn_varlen_bwd_kernel(
     stride_k_tok, stride_k_head, stride_k_dim,
     stride_v_tok, stride_v_head, stride_v_dim,
     stride_o_tok, stride_o_head, stride_o_dim,
-    stride_max_head, stride_max_tok,
-    stride_lsum_head, stride_lsum_tok,
+    stride_max_q_head, stride_max_q_tok,
+    stride_ez_sum_head, stride_ez_sum_tok,
     stride_dq_tok, stride_dq_head, stride_dq_dim,
     stride_dk_tok, stride_dk_head, stride_dk_dim,
     stride_dv_tok, stride_dv_head, stride_dv_dim,
@@ -65,8 +65,8 @@ def flash_attn_varlen_bwd_kernel(
     dk_head_seq_base = dk_ptr + head_id * stride_dk_head + k_start * stride_dk_tok
     dv_head_seq_base = dv_ptr + head_id * stride_dv_head + k_start * stride_dv_tok
 
-    max_q_head_base = max_q_ptr + head_id * stride_max_head
-    ez_sum_head_base = ez_sum_ptr + head_id * stride_lsum_head
+    max_q_head_base = max_q_ptr + head_id * stride_max_q_head
+    ez_sum_head_base = ez_sum_ptr + head_id * stride_ez_sum_head
 
     # Q / O / dO blocks
     q_block_ptr = tl.make_block_ptr(
@@ -110,8 +110,8 @@ def flash_attn_varlen_bwd_kernel(
         padding_option="zero",
     ).to(tl.float32)
 
-    max_q = tl.load(max_q_head_base + q_indices * stride_max_tok, mask=q_mask, other=-float("inf"))
-    ez_sum = tl.load(ez_sum_head_base + q_indices * stride_lsum_tok, mask=q_mask, other=1.0)
+    max_q = tl.load(max_q_head_base + q_indices * stride_max_q_tok, mask=q_mask, other=-float("inf"))
+    ez_sum = tl.load(ez_sum_head_base + q_indices * stride_ez_sum_tok, mask=q_mask, other=1.0)
 
     u = tl.sum(dO * o, axis=1)
 
@@ -227,8 +227,8 @@ def flash_attn_varlen_bwd(q, k, v, o, dO, cu_q, cu_k, max_q, ez_sum, B, H, max_s
     stride_dk_tok, stride_dk_head, stride_dk_dim = dk.stride()
     stride_dv_tok, stride_dv_head, stride_dv_dim = dv.stride()
 
-    stride_max_head, stride_max_tok = max_q.stride()
-    stride_lsum_head, stride_lsum_tok = ez_sum.stride()
+    stride_max_q_head, stride_max_q_tok = max_q.stride()
+    stride_ez_sum_head, stride_ez_sum_tok = ez_sum.stride()
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim ** 0.5)
@@ -249,8 +249,8 @@ def flash_attn_varlen_bwd(q, k, v, o, dO, cu_q, cu_k, max_q, ez_sum, B, H, max_s
         stride_k_tok, stride_k_head, stride_k_dim,
         stride_v_tok, stride_v_head, stride_v_dim,
         stride_o_tok, stride_o_head, stride_o_dim,
-        stride_max_head, stride_max_tok,
-        stride_lsum_head, stride_lsum_tok,
+        stride_max_q_head, stride_max_q_tok,
+        stride_ez_sum_head, stride_ez_sum_tok,
         stride_dq_tok, stride_dq_head, stride_dq_dim,
         stride_dk_tok, stride_dk_head, stride_dk_dim,
         stride_dv_tok, stride_dv_head, stride_dv_dim,
