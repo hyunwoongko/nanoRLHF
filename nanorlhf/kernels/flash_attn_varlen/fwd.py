@@ -3,12 +3,22 @@ import triton
 import triton.language as tl
 
 
+@triton.autotune(
+    configs=[
+        triton.Config({"block_size_q": 64, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
+        triton.Config({"block_size_q": 128, "tile_size_kv": 64, "num_warps": 8, "num_stages": 2}),
+        triton.Config({"block_size_q": 64, "tile_size_kv": 128, "num_warps": 8, "num_stages": 2}),
+        triton.Config({"block_size_q": 32, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
+        triton.Config({"block_size_q": 64, "tile_size_kv": 32, "num_warps": 4, "num_stages": 2}),
+    ],
+    key=["dim"]
+)
 @triton.jit
 def flash_attn_varlen_fwd_kernel(
     q_ptr, k_ptr, v_ptr,
-    cu_q_ptr, cu_k_ptr,
+    cu_seqlens_q_ptr, cu_seqlens_k_ptr,
     o_ptr, max_q_ptr, ez_sum_ptr,
-    B, H,
+    bsz, num_heads,
     stride_q_tok, stride_q_head, stride_q_dim,
     stride_k_tok, stride_k_head, stride_k_dim,
     stride_v_tok, stride_v_head, stride_v_dim,
@@ -24,15 +34,15 @@ def flash_attn_varlen_fwd_kernel(
     pid_bh = tl.program_id(0)
     pid_m = tl.program_id(1)
 
-    seq_id = pid_bh // H
-    head_id = pid_bh % H
+    seq_id = pid_bh // num_heads
+    head_id = pid_bh % num_heads
 
-    q_start = tl.load(cu_q_ptr + seq_id)
-    q_end = tl.load(cu_q_ptr + seq_id + 1)
+    q_start = tl.load(cu_seqlens_q_ptr + seq_id)
+    q_end = tl.load(cu_seqlens_q_ptr + seq_id + 1)
     seqlen_q = q_end - q_start
 
-    k_start = tl.load(cu_k_ptr + seq_id)
-    k_end = tl.load(cu_k_ptr + seq_id + 1)
+    k_start = tl.load(cu_seqlens_k_ptr + seq_id)
+    k_end = tl.load(cu_seqlens_k_ptr + seq_id + 1)
     seqlen_k = k_end - k_start
 
     block_q_start = pid_m * block_size_q
@@ -73,9 +83,6 @@ def flash_attn_varlen_fwd_kernel(
     offs_kv = tl.arange(0, tile_size_kv)
 
     for kv_start in range(0, seqlen_k, tile_size_kv):
-        kv_rel = kv_start + offs_kv
-        kv_mask = kv_rel < seqlen_k
-
         k_block_ptr = tl.make_block_ptr(
             base=k_head_seq_base,
             shape=(seqlen_k, dim),
@@ -104,18 +111,20 @@ def flash_attn_varlen_fwd_kernel(
         )
 
         scores = tl.dot(q, tl.trans(k)) * softmax_scale
-        q_pos = offs_q[:, None]
-        kv_pos = kv_rel[None, :]
+        kv_idx = kv_start + offs_kv
+        kv_mask = kv_idx < seqlen_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
+            offset = seqlen_k - seqlen_q
+            q_pos = (offset + offs_q)[:, None]
+            kv_pos = kv_idx[None, :]
             causal_mask = kv_pos > q_pos
             mask = base_mask | causal_mask
         else:
             mask = base_mask
 
         scores = tl.where(mask, -float("inf"), scores)
-
         current_max_q = tl.max(scores, axis=1)
         new_max_q = tl.maximum(max_q, current_max_q)
         rescale = tl.exp(max_q - new_max_q)
@@ -146,44 +155,47 @@ def flash_attn_varlen_fwd_kernel(
     tl.store(ez_sum_head_base + q_indices * stride_ez_sum_tok, ez_sum, mask=q_mask)
 
 
-def flash_attn_varlen_fwd(q, k, v, cu_q, cu_k, B, H, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None):
+def flash_attn_varlen_fwd(
+    q, k, v,
+    cu_seqlens_q, cu_seqlens_k,
+    bsz, num_heads,
+    max_seqlen_q, max_seqlen_k,
+    causal=True, softmax_scale=None
+):
     assert q.is_cuda and k.is_cuda and v.is_cuda
     assert q.dim() == 3 and k.dim() == 3 and v.dim() == 3
     assert q.shape[1] == k.shape[1] == v.shape[1]
     assert q.shape[2] == k.shape[2] == v.shape[2]
-    assert cu_q.shape[0] == B + 1
-    assert cu_k.shape[0] == B + 1
+    assert cu_seqlens_q.shape[0] == bsz + 1
+    assert cu_seqlens_k.shape[0] == bsz + 1
 
-    total_q, H_q, dim = q.shape
-    total_k, H_k, dim_k = k.shape
-    assert H_q == H_k == H
+    total_q, num_heads_q, dim = q.shape
+    total_k, num_heads_k, dim_k = k.shape
+    assert num_heads_q == num_heads_k == num_heads
     assert dim == dim_k
 
     o = torch.empty_like(q)
-    max_q = torch.empty(H, total_q, device=q.device, dtype=torch.float32)
-    ez_sum = torch.empty(H, total_q, device=q.device, dtype=torch.float32)
+    max_q = torch.empty(num_heads, total_q, device=q.device, dtype=torch.float32)
+    ez_sum = torch.empty(num_heads, total_q, device=q.device, dtype=torch.float32)
 
     stride_q_tok, stride_q_head, stride_q_dim = q.stride()
     stride_k_tok, stride_k_head, stride_k_dim = k.stride()
     stride_v_tok, stride_v_head, stride_v_dim = v.stride()
     stride_o_tok, stride_o_head, stride_o_dim = o.stride()
-
     stride_max_q_head, stride_max_q_tok = max_q.stride()
     stride_ez_sum_head, stride_ez_sum_tok = ez_sum.stride()
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim**0.5)
+        softmax_scale = 1.0 / (dim ** 0.5)
 
-    block_size_q = 64
-    tile_size_kv = 64
-
-    grid = (B * H, triton.cdiv(max_seqlen_q, block_size_q))
+    def grid(meta):
+        return bsz * num_heads, triton.cdiv(max_seqlen_q, meta["block_size_q"])
 
     flash_attn_varlen_fwd_kernel[grid](
         q, k, v,
-        cu_q, cu_k,
+        cu_seqlens_q, cu_seqlens_k,
         o, max_q, ez_sum,
-        B, H,
+        bsz, num_heads,
         stride_q_tok, stride_q_head, stride_q_dim,
         stride_k_tok, stride_k_head, stride_k_dim,
         stride_v_tok, stride_v_head, stride_v_dim,
@@ -192,8 +204,6 @@ def flash_attn_varlen_fwd(q, k, v, cu_q, cu_k, B, H, max_seqlen_q, max_seqlen_k,
         stride_ez_sum_head, stride_ez_sum_tok,
         softmax_scale,
         causal=causal,
-        block_size_q=block_size_q,
-        tile_size_kv=tile_size_kv,
         dim=dim,
     )
     return o, max_q, ez_sum

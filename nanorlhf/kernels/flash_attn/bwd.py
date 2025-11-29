@@ -2,7 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-
 @triton.autotune(
     configs=[
         triton.Config({"block_size_q": 64, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
@@ -17,6 +16,7 @@ import triton.language as tl
 def flash_attn_kernel_bwd(
     q_ptr, k_ptr, v_ptr, do_ptr,
     dq_ptr, dk_ptr, dv_ptr,
+    max_q_ptr, ez_sum_ptr,
     seq_len_q, seq_len_kv,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
@@ -25,6 +25,8 @@ def flash_attn_kernel_bwd(
     stride_dq_bh, stride_dq_seq, stride_dq_dim,
     stride_dk_bh, stride_dk_seq, stride_dk_dim,
     stride_dv_bh, stride_dv_seq, stride_dv_dim,
+    stride_max_bh, stride_max_seq,
+    stride_ez_sum_bh, stride_ez_sum_seq,
     softmax_scale,
     causal: tl.constexpr,
     dim: tl.constexpr,
@@ -43,22 +45,15 @@ def flash_attn_kernel_bwd(
         dS_ij = (dP_ij - Σ_k dP_ik p_ik) * p_ij
         dQ_i = Σ_j dS_ij · k_j * scale
         dK_j = Σ_i dS_ij · q_i * scale
-
-    Notes:
-        We haven't save softmax intermediates during forward pass,
-        so they must be recomputed in backward. (2-pass softmax)
     """
-    # Program ids
     pid_q = tl.program_id(0)
     pid_bh = tl.program_id(1)
 
-    # Pointers to batch head
     q_bh = q_ptr + pid_bh * stride_q_bh
     k_bh = k_ptr + pid_bh * stride_k_bh
     v_bh = v_ptr + pid_bh * stride_v_bh
     do_bh = do_ptr + pid_bh * stride_do_bh
 
-    # Pointers to batch head gradients
     dq_bh = dq_ptr + pid_bh * stride_dq_bh
     dk_bh = dk_ptr + pid_bh * stride_dk_bh
     dv_bh = dv_ptr + pid_bh * stride_dv_bh
@@ -69,6 +64,7 @@ def flash_attn_kernel_bwd(
 
     offs_q = q_start + tl.arange(0, block_size_q)
     offs_kv = tl.arange(0, tile_size_kv)
+    q_mask = offs_q < seq_len_q
 
     q_block_ptr = tl.make_block_ptr(
         base=q_bh,
@@ -95,50 +91,23 @@ def flash_attn_kernel_bwd(
         order=(1, 0),
     )
 
-    # Load q, dO
     q = tl.load(q_block_ptr, boundary_check=(0, 1), padding_option="zero")
-    dO = tl.load(do_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    do = tl.load(do_block_ptr, boundary_check=(0, 1), padding_option="zero")
 
-    # Recompute softmax forward to compute max_q and ez_sum
-    max_q = tl.full((block_size_q,), -float("inf"), dtype=tl.float32)
-    ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
-    for kv_start in range(0, seq_len_kv, tile_size_kv):
-        k_block_ptr = tl.make_block_ptr(
-            base=k_bh,
-            shape=(seq_len_kv, dim),
-            offsets=(kv_start, 0),
-            block_shape=(tile_size_kv, dim),
-            strides=(stride_k_seq, stride_k_dim),
-            order=(1, 0),
-        )
-        k = tl.load(
-            k_block_ptr,
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
+    # Load max_q and ez_sum
+    max_q = tl.load(
+        max_q_ptr + pid_bh * stride_max_bh + offs_q * stride_max_seq,
+        mask=q_mask,
+        other=-float("inf"),
+    )
+    ez_sum = tl.load(
+        ez_sum_ptr + pid_bh * stride_ez_sum_bh + offs_q * stride_ez_sum_seq,
+        mask=q_mask,
+        other=1.0,
+    )
 
-        # Compute scores
-        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
-
-        # Apply causal mask if needed
-        if causal:
-            q_pos = offs_q[:, None]
-            kv_pos = (kv_start + offs_kv)[None, :]
-            mask = kv_pos > q_pos
-            scores = tl.where(mask, -float("inf"), scores)
-
-        # Streaming softmax
-        current_max_q = tl.max(scores, axis=1)
-        new_max_q = tl.maximum(max_q, current_max_q)
-        rescale = tl.exp(max_q - new_max_q)
-        current_ez = tl.exp(scores - new_max_q[:, None])
-        ez_sum = ez_sum * rescale + tl.sum(current_ez, axis=1)
-        max_q = new_max_q
-
-    # Prevent division by zero
     ez_sum = tl.maximum(ez_sum, 1e-6)
 
-    # Start computing backward
     dq = tl.zeros((block_size_q, dim), dtype=tl.float32)
     for kv_start in range(0, seq_len_kv, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
@@ -168,60 +137,61 @@ def flash_attn_kernel_bwd(
             padding_option="zero",
         )
 
-        # Compute scores
         scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
 
-        # Apply causal mask if needed
-        if causal:
-            q_pos = offs_q[:, None]
-            kv_pos = (kv_start + offs_kv)[None, :]
-            mask = kv_pos > q_pos
-            scores = tl.where(mask, -float("inf"), scores)
+        kv_idx = kv_start + offs_kv
+        kv_mask = kv_idx < seq_len_kv
+        base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
-        # Compute softmax probabilities
+        if causal:
+            offset = seq_len_kv - seq_len_q
+            q_pos = (offset + offs_q)[:, None]
+            kv_pos = kv_idx[None, :]
+            causal_mask = kv_pos > q_pos
+            mask = base_mask | causal_mask
+        else:
+            mask = base_mask
+
+        scores = tl.where(mask, -float("inf"), scores)
+
+        # softmax probabilities
         p = tl.exp(scores - max_q[:, None]) / ez_sum[:, None]
         p_half = p.to(q.dtype)
 
-        # dv_tile = p^T @ dO
-        dv_tile = tl.dot(tl.trans(p_half), dO, out_dtype=tl.float32)
+        # dv_tile = p^T @ do
+        dv_tile = tl.dot(tl.trans(p_half), do, out_dtype=tl.float32)
 
-        # dP = dO @ V^T
-        dP = tl.dot(dO, tl.trans(v), out_dtype=tl.float32)
+        # dp = do @ V^T
+        dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32)
 
-        # dS = (dP - Σ_k dP_ik · p_ik) * p_ij
-        dS = (dP - tl.sum(dP * p, axis=1)[:, None]) * p
-        dS_half = dS.to(q.dtype)
+        # ds = (dp - Σ_k dp_ik p_ik) * p_ij
+        ds = (dp - tl.sum(dp * p, axis=1)[:, None]) * p
+        ds_half = ds.to(q.dtype)
 
-        # dQ = Σ_j dS_ij · k_j * scale
-        dq += tl.dot(dS_half, k, out_dtype=tl.float32) * softmax_scale
-        # dK = Σ_i dS_ij · q_i * scale
-        dk_tile = tl.dot(tl.trans(dS_half), q, out_dtype=tl.float32) * softmax_scale
+        dq += tl.dot(ds_half, k, out_dtype=tl.float32) * softmax_scale
+        dk_tile = tl.dot(tl.trans(ds_half), q, out_dtype=tl.float32) * softmax_scale
 
-        # store dK, dV with atomic adds
         kv_idx = kv_start + offs_kv
         mask_kv = kv_idx < seq_len_kv
 
-        # Compute pointers
         dv_ptrs = dv_bh + kv_idx[:, None] * stride_dv_seq + tl.arange(0, dim)[None, :] * stride_dv_dim
         dk_ptrs = dk_bh + kv_idx[:, None] * stride_dk_seq + tl.arange(0, dim)[None, :] * stride_dk_dim
 
-        # Cast to storage dtype before atomic_add
         dv_tile_out = dv_tile.to(v.dtype)
         dk_tile_out = dk_tile.to(k.dtype)
 
-        # Do atomic adds
         tl.atomic_add(dv_ptrs, dv_tile_out, mask=mask_kv[:, None])
         tl.atomic_add(dk_ptrs, dk_tile_out, mask=mask_kv[:, None])
 
-    # Store dQ
     dq_out = dq.to(q.dtype)
     tl.store(dq_block_ptr, dq_out, boundary_check=(0, 1))
 
 
-def flash_attn_bwd(q, k, v, do, causal=True, softmax_scale=None):
+def flash_attn_bwd(q, k, v, do, max_q, ez_sum, causal=True, softmax_scale=None):
     bsz, num_heads, seq_len_q, dim_head = q.shape
     seq_len_kv = k.shape[2]
     assert k.shape == v.shape == (bsz, num_heads, seq_len_kv, dim_head)
+    assert max_q.shape == ez_sum.shape == (bsz * num_heads, seq_len_q)
 
     bh = bsz * num_heads
 
@@ -252,6 +222,8 @@ def flash_attn_bwd(q, k, v, do, causal=True, softmax_scale=None):
     stride_dq_bh, stride_dq_seq, stride_dq_dim = dq_m.stride()
     stride_dk_bh, stride_dk_seq, stride_dk_dim = dk_m.stride()
     stride_dv_bh, stride_dv_seq, stride_dv_dim = dv_m.stride()
+    stride_max_bh, stride_max_seq = max_q.stride()
+    stride_ez_sum_bh, stride_ez_sum_seq = ez_sum.stride()
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim_head ** 0.5)
@@ -259,6 +231,7 @@ def flash_attn_bwd(q, k, v, do, causal=True, softmax_scale=None):
     flash_attn_kernel_bwd[grid](
         q_m, k_m, v_m, do_m,
         dq_m, dk_m, dv_m,
+        max_q, ez_sum,
         seq_len_q, seq_len_kv,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
@@ -267,6 +240,8 @@ def flash_attn_bwd(q, k, v, do, causal=True, softmax_scale=None):
         stride_dq_bh, stride_dq_seq, stride_dq_dim,
         stride_dk_bh, stride_dk_seq, stride_dk_dim,
         stride_dv_bh, stride_dv_seq, stride_dv_dim,
+        stride_max_bh, stride_max_seq,
+        stride_ez_sum_bh, stride_ez_sum_seq,
         softmax_scale=softmax_scale,
         causal=causal,
         dim=dim_head,

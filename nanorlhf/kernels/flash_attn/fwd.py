@@ -16,11 +16,14 @@ import triton.language as tl
 @triton.jit
 def flash_attn_kernel_fwd(
     q_ptr, k_ptr, v_ptr, o_ptr,
+    max_q_ptr, ez_sum_ptr,
     seq_len_q, seq_len_kv,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
     stride_v_bh, stride_v_seq, stride_v_dim,
     stride_o_bh, stride_o_seq, stride_o_dim,
+    stride_max_bh, stride_max_seq,
+    stride_ez_sum_bh, stride_ez_sum_seq,
     softmax_scale,
     causal: tl.constexpr,
     dim: tl.constexpr,
@@ -136,24 +139,25 @@ def flash_attn_kernel_fwd(
     pid_q = tl.program_id(0)
     pid_bh = tl.program_id(1)
 
-    # We need to account for the (batch * head) dimension by adding a stride
-    # for the base pointer on the bh dimension. In practice batch and head are
-    # reshaped into a single dimension when entering the kernel.
+    # batch * head base
     q_bh = q_ptr + pid_bh * stride_q_bh
     k_bh = k_ptr + pid_bh * stride_k_bh
     v_bh = v_ptr + pid_bh * stride_v_bh
     o_bh = o_ptr + pid_bh * stride_o_bh
 
-    # Query is processed in blocks; its pointer depends on the block id.
-    # Key/Value are processed via a loop; create local pointers and adjust in-loop.
+    # Query block index
     q_start = pid_q * block_size_q
+    if q_start >= seq_len_q:
+        return
+
     offs_q = q_start + tl.arange(0, block_size_q)
     offs_kv = tl.arange(0, tile_size_kv)
+    q_mask = offs_q < seq_len_q
 
     q_block_ptr = tl.make_block_ptr(
         base=q_bh,
         shape=(seq_len_q, dim),
-        offsets=(q_start, 0),  # ← The dim axis is not block-partitioned, so all blocks start at 0 on dim.
+        offsets=(q_start, 0),
         block_shape=(block_size_q, dim),
         strides=(stride_q_seq, stride_q_dim),
         order=(1, 0),
@@ -161,7 +165,7 @@ def flash_attn_kernel_fwd(
     o_block_ptr = tl.make_block_ptr(
         base=o_bh,
         shape=(seq_len_q, dim),
-        offsets=(q_start, 0),  # ← The dim axis is not block-partitioned, so all blocks start at 0 on dim.
+        offsets=(q_start, 0),
         block_shape=(block_size_q, dim),
         strides=(stride_o_seq, stride_o_dim),
         order=(1, 0),
@@ -178,7 +182,6 @@ def flash_attn_kernel_fwd(
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
     for kv_start in range(0, seq_len_kv, tile_size_kv):
-        # Create K and V block pointers
         k_block_ptr = tl.make_block_ptr(
             base=k_bh,
             shape=(seq_len_kv, dim),
@@ -196,7 +199,6 @@ def flash_attn_kernel_fwd(
             order=(1, 0),
         )
 
-        # Load K and V tiles
         k = tl.load(
             k_block_ptr,
             boundary_check=(0, 1),
@@ -208,17 +210,21 @@ def flash_attn_kernel_fwd(
             padding_option="zero",
         )
 
-        # (Q * K^T) / sqrt(d)
         scores = tl.dot(q, tl.trans(k)) * softmax_scale
+        kv_idx = kv_start + offs_kv
+        kv_mask = kv_idx < seq_len_kv
+        base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
-        # Apply causal mask if needed
         if causal:
-            q_pos = offs_q[:, None]
-            kv_pos = (kv_start + offs_kv)[None, :]
-            mask = kv_pos > q_pos
-            scores = tl.where(mask, -float("inf"), scores)
+            offset = seq_len_kv - seq_len_q
+            q_pos = (offset + offs_q)[:, None]
+            kv_pos = kv_idx[None, :]
+            causal_mask = kv_pos > q_pos
+            mask = base_mask | causal_mask
+        else:
+            mask = base_mask
 
-        # Streaming softmax update
+        scores = tl.where(mask, -float("inf"), scores)
         current_max_q = tl.max(scores, axis=1)
         new_max_q = tl.maximum(max_q, current_max_q)
         rescale = tl.exp(max_q - new_max_q)
@@ -227,16 +233,21 @@ def flash_attn_kernel_fwd(
         ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v.dtype), v, out_dtype=tl.float32)
         max_q = new_max_q
 
-    # Prevent division by zero
     ez_sum = tl.maximum(ez_sum, 1e-6)
-
-    # Compute output
     o = ez_dot_v / ez_sum[:, None]
 
     tl.store(
-        o_block_ptr, o.to(q.dtype),
+        o_block_ptr,
+        o.to(q.dtype),
         boundary_check=(0, 1),
     )
+
+    # Save max_q and ez_sum for backward pass
+    max_q_ptrs = max_q_ptr + pid_bh * stride_max_bh + offs_q * stride_max_seq
+    ez_sum_ptrs = ez_sum_ptr + pid_bh * stride_ez_sum_bh + offs_q * stride_ez_sum_seq
+
+    tl.store(max_q_ptrs, max_q, mask=q_mask)
+    tl.store(ez_sum_ptrs, ez_sum, mask=q_mask)
 
 
 def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
@@ -255,26 +266,35 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
     q_merged = merge_heads(q)
     k_merged = merge_heads(k)
     v_merged = merge_heads(v)
+
     o = torch.empty_like(q_merged)
+    max_q = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
+    ez_sum = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
 
     stride_q_bh, stride_q_seq, stride_q_dim = q_merged.stride()
     stride_k_bh, stride_k_seq, stride_k_dim = k_merged.stride()
     stride_v_bh, stride_v_seq, stride_v_dim = v_merged.stride()
     stride_o_bh, stride_o_seq, stride_o_dim = o.stride()
+    stride_max_bh, stride_max_seq = max_q.stride()
+    stride_ez_sum_bh, stride_ez_sum_seq = ez_sum.stride()
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim_head ** 0.5)
 
     flash_attn_kernel_fwd[grid](
         q_merged, k_merged, v_merged, o,
+        max_q, ez_sum,
         seq_len_q, seq_len_kv,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
         stride_v_bh, stride_v_seq, stride_v_dim,
         stride_o_bh, stride_o_seq, stride_o_dim,
+        stride_max_bh, stride_max_seq,
+        stride_ez_sum_bh, stride_ez_sum_seq,
         softmax_scale=softmax_scale,
         causal=causal,
         dim=dim_head,
     )
 
-    return o.view(bsz, num_heads, seq_len_q, dim_head)
+    o = o.view(bsz, num_heads, seq_len_q, dim_head)
+    return o, max_q, ez_sum
