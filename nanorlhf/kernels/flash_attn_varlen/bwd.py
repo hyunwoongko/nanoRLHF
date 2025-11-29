@@ -127,9 +127,6 @@ def flash_attn_varlen_bwd_kernel(
     dq = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
     for kv_start in range(0, seqlen_k, tile_size_kv):
-        kv_rel = kv_start + offs_kv
-        kv_mask = kv_rel < seqlen_k
-
         k_block_ptr = tl.make_block_ptr(
             base=k_head_seq_base,
             shape=(seqlen_k, dim),
@@ -159,16 +156,14 @@ def flash_attn_varlen_bwd_kernel(
         ).to(tl.float32)
 
         scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
-
-        kv_rel = kv_start + offs_kv
-        kv_mask = kv_rel < seqlen_k
-
+        kv_idx = kv_start + offs_kv
+        kv_mask = kv_idx < seqlen_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
             offset = seqlen_k - seqlen_q
             q_pos = (offset + offs_q)[:, None]
-            kv_pos = kv_rel[None, :]
+            kv_pos = kv_idx[None, :]
             causal_mask = kv_pos > q_pos
             mask = base_mask | causal_mask
         else:
@@ -190,10 +185,10 @@ def flash_attn_varlen_bwd_kernel(
         # We can't use block ptrs for atomic add
         # because atomic add doesn't support block ptrs
         dv_ptrs = dv_head_seq_base \
-                  + kv_rel[:, None] * stride_dv_tok \
+                  + kv_idx[:, None] * stride_dv_tok \
                   + offs_d[None, :] * stride_dv_dim
         dk_ptrs = dk_head_seq_base \
-                  + kv_rel[:, None] * stride_dk_tok \
+                  + kv_idx[:, None] * stride_dk_tok \
                   + offs_d[None, :] * stride_dk_dim
 
         mask_2d = kv_mask[:, None] & (offs_d[None, :] < dim)
