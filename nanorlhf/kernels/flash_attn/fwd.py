@@ -96,7 +96,7 @@ def flash_attn_kernel_fwd(
     Streaming softmax (Online softmax):
         Vanilla softmax for one query token requires the entire Key/Value range.
         Because we loop over Key/Value tiles, we cannot use the standard formula
-        directly. We therefore use an streaming (online) softmax that updates
+        directly. We therefore use streaming (online) softmax that updates
         statistics per tile.
 
         Standard softmax:
@@ -224,13 +224,17 @@ def flash_attn_kernel_fwd(
         rescale = tl.exp(max_q - new_max_q)
         current_ez = tl.exp(scores - new_max_q[:, None])
         ez_sum = ez_sum * rescale + tl.sum(current_ez, axis=1)
-        ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez, v)
+        ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v.dtype), v, out_dtype=tl.float32)
         max_q = new_max_q
 
+    # Prevent division by zero
+    ez_sum = tl.maximum(ez_sum, 1e-6)
+
+    # Compute output
     o = ez_dot_v / ez_sum[:, None]
 
     tl.store(
-        o_block_ptr, o,
+        o_block_ptr, o.to(q.dtype),
         boundary_check=(0, 1),
     )
 
