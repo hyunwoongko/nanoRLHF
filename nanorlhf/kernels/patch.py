@@ -11,7 +11,8 @@ def patch_kernel(model):
     # patch flash attention kernel
     if "nanoRLHF" not in ALL_ATTENTION_FUNCTIONS:
         ALL_ATTENTION_FUNCTIONS["nanoRLHF"] = flash_attention_forward
-    model.config._attention_implementation = "nanoRLHF"
+    if not hasattr(model.config, "_attention_implementation"):
+        model.config._attention_implementation = "nanoRLHF"
 
     # patch rms norm kernel
     for module in model.modules():
