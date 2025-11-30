@@ -47,6 +47,7 @@ def flash_attn_varlen_fwd_kernel(
 
     block_q_start = pid_m * block_size_q
     offs_q = block_q_start + tl.arange(0, block_size_q)
+    offs_kv = tl.arange(0, tile_size_kv)
     q_mask = offs_q < seqlen_q
 
     if block_q_start >= seqlen_q:
@@ -54,7 +55,7 @@ def flash_attn_varlen_fwd_kernel(
 
     q_indices = q_start + offs_q
 
-    # per-head, per-sequence bases (token axis is the first dim of shape)
+    # Per-head, per-sequence bases (token axis is the first dim of shape)
     q_head_seq_base = q_ptr + head_id * stride_q_head + q_start * stride_q_tok
     k_head_seq_base = k_ptr + head_id * stride_k_head + k_start * stride_k_tok
     v_head_seq_base = v_ptr + head_id * stride_v_head + k_start * stride_v_tok
@@ -79,8 +80,6 @@ def flash_attn_varlen_fwd_kernel(
     max_q = tl.full((block_size_q,), -float("inf"), dtype=tl.float32)
     ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
-
-    offs_kv = tl.arange(0, tile_size_kv)
 
     for kv_start in range(0, seqlen_k, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
@@ -133,10 +132,11 @@ def flash_attn_varlen_fwd_kernel(
         ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v.dtype), v, out_dtype=tl.float32)
         max_q = new_max_q
 
+    # Prevent division by zero
     ez_sum = tl.maximum(ez_sum, 1e-6)
     o = ez_dot_v / ez_sum[:, None]
 
-    # output block store
+    # Output block store
     o_block_ptr = tl.make_block_ptr(
         base=o_head_seq_base,
         shape=(seqlen_q, dim),

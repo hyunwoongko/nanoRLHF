@@ -233,6 +233,7 @@ def flash_attn_kernel_fwd(
         ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v.dtype), v, out_dtype=tl.float32)
         max_q = new_max_q
 
+    # Prevent division by zero
     ez_sum = tl.maximum(ez_sum, 1e-6)
     o = ez_dot_v / ez_sum[:, None]
 

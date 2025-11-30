@@ -125,7 +125,6 @@ def flash_attn_varlen_bwd_kernel(
 
     u = tl.sum(do * o, axis=1)
     dq = tl.zeros((block_size_q, dim), dtype=tl.float32)
-
     for kv_start in range(0, seqlen_k, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
             base=k_head_seq_base,
@@ -170,14 +169,12 @@ def flash_attn_varlen_bwd_kernel(
             mask = base_mask
 
         scores = tl.where(mask, -float("inf"), scores)
+        p = tl.exp(scores - max_q[:, None]) / ez_sum[:, None]
+        p = tl.where(mask, 0.0, p)
 
-        scores_shifted = scores - max_q[:, None]
-        P = tl.exp(scores_shifted) / ez_sum[:, None]
-        P = tl.where(mask, 0.0, P)
-
-        dv_tile = tl.dot(tl.trans(P), do, out_dtype=tl.float32)
+        dv_tile = tl.dot(tl.trans(p), do, out_dtype=tl.float32)
         dot_do_v = tl.dot(do, tl.trans(v), out_dtype=tl.float32)
-        ds = (dot_do_v - u[:, None]) * P
+        ds = (dot_do_v - u[:, None]) * p
 
         dq += tl.dot(ds, k, out_dtype=tl.float32) * softmax_scale
         dk_tile = tl.dot(tl.trans(ds), q, out_dtype=tl.float32) * softmax_scale

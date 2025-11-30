@@ -107,7 +107,6 @@ def flash_attn_kernel_bwd(
     )
 
     ez_sum = tl.maximum(ez_sum, 1e-6)
-
     dq = tl.zeros((block_size_q, dim), dtype=tl.float32)
     for kv_start in range(0, seq_len_kv, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
@@ -138,7 +137,6 @@ def flash_attn_kernel_bwd(
         )
 
         scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
-
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seq_len_kv
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
@@ -153,8 +151,6 @@ def flash_attn_kernel_bwd(
             mask = base_mask
 
         scores = tl.where(mask, -float("inf"), scores)
-
-        # softmax probabilities
         p = tl.exp(scores - max_q[:, None]) / ez_sum[:, None]
         p_half = p.to(q.dtype)
 

@@ -1,14 +1,17 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import nanorlhf  # import to register the flash attention implementation
+
+from nanorlhf.kernels.patch import patch_kernel
+
 
 model_name = "Qwen/Qwen3-0.6B"
-model = AutoModelForCausalLM.from_pretrained(model_name, attn_implementation="nanorlhf_flash_attention").eval().cuda()
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForCausalLM.from_pretrained(model_name).eval().cuda()
+model = patch_kernel(model)
 
 messages = [
     {"role": "user", "content": "Hello, how are you?"},
     {"role": "assistant", "content": "I'm fine, thank you!"},
-    {"role": "user", "content": "Can you tell me what is nanoRLHF?"},
+    {"role": "user", "content": "What is nanoRLHF?"},
 ]
 
 inputs = tokenizer.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True, enable_thinking=False).to("cuda")
