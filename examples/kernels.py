@@ -1,6 +1,6 @@
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from nanorlhf.kernels.patch import patch_kernel
+from nanorlhf.kernels import patch_kernel
 
 
 model_name = "Qwen/Qwen3-0.6B"
