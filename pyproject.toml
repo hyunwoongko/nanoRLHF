@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nanorlhf"
 version = "0.1.0"
-description = "nanorlhf: from-scratch journey into how LLMs and RLHF really work."
+description = "nanoRLHF: from-scratch journey into how LLMs and RLHF really work."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
@@ -13,9 +13,9 @@ keywords = ["rlhf", "rl", "llm", "language model", "deep learning", "ai"]
 dependencies = [
   "torch",
   "triton",
+  "transformers",
   "cloudpickle",
-  "zstandard",
-  "transformers"
+  "zstandard"
 ]
 
 [project.urls]
