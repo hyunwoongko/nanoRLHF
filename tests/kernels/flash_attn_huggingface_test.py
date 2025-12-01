@@ -1,6 +1,11 @@
 import torch
 from transformers import AutoModelForCausalLM, set_seed
-import nanorlhf  # import to register the nanoRLHF attention implementation
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+from nanorlhf.kernels.utils.huggingface import flash_attention_forward
+
+if "nanoRLHF" not in ALL_ATTENTION_FUNCTIONS:
+    ALL_ATTENTION_FUNCTIONS["nanoRLHF"] = flash_attention_forward
 
 set_seed(42)
 
@@ -9,7 +14,8 @@ model = AutoModelForCausalLM.from_pretrained(
     "Qwen/Qwen3-0.6B",
     attn_implementation="eager",
     torch_dtype=torch.bfloat16,
-).eval().cuda()
+)
+model = model.eval().cuda()
 
 vocab_size = model.config.vocab_size
 input_ids = torch.randint(low=0, high=vocab_size, size=(8, 1024), device="cuda", dtype=torch.long)
