@@ -165,9 +165,9 @@ def flash_attention_forward(
     query: torch.Tensor,
     key: torch.Tensor,
     value: torch.Tensor,
-    attention_mask: torch.Tensor | None,
-    scaling: float | None = None,
-    is_causal: bool | None = None,
+    attention_mask: Optional[torch.Tensor],
+    scaling: Optional[float] = None,
+    is_causal: Optional[bool] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
     if kwargs.get("output_attentions", False):
