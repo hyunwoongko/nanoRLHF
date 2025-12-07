@@ -9,7 +9,7 @@ class SequenceStatus(Enum):
     FINISHED = auto()
 
 
-class FinishedReason(Enum):
+class FinishReason(Enum):
     LENGTH = auto()
     STOP = auto()
     NOT_FINISHED = auto()
@@ -31,7 +31,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
-        self.finished_reason = FinishedReason.NOT_FINISHED
+        self.finish_reason = FinishReason.NOT_FINISHED
 
     def __len__(self):
         return self.num_tokens

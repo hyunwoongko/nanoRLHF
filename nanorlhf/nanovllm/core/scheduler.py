@@ -1,7 +1,7 @@
 from collections import deque
 
 from nanorlhf.nanovllm.core.block_manager import BlockManager
-from nanorlhf.nanovllm.core.sequence import SequenceStatus, FinishedReason
+from nanorlhf.nanovllm.core.sequence import SequenceStatus, FinishReason
 from nanorlhf.nanovllm.utils.config import Config
 
 
@@ -81,11 +81,11 @@ class Scheduler:
             finished = False
             if not seq.ignore_eos and generated_token_id == self.eos:
                 # if the generated token is eos token, we finish this sequence.
-                seq.finished_reason = FinishedReason.STOP
+                seq.finish_reason = FinishReason.STOP
                 finished = True
             elif seq.num_completion_tokens >= seq.max_tokens:
                 # and if the sequence reaches max_tokens, we also finish it.
-                seq.finished_reason = FinishedReason.LENGTH
+                seq.finish_reason = FinishReason.LENGTH
                 finished = True
             if finished:
                 seq.status = SequenceStatus.FINISHED
