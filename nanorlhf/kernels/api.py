@@ -3,6 +3,7 @@ from nanorlhf.kernels.flash_attn_varlen.ops import FlashAttnVarlenFunc
 from nanorlhf.kernels.rmsnorm.ops import FusedRMSNormFunc
 from nanorlhf.kernels.rotary.ops import apply_rotary_func
 from nanorlhf.kernels.utils.padding import pad_input as _pad_input, unpad_input as _unpad_input
+from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode
 
 
 def flash_attn_func(q, k, v, causal=True, softmax_scale=None, **kwargs):
@@ -11,6 +12,10 @@ def flash_attn_func(q, k, v, causal=True, softmax_scale=None, **kwargs):
 
 def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, causal=True, softmax_scale=None, **kwargs):
     return FlashAttnVarlenFunc.apply(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
+
+
+def flash_attn_decode_func(q, k, v, split_k=None, causal=True, softmax_scale=None, block_size_q=16, block_size_k=16):
+    return flash_attn_decode(q, k, v, split_k, causal, softmax_scale, block_size_q, block_size_k)
 
 
 def rms_norm(x, weight, eps=1e-6):
