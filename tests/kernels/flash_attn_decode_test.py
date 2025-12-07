@@ -269,3 +269,20 @@ if __name__ == "__main__":
         dtype=torch.float16,
         device=device,
     )
+
+
+"""
+================ Prefill benchmark ================
+
+[PREFILL BENCH] B=4, H=32, D=128, S=1024, dtype=torch.float16
+  PyTorch          : 2.726 ms/iter
+  flash_attn_fwd   : 0.523 ms/iter
+  flash_attn_decode: 1.074 ms/iter
+
+================ Decode benchmark ================
+
+[DECODE BENCH] B=4, H=32, D=512, S_q=1, S_k=8192, dtype=torch.float16
+  PyTorch: 1.022 ms/iter
+  Triton : 0.492 ms/iter
+
+"""
