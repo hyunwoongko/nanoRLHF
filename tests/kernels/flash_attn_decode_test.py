@@ -3,7 +3,6 @@ import time
 
 import torch
 
-# TODO: 경로는 네 프로젝트 구조에 맞게 수정해줘
 from nanorlhf.kernels.flash_attn.fwd import flash_attn_fwd
 from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode
 
