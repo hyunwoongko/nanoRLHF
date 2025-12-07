@@ -10,8 +10,8 @@ class SequenceStatus(Enum):
 
 
 class FinishedReason(Enum):
-    MAX_TOKENS = auto()
-    EOS_TOKEN = auto()
+    LENGTH = auto()
+    STOP = auto()
     NOT_FINISHED = auto()
 
 

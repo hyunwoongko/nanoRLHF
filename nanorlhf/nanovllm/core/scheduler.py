@@ -81,11 +81,11 @@ class Scheduler:
             finished = False
             if not seq.ignore_eos and generated_token_id == self.eos:
                 # if the generated token is eos token, we finish this sequence.
-                seq.finished_reason = FinishedReason.EOS_TOKEN
+                seq.finished_reason = FinishedReason.STOP
                 finished = True
             elif seq.num_completion_tokens >= seq.max_tokens:
                 # and if the sequence reaches max_tokens, we also finish it.
-                seq.finished_reason = FinishedReason.MAX_TOKENS
+                seq.finished_reason = FinishedReason.LENGTH
                 finished = True
             if finished:
                 seq.status = SequenceStatus.FINISHED
