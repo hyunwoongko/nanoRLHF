@@ -36,6 +36,7 @@ def store_kvcache(
 ):
     N, num_heads, head_dim = key.shape
     D = num_heads * head_dim
+    print('k_cache.shape:', k_cache.shape, 'k_cache.stride:', k_cache.stride(), 'k_cache.stride(1):', k_cache.stride(1), 'D:', D)
     assert key.stride(-1) == 1 and value.stride(-1) == 1
     assert key.stride(1) == head_dim and value.stride(1) == head_dim
     assert k_cache.stride(1) == D and v_cache.stride(1) == D

@@ -113,14 +113,13 @@ def paged_flash_attention_forward(
     k = key_states.reshape(-1, key_states.size(2), key_states.size(-1))
     v = value_states.reshape(-1, value_states.size(2), value_states.size(-1))
 
-    if not (hasattr(module, "k_cache") and hasattr(module, "v_cache")):
-        k_cache = v_cache = torch.tensor([])
-        setattr(module, "k_cache", k_cache)
-        setattr(module, "v_cache", v_cache)
-
+    assert hasattr(module, "k_cache") and hasattr(module, "v_cache"), (
+        "NanoRLHF paged_flash_attention_forward requires the attention module to have "
+        "`k_cache` and `v_cache` attributes for KV cache."
+    )
     k_cache, v_cache = module.k_cache, module.v_cache
     if k_cache.numel() and v_cache.numel():
-        store_kvcache(key_states, value_states, k_cache, v_cache, context.slot_mapping)
+        store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
 
     if context.is_prefill:
         if context.block_tables is not None:
@@ -128,6 +127,7 @@ def paged_flash_attention_forward(
 
         bsz = context.cu_seqlens_q.shape[0] - 1
         _, num_heads, dim = q.shape
+
         o, _, _ = flash_attn_varlen_fwd(
             q,
             k,

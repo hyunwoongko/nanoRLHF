@@ -58,6 +58,10 @@ class Sequence:
         return self.num_cached_tokens // self.block_size
 
     @property
+    def completion_token_ids(self):
+        return self.token_ids[self.num_prompt_tokens:]
+
+    @property
     def num_blocks(self):
         return (self.num_tokens + self.block_size - 1) // self.block_size
 
