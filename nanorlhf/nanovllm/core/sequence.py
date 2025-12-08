@@ -2,6 +2,8 @@ from copy import copy
 from enum import Enum, auto
 from itertools import count
 
+from nanorlhf.kernels.utils.vllm import KVCACHE_BLOCK_SIZE
+
 
 class SequenceStatus(Enum):
     WAITING = auto()
@@ -16,8 +18,8 @@ class FinishReason(Enum):
 
 
 class Sequence:
-    block_size = 256
     counter = count()
+    block_size = KVCACHE_BLOCK_SIZE
 
     def __init__(self, token_ids, sampling_params):
         self.seq_id = next(Sequence.counter)

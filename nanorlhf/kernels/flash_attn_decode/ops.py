@@ -34,7 +34,17 @@ def _get_split_k(
     return split_k
 
 
-def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, block_size_q=16, block_size_k=16):
+def flash_attn_decode(
+    q, k, v,
+    split_k=None,
+    causal=True,
+    softmax_scale=None,
+    block_size_q=16,
+    block_size_k=16,
+    block_table=None,
+    page_block_size=None,
+    max_seqlen_k=None,
+):
     assert q.ndim == 4 and k.ndim == 4 and v.ndim == 4
     bsz, num_heads, seq_len_q, dim = q.shape
     _, _, seq_len_k, dim_k = k.shape
@@ -83,6 +93,25 @@ def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, bl
     stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq = ez_sum.stride()
     stride_o_out_bh, stride_o_out_seq, stride_o_out_dim = o.stride()
 
+    use_block_table = block_table is not None
+    if use_block_table:
+        assert page_block_size is not None
+        assert block_table.dim() == 2
+        block_table = block_table.contiguous()
+        block_table_batch_stride = block_table.shape[1]
+        block_table_ptr = block_table.view(-1)
+        page_block_size = int(page_block_size)
+        if max_seqlen_k is None:
+            max_seqlen_k = seq_len_k
+        else:
+            max_seqlen_k = int(max_seqlen_k)
+    else:
+        # dummy values
+        block_table_batch_stride = 0
+        page_block_size = 1
+        block_table_ptr = q_merged
+        max_seqlen_k = seq_len_k
+
     grid_split_k = triton.cdiv(seq_len_q, block_size_q), bh, split_k
     flash_attn_decode_kernel_split_k[grid_split_k](
         q_merged, k_merged, v_merged, ez_dot_v,
@@ -95,7 +124,12 @@ def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, bl
         stride_max_q_bh, stride_max_q_split, stride_max_q_seq,
         stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq,
         softmax_scale,
+        max_seqlen_k,
         block_n_per_split,
+        block_table_ptr,
+        block_table_batch_stride,
+        page_block_size,
+        use_block_table=use_block_table,
         causal=causal,
         dim=dim,
         block_size_q=block_size_q,

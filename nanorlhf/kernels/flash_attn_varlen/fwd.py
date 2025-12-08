@@ -26,6 +26,11 @@ def flash_attn_varlen_fwd_kernel(
     stride_max_q_head, stride_max_q_tok,
     stride_ez_sum_head, stride_ez_sum_tok,
     softmax_scale,
+    max_seqlen_k,
+    block_table_ptr,
+    block_table_batch_stride,
+    page_block_size,
+    use_block_table: tl.constexpr,
     causal: tl.constexpr,
     block_size_q: tl.constexpr,
     tile_size_kv: tl.constexpr,
@@ -48,6 +53,7 @@ def flash_attn_varlen_fwd_kernel(
     block_q_start = pid_m * block_size_q
     offs_q = block_q_start + tl.arange(0, block_size_q)
     offs_kv = tl.arange(0, tile_size_kv)
+    offs_d = tl.arange(0, dim)
     q_mask = offs_q < seqlen_q
 
     if block_q_start >= seqlen_q:
@@ -60,6 +66,10 @@ def flash_attn_varlen_fwd_kernel(
     k_head_seq_base = k_ptr + head_id * stride_k_head + k_start * stride_k_tok
     v_head_seq_base = v_ptr + head_id * stride_v_head + k_start * stride_v_tok
     o_head_seq_base = o_ptr + head_id * stride_o_head + q_start * stride_o_tok
+
+    # This is for vllm-style paged attention
+    k_head_cache_base = k_ptr + head_id * stride_k_head
+    v_head_cache_base = v_ptr + head_id * stride_v_head
 
     max_q_head_base = max_q_ptr + head_id * stride_max_q_head
     ez_sum_head_base = ez_sum_ptr + head_id * stride_ez_sum_head
@@ -82,36 +92,61 @@ def flash_attn_varlen_fwd_kernel(
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
     for kv_start in range(0, seqlen_k, tile_size_kv):
-        k_block_ptr = tl.make_block_ptr(
-            base=k_head_seq_base,
-            shape=(seqlen_k, dim),
-            strides=(stride_k_tok, stride_k_dim),
-            offsets=(kv_start, 0),
-            block_shape=(tile_size_kv, dim),
-            order=(1, 0),
-        )
-        v_block_ptr = tl.make_block_ptr(
-            base=v_head_seq_base,
-            shape=(seqlen_k, dim),
-            strides=(stride_v_tok, stride_v_dim),
-            offsets=(kv_start, 0),
-            block_shape=(tile_size_kv, dim),
-            order=(1, 0),
-        )
-        k = tl.load(
-            k_block_ptr,
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-        v = tl.load(
-            v_block_ptr,
-            boundary_check=(0, 1),
-            padding_option="zero",
-        )
-
-        scores = tl.dot(q, tl.trans(k)) * softmax_scale
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seqlen_k
+
+        if not use_block_table:
+            k_block_ptr = tl.make_block_ptr(
+                base=k_head_seq_base,
+                shape=(seqlen_k, dim),
+                strides=(stride_k_tok, stride_k_dim),
+                offsets=(kv_start, 0),
+                block_shape=(tile_size_kv, dim),
+                order=(1, 0),
+            )
+            v_block_ptr = tl.make_block_ptr(
+                base=v_head_seq_base,
+                shape=(seqlen_k, dim),
+                strides=(stride_v_tok, stride_v_dim),
+                offsets=(kv_start, 0),
+                block_shape=(tile_size_kv, dim),
+                order=(1, 0),
+            )
+            k = tl.load(
+                k_block_ptr,
+                boundary_check=(0, 1),
+                padding_option="zero",
+            )
+            v = tl.load(
+                v_block_ptr,
+                boundary_check=(0, 1),
+                padding_option="zero",
+            )
+        else:
+            page_idx = kv_idx // page_block_size
+            page_offs = kv_idx % page_block_size
+
+            table_row = seq_id * block_table_batch_stride + page_idx
+            page_id = tl.load(block_table_ptr + table_row, mask=kv_mask, other=0)
+            cache_row = page_id * page_block_size + page_offs
+            cache_row_mask = kv_mask & (cache_row < max_seqlen_k)
+
+            k_row_ptrs = (
+                k_head_cache_base
+                + cache_row[:, None] * stride_k_tok
+                + offs_d[None, :] * stride_k_dim
+            )
+            v_row_ptrs = (
+                v_head_cache_base
+                + cache_row[:, None] * stride_v_tok
+                + offs_d[None, :] * stride_v_dim
+            )
+
+            elem_mask = cache_row_mask[:, None] & (offs_d[None, :] < dim)
+            k = tl.load(k_row_ptrs, mask=elem_mask, other=0.0)
+            v = tl.load(v_row_ptrs, mask=elem_mask, other=0.0)
+
+        scores = tl.dot(q, tl.trans(k)) * softmax_scale
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
@@ -160,7 +195,8 @@ def flash_attn_varlen_fwd(
     cu_seqlens_q, cu_seqlens_k,
     bsz, num_heads,
     max_seqlen_q, max_seqlen_k,
-    causal=True, softmax_scale=None
+    causal=True, softmax_scale=None,
+    block_table=None, page_block_size=None,
 ):
     assert q.is_cuda and k.is_cuda and v.is_cuda
     assert q.dim() == 3 and k.dim() == 3 and v.dim() == 3
@@ -188,6 +224,20 @@ def flash_attn_varlen_fwd(
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim ** 0.5)
 
+    use_block_table = block_table is not None
+    if use_block_table:
+        assert page_block_size is not None
+        assert block_table.dim() == 2
+        block_table = block_table.contiguous()
+        block_table_batch_stride = block_table.shape[1]
+        block_table_ptr = block_table.view(-1)
+        page_block_size = int(page_block_size)
+    else:
+        # dummy values
+        block_table_batch_stride = 0
+        page_block_size = 1
+        block_table_ptr = q
+
     def grid(meta):
         return bsz * num_heads, triton.cdiv(max_seqlen_q, meta["block_size_q"])
 
@@ -203,6 +253,11 @@ def flash_attn_varlen_fwd(
         stride_max_q_head, stride_max_q_tok,
         stride_ez_sum_head, stride_ez_sum_tok,
         softmax_scale,
+        max_seqlen_k,
+        block_table_ptr,
+        block_table_batch_stride,
+        page_block_size,
+        use_block_table,
         causal=causal,
         dim=dim,
     )

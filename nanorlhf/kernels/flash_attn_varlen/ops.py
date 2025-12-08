@@ -27,6 +27,9 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             max_seqlen_q, max_seqlen_k,
             causal=causal,
             softmax_scale=softmax_scale,
+            # inference options (not used here)
+            block_table=None,
+            page_block_size=None,
         )
 
         ctx.save_for_backward(q, k, v, o, cu_seqlens_q, cu_seqlens_k, max_q, ez_sum)
