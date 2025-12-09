@@ -11,6 +11,7 @@ from nanorlhf.nanoray.network.proxy import RemoteWorkerProxy
 from nanorlhf.nanoray.network.router import NodeRegistry, Router
 from nanorlhf.nanoray.network.rpc_client import RpcClient
 from nanorlhf.nanoray.network.rpc_server import RpcServer
+from nanorlhf.nanoray.runtime.process_pool import ProcessPool
 from nanorlhf.nanoray.runtime.worker import Worker
 from nanorlhf.nanoray.scheduler.policies import SchedulingPolicy, RoundRobin
 from nanorlhf.nanoray.scheduler.scheduler import WorkerLike
@@ -120,7 +121,8 @@ def init(
         is_local = cfg.host in ("127.0.0.1", "localhost")
         if is_local:
             store = ObjectStore(nid)
-            worker = Worker(store=store)
+            pool = ProcessPool(max_workers=max(1, int(cfg.cpus)))
+            worker = Worker(store=store, pool=pool)
             local_workers[nid] = worker
 
             # If asked, start an RpcServer in a background thread and register endpoint.

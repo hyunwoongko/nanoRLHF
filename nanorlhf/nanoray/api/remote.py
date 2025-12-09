@@ -9,10 +9,6 @@ from nanorlhf.nanoray.core.runtime_env import RuntimeEnv
 from nanorlhf.nanoray.core.task import Task
 
 
-class _Submittable(Protocol):
-    def __call__(self, task: Task) -> Optional[ObjectRef]: ...
-
-
 @dataclass(frozen=True)
 class RemoteFunction:
     """
@@ -58,6 +54,7 @@ class RemoteFunction:
     runtime_env: Optional[RuntimeEnv] = None
     placement_group: Optional[PlacementGroup] = None
     bundle_index: Optional[int] = None
+    pinned_node_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.resources is None:
@@ -72,6 +69,7 @@ class RemoteFunction:
         runtime_env: Optional[RuntimeEnv] = None,
         placement_group: Optional[PlacementGroup] = None,
         bundle_index: Optional[int] = None,
+        pinned_node_id: Optional[str] = None,
     ) -> "RemoteFunction":
         """
         Return a new RemoteFunction with per-call overrides.
@@ -90,6 +88,7 @@ class RemoteFunction:
             runtime_env=self.runtime_env if runtime_env is None else runtime_env,
             placement_group=self.placement_group if placement_group is None else placement_group,
             bundle_index=self.bundle_index if bundle_index is None else bundle_index,
+            pinned_node_id=self.pinned_node_id if pinned_node_id is None else pinned_node_id,
         )
 
     def task(self, *args: Any, **kwargs: Any) -> Task:
@@ -115,9 +114,10 @@ class RemoteFunction:
             runtime_env=self.runtime_env,
             placement_group_id=self.placement_group.pg_id if self.placement_group else None,
             bundle_index=self.bundle_index,
+            pinned_node_id=self.pinned_node_id,
         )
 
-    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any) -> Optional[ObjectRef]:
+    def remote(self, *args: Any, blocking: bool = False, **kwargs: Any) -> Optional[ObjectRef]:
         """
         Submit this function call to the global session's scheduler.
 

@@ -1,5 +1,6 @@
 import base64
 import json
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Dict, Any, Optional
 from urllib import request, error
 
@@ -23,6 +24,7 @@ class RpcClient:
         self._reg = registry
         self._timeout = float(timeout_s)
         self._retries = max(1, int(retries))
+        self._executor = ThreadPoolExecutor()
 
     def _request(self, node_id: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -72,6 +74,12 @@ class RpcClient:
 
         raise RuntimeError(f"RPC request failed to {url}: {last_exc}")
 
+    def _request_async(self, node_id: str, path: str, body: Dict[str, Any]) -> Future:
+        """
+        Fire-and-forget wrapper that executes `_request` in a thread pool.
+        """
+        return self._executor.submit(self._request, node_id, path, body)
+
     def get_object(self, node_id: str, object_id: str) -> bytes:
         """
         Fetch serialized object bytes from a remote node.
@@ -83,11 +91,11 @@ class RpcClient:
         Returns:
             bytes: Raw object bytes
         """
-        res = self._request(
+        res = self._request_async(
             node_id=node_id,
             path="/rpc/get_object",
             body={"object_id": object_id},
-        )
+        ).result()
 
         if not res.get("ok"):
             err = res.get("error", {})
@@ -109,11 +117,11 @@ class RpcClient:
         """
         blob = dumps(task)
 
-        res = self._request(
+        res = self._request_async(
             node_id=node_id,
             path="/rpc/execute_task",
             body={"task_b64": base64.b64encode(blob).decode("ascii")},
-        )
+        ).result()
 
         if not res.get("ok"):
             err = res.get("error", {})
@@ -127,3 +135,4 @@ class RpcClient:
             owner_node_id=ref_info["owner_node_id"],
             size_bytes=ref_info.get("size_bytes"),
         )
+

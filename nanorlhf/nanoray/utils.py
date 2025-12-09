@@ -65,3 +65,24 @@ def new_task_id() -> str:
 def new_placement_group_id() -> str:
     """Return an id like 'pg-XXXXXXXX' (8 hex)."""
     return new_id("pg-")
+
+
+def task_result_object_id(task_id: str) -> str:
+    """
+    Derive a stable ``object_id`` for a task result from its ``task_id``.
+
+    This keeps bookkeeping straightforward when callers request blocking
+    submission: we can deterministically match the produced ``ObjectRef`` to
+    the originating task even if additional tasks are drained in the same
+    pass.
+
+    Args:
+        task_id (str): The ``task.task_id`` identifier (e.g., ``"tsk-ab12cd34"``).
+
+    Returns:
+        str: An ``object_id`` using the ``obj-`` prefix, e.g.,
+            ``"obj-ab12cd34"``.
+    """
+
+    suffix = task_id.split("tsk-", 1)[-1] if task_id.startswith("tsk-") else task_id
+    return f"obj-{suffix}"

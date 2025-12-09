@@ -1,12 +1,14 @@
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import nullcontext
 from typing import Optional, Dict
 
 from nanorlhf.nanoray.core.actor import ActorRef
 from nanorlhf.nanoray.core.object_ref import ObjectRef
 from nanorlhf.nanoray.core.object_store import ObjectStore
+from nanorlhf.nanoray.core.serialization import dumps, loads
 from nanorlhf.nanoray.core.task import Task
 from nanorlhf.nanoray.runtime.process_pool import ProcessPool
-from nanorlhf.nanoray.utils import new_actor_id
+from nanorlhf.nanoray.utils import new_actor_id, task_result_object_id
 
 
 def _invoke(fn, args, kwargs):
@@ -18,6 +20,11 @@ def _invoke(fn, args, kwargs):
         - Mirrors the core execution: `return fn(*args, **kwargs)`.
     """
     return fn(*args, **(kwargs or {}))
+
+
+def _invoke_serialized(payload: bytes):
+    fn, args, kwargs = loads(payload)
+    return _invoke(fn, args, kwargs)
 
 
 class Worker:
@@ -77,6 +84,7 @@ class Worker:
         self.node_id = node_id or store.node_id
         self.pool = pool
         self._actors: Dict[str, object] = {}  # local actor registry
+        self._threads = ThreadPoolExecutor()
 
     def execute_task(self, task: Task) -> ObjectRef:
         """
@@ -105,43 +113,54 @@ class Worker:
             with ctx_mgr:
                 fn = task.fn
 
-                # Actor creation (always local):
+                # Actor creation
                 if isinstance(fn, dict) and fn.get("kind") == "actor_create":
-                    actor_id = new_actor_id()
-                    cls = fn["cls"]
-                    init_args = tuple(fn.get("args", ()))
-                    init_kwargs = dict(fn.get("kwargs", {}) or {})
-                    instance = cls(*init_args, **init_kwargs)
-                    self._actors[actor_id] = instance
-                    ref = ActorRef(
-                        actor_id=actor_id,
-                        owner_node_id=self.node_id,
+                    def _create_actor():
+                        actor_id = new_actor_id()
+                        cls = fn["cls"]
+                        init_args = tuple(fn.get("args", ()))
+                        init_kwargs = dict(fn.get("kwargs", {}) or {})
+                        instance = cls(*init_args, **init_kwargs)
+                        self._actors[actor_id] = instance
+                        ref = ActorRef(
+                            actor_id=actor_id,
+                            owner_node_id=self.node_id,
+                        )
+                        return ref
+
+                    fut = self._threads.submit(_create_actor)
+                    return self.store.put_future(
+                        fut, object_id=task_result_object_id(task.task_id)
                     )
-                    return self.store.put(ref)
 
-                # Actor method call (always local):
+                # Actor method call
                 if isinstance(fn, dict) and fn.get("kind") == "actor_call":
-                    actor_id = fn["actor_id"]
-                    method_name = fn["method"]
-                    instance = self._actors.get(actor_id)
-                    if instance is None:
-                        raise RuntimeError(f"Actor {actor_id} not found on node {self.node_id}.")
-                    method = getattr(instance, method_name, None)
-                    if method is None or not callable(method):
-                        raise AttributeError(f"Actor method {method_name} not found.")
-                    result = method(*task.args, **(task.kwargs or {}))
-                    ref = self.store.put(result)
-                    return ref
+                    def _call_actor():
+                        actor_id = fn["actor_id"]
+                        method_name = fn["method"]
+                        instance = self._actors.get(actor_id)
+                        if instance is None:
+                            raise RuntimeError(f"Actor {actor_id} not found on node {self.node_id}.")
+                        method = getattr(instance, method_name, None)
+                        if method is None or not callable(method):
+                            raise AttributeError(f"Actor method {method_name} not found.")
+                        result = method(*task.args, **(task.kwargs or {}))
+                        return result
 
-                # Regular function call (local or pool)
-                if self.pool is None:
-                    result = _invoke(fn, task.args, task.kwargs)
+                    fut = self._threads.submit(_call_actor)
+                    return self.store.put_future(
+                        fut, object_id=task_result_object_id(task.task_id)
+                    )
+
+                # Regular function call
+                if self.pool is not None:
+                    payload = dumps((fn, task.args, task.kwargs))
+                    fut = self.pool.submit(_invoke_serialized, payload)
                 else:
-                    future = self.pool.submit(_invoke, fn, task.args, task.kwargs)
-                    result = future.result()
-
-                ref = self.store.put(result)
-                return ref
+                    fut = self._threads.submit(_invoke, fn, task.args, task.kwargs)
+                return self.store.put_future(
+                    fut, object_id=task_result_object_id(task.task_id)
+                )
 
         except Exception as e:
             raise RuntimeError(f"Task failed in worker@{self.node_id}") from e
@@ -170,15 +189,8 @@ class Worker:
             ObjectRef: Handle to the produced result (owned by this node).
         """
         ref = self.execute_task(task)
-
-        try:
-            payload = self.store.get_bytes(ref.object_id)
-            size = len(payload)
-        except Exception:
-            size = None
-
         return ObjectRef(
             object_id=ref.object_id,
             owner_node_id=self.store.node_id,
-            size_bytes=size
+            size_bytes=self.store.get_size(ref.object_id)
         )

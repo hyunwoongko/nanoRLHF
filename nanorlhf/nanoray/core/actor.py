@@ -261,7 +261,7 @@ class ActorClass:
         )
         return out
 
-    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any):
+    def remote(self, *args: Any, blocking: bool = False, **kwargs: Any):
         """
         Enqueue an actor creation task. The returned `ObjectRef` resolves
         to and `ActorRef(actor_id, owner_node_id)`.

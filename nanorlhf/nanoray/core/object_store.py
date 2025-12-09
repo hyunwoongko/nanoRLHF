@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import Future
 from typing import Any, Dict, Optional
 
 from nanorlhf.nanoray.core.serialization import dumps, loads
@@ -115,6 +116,38 @@ class ObjectStore:
         # NOTE: we DO NOT compute size here to avoid double-serialization cost.
         return ObjectRef(object_id=object_id, owner_node_id=self.node_id, size_bytes=None)
 
+    def put_future(self, fut: Future, *, object_id: Optional[str] = None) -> ObjectRef:
+        """
+        Insert a ``Future`` into the store and return an ``ObjectRef`` immediately.
+
+        The future result will be resolved lazily on the first ``get``/``get_bytes``
+        call. Once resolved, the stored value is replaced with the concrete result
+        so subsequent reads are fast and do not re-wait the future.
+
+        Args:
+            fut (Future): Future whose ``result()`` yields the value to store.
+            object_id (Optional[str]): Optional stable object id. If omitted, a
+                new id is generated.
+
+        Returns:
+            ObjectRef: Handle to the future-backed value.
+        """
+
+        oid = object_id or f"obj-{uuid.uuid4().hex[:8]}"
+        self._store[oid] = fut
+
+        def _materialize(f: Future):
+            if f.cancelled():
+                return
+            try:
+                value = f.result()
+                self._store[oid] = value
+            except Exception as exc:  # pragma: no cover - stored as-is
+                self._store[oid] = exc
+
+        fut.add_done_callback(_materialize)
+        return ObjectRef(object_id=oid, owner_node_id=self.node_id, size_bytes=None)
+
     def get(self, ref: ObjectRef) -> Any:
         """
         Retrieve a value by its reference.
@@ -127,7 +160,7 @@ class ObjectStore:
 
         Raises:
             RuntimeError: If the object is owned by another node and this store
-                has no networking to fetch it (teaching placeholder).
+            has no networking to fetch it (teaching placeholder).
 
         Examples:
             >>> store = ObjectStore("node-A")
@@ -137,7 +170,14 @@ class ObjectStore:
         """
         if ref.object_id not in self._store:
             raise KeyError(f"Object not found locally: {ref.object_id}")
-        return self._store[ref.object_id]
+
+        val = self._store[ref.object_id]
+        if isinstance(val, Future):
+            val = val.result()
+            self._store[ref.object_id] = val
+        if isinstance(val, Exception):
+            raise val
+        return val
 
     def get_bytes(self, object_id: str) -> bytes:
         """
@@ -156,7 +196,15 @@ class ObjectStore:
         """
         if object_id not in self._store:
             raise KeyError(f"Object not found locally: {object_id}")
-        payload = dumps(self._store[object_id])
+
+        val = self._store[object_id]
+        if isinstance(val, Future):
+            val = val.result()
+            self._store[object_id] = val
+        if isinstance(val, Exception):
+            raise val
+
+        payload = dumps(val)
         self._sizes[object_id] = len(payload)
         return payload
 

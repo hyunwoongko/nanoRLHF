@@ -8,7 +8,7 @@ from nanorlhf.nanoray.network.router import Router
 from nanorlhf.nanoray.network.rpc_client import RpcClient
 from nanorlhf.nanoray.scheduler.policies import SchedulingPolicy
 from nanorlhf.nanoray.scheduler.scheduler import Scheduler, WorkerLike
-from nanorlhf.nanoray.utils import new_placement_group_id
+from nanorlhf.nanoray.utils import new_placement_group_id, task_result_object_id
 
 
 class Session:
@@ -141,6 +141,8 @@ class Session:
 
         ref = self.scheduler.submit(task)
         if ref is not None:
+            if blocking:
+                self.get(ref)
             return ref
         if blocking is True:
             produced = self.scheduler.drain()
@@ -148,7 +150,17 @@ class Session:
                 raise RuntimeError(
                     "Task could not be placed (no progress). " "Check resources/placement group/pin constraints."
                 )
-            return produced[-1]
+            expected_oid = task_result_object_id(task.task_id)
+            chosen = None
+            for candidate in produced:
+                if candidate.object_id == expected_oid:
+                    chosen = candidate
+                    break
+            if chosen is None:
+                chosen = produced[-1]
+
+            self.get(chosen)
+            return chosen
         else:
             return None
 
@@ -435,7 +447,7 @@ def put(value: Any, *, node_id: Optional[str] = None) -> ObjectRef:
     return get_session().put(value, node_id=node_id)
 
 
-def submit(task: Task, blocking: bool = True) -> Optional[ObjectRef]:
+def submit(task: Task, blocking: bool = False) -> Optional[ObjectRef]:
     """
     Convenience function: submit a task via the global session (enqueue-only).
 
