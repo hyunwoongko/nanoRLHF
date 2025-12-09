@@ -1,171 +1,202 @@
-from typing import Iterable, List
+import pickle
 
 import torch
-import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
-from nanorlhf.kernels.utils.vllm import reset_context, set_context, paged_flash_attention_forward
+from nanorlhf.kernels.utils.vllm import (
+    paged_flash_attention_forward,
+    set_context,
+    reset_context,
+    get_context,
+)
+from nanorlhf.nanovllm.core.sampler import Sampler
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import Config
 
 
 class ModelRunner:
-    """A simplified model runner.
+    def __init__(self, config: Config):
+        self.config = config
+        self.block_size = config.kvcache_block_size
+        self.kv_cache = None
 
-    This implementation focuses on correctness over performance. It batches
-    incoming sequences, runs them through a Hugging Face causal LM, and samples
-    the next token for each sequence using temperature-based sampling.
-    """
-
-    def __init__(self, config: Config, tokenizer: AutoTokenizer):
-        assert torch.cuda.is_available()
-        if "nanoRLHF" not in ALL_ATTENTION_FUNCTIONS:
+        if "nanoRLHF_paged" not in ALL_ATTENTION_FUNCTIONS:
             ALL_ATTENTION_FUNCTIONS["nanoRLHF_paged"] = paged_flash_attention_forward
 
-        self.config = config
         self.device = torch.device("cuda")
         self.model = AutoModelForCausalLM.from_pretrained(
             config.model,
-            torch_dtype=getattr(config.hf_config, "torch_dtype", None),
+            torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16),
             attn_implementation="nanoRLHF_paged",
         ).to(self.device)
+        self.sampler = Sampler()
+        self.warmup_model()
+        self.allocate_kv_cache()
 
-        self.model.eval()
-        self.pad_token_id = tokenizer.pad_token_id or tokenizer.eos_token_id or 0
-        self.block_size = config.kvcache_block_size
-        self.max_blocks = config.num_kvcache_blocks
-        self._allocate_kv_cache()
+    def warmup_model(self):
+        dtype = getattr(self.config.hf_config, "torch_dtype", torch.float16)
+        for module in self.model.modules():
+            if "Attention" in module.__class__.__qualname__:
+                if not (hasattr(module, "key_cache") and hasattr(module, "value_cache")):
+                    key_cache = value_cache = torch.tensor([], device=self.device, dtype=dtype)
+                    setattr(module, "key_cache", key_cache)
+                    setattr(module, "value_cache", value_cache)
 
-    def _prepare_batch(self, seqs: Iterable[Sequence]):
-        tensors: List[torch.Tensor] = [torch.tensor(seq.token_ids, dtype=torch.long) for seq in seqs]
-        max_len = max(t.size(0) for t in tensors)
-        input_ids = []
-        attention_masks = []
-        lengths = []
-        for t in tensors:
-            lengths.append(t.size(0))
-            pad_len = max_len - t.size(0)
-            padded = F.pad(t, (0, pad_len), value=self.pad_token_id)
-            mask = torch.cat(
-                [
-                    torch.ones_like(t, dtype=torch.long),
-                    torch.zeros(pad_len, dtype=torch.long),
-                ]
-            )
-            input_ids.append(padded)
-            attention_masks.append(mask)
-        batch_ids = torch.stack(input_ids).to(self.device)
-        batch_mask = torch.stack(attention_masks).to(self.device)
-        positions = [torch.arange(length, device=self.device) for length in lengths]
-        pos_padded = [F.pad(pos, (0, max_len - pos.numel())) for pos in positions]
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
+        num_seqs = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
+        seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
+        self.run(seqs, True)
+        torch.cuda.empty_cache()
 
-        return batch_ids, batch_mask, pos_padded, lengths
+    def allocate_kv_cache(self):
+        config = self.config
+        hf_config = config.hf_config
+        free, total = torch.cuda.mem_get_info()
+        used = total - free
+        peak = torch.cuda.max_memory_allocated()
+        current = torch.cuda.memory_allocated()
 
-    def _sample(self, logits: torch.Tensor, seqs: Iterable[Sequence]):
-        token_ids = []
-        for logit, seq in zip(logits, seqs):
-            scaled = logit / seq.temperature
-            probs = torch.softmax(scaled, dim=-1)
-            token = torch.multinomial(probs, 1).item()
-            token_ids.append(token)
-        return token_ids
+        num_kv_heads = getattr(hf_config, "num_key_value_heads", None)
+        if num_kv_heads is None:
+            num_kv_heads = hf_config.num_attention_heads
 
-    def _prepare_block_tables(self, seqs: list[Sequence]):
-        max_len = max(len(seq.block_table) for seq in seqs)
-        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
-        block_tables = torch.tensor(block_tables, dtype=torch.int32, device=self.device)
-        return block_tables
+        head_dim = getattr(hf_config, "head_dim", None)
+        if head_dim is None:
+            head_dim = hf_config.hidden_size // hf_config.num_attention_heads
 
-    def _prepare_context(self, seqs: list[Sequence], lengths: list[int], is_prefill: bool):
-        block_tables = self._prepare_block_tables(seqs)
-        if is_prefill:
-            cu_seqlens_q = [0]
-            slot_mapping = []
-            for seq, length in zip(seqs, lengths):
-                cu_seqlens_q.append(cu_seqlens_q[-1] + length)
-                for pos in range(length):
-                    block_idx = pos // self.block_size
-                    offset = pos % self.block_size
-                    block_id = seq.block_table[block_idx]
-                    slot_mapping.append(block_id * self.block_size + offset)
-            cu = torch.tensor(cu_seqlens_q, dtype=torch.int32, device=self.device)
-            slot = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device)
-            max_len = max(lengths)
-            set_context(
-                True,
-                cu_seqlens_q=cu,
-                cu_seqlens_k=cu,
-                max_seqlen_q=max_len,
-                max_seqlen_k=max_len,
-                slot_mapping=slot,
-                block_tables=block_tables,
-            )
-            return {
-                "cu_seq_lens_q": cu,
-                "cu_seq_lens_k": cu,
-            }
-
-        # decode path
-        slot_mapping = []
-        context_lens = []
-        for seq in seqs:
-            block_id = seq.block_table[-1]
-            slot_mapping.append(block_id * self.block_size + seq.last_block_num_tokens - 1)
-            context_lens.append(len(seq))
-        slot = torch.tensor(slot_mapping, dtype=torch.int32, device=self.device)
-        context_lens_t = torch.tensor(context_lens, dtype=torch.int32, device=self.device)
-        set_context(False, slot_mapping=slot, context_lens=context_lens_t, block_tables=block_tables)
-        return {}
-
-    @torch.inference_mode()
-    def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
-        # The "is_prefill" flag is kept for API compatibility but does not change
-        # the minimal runner behaviour yet.
-        if not seqs:
-            return []
-        input_ids, attention_mask, position_ids, lengths = self._prepare_batch(seqs)
-        attn_kwargs = self._prepare_context(seqs, lengths, is_prefill)
-        outputs = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=torch.stack(position_ids).to(self.device),
-            **attn_kwargs,
+        dtype = getattr(hf_config, "torch_dtype", torch.float16)
+        itemsize = torch.tensor([], dtype=dtype).dtype.itemsize
+        block_bytes = (
+            2  # key, value
+            * hf_config.num_hidden_layers
+            * config.kvcache_block_size
+            * num_kv_heads
+            * head_dim
+            * itemsize
         )
-        logits = outputs.logits
-        last_token_logits = [logits[idx, length - 1] for idx, length in enumerate(lengths)]
-        stacked = torch.stack(last_token_logits)
-        token_ids = self._sample(stacked, seqs)
-        if is_prefill:
-            for seq in seqs:
-                seq.num_cached_tokens = len(seq)
-        reset_context()
-        return token_ids
 
-    def _allocate_kv_cache(self):
-        hf_config = self.config.hf_config
-        num_heads = getattr(hf_config, "num_key_value_heads", hf_config.num_attention_heads)
-        head_dim = getattr(hf_config, "head_dim", hf_config.hidden_size // hf_config.num_attention_heads)
-        cache_shape = (
+        config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
+        assert config.num_kvcache_blocks > 0, "Not enough GPU memory for KV cache."
+        self.kv_cache = torch.empty(
             2,
             hf_config.num_hidden_layers,
-            self.max_blocks,
+            config.num_kvcache_blocks,
             self.block_size,
-            num_heads,
+            num_kv_heads,
             head_dim,
+            device=self.device,
+            dtype=dtype,
         )
-        dtype = getattr(hf_config, "torch_dtype", torch.float16) or torch.float16
-        self.kv_cache = torch.zeros(cache_shape, device=self.device, dtype=dtype)
 
         layer_id = 0
         for module in self.model.modules():
             if "Attention" in module.__class__.__qualname__:
-                if not (hasattr(module, "k_cache") and hasattr(module, "v_cache")):
-                    k_cache = v_cache = torch.tensor([])
-                    setattr(module, "k_cache", k_cache)
-                    setattr(module, "v_cache", v_cache)
-                module.k_cache = self.kv_cache[0, layer_id]
-                module.v_cache = self.kv_cache[1, layer_id]
+                module.key_cache = self.kv_cache[0, layer_id]
+                module.value_cache = self.kv_cache[1, layer_id]
                 layer_id += 1
                 if layer_id >= hf_config.num_hidden_layers:
                     break
+
+    def prepare_block_tables(self, seqs):
+        max_len = max(len(seq.block_table) for seq in seqs)
+        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
+        block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        return block_tables
+
+    def prepare_prefill(self, seqs):
+        lengths = [len(s) for s in seqs]
+        max_len = max(lengths)
+
+        pad_id = getattr(self.config, "pad_token_id", None)
+        if pad_id is None:
+            pad_id = self.config.eos
+
+        input_ids, attention_masks, position_ids = [], [], []
+        cu_seqlens_q, cu_seqlens_k, slot_mapping = [0], [0], []
+        block_tables = None
+        for seq in seqs:
+            length = len(seq)
+            input_ids.append(list(seq.token_ids) + [pad_id] * (max_len - length))
+            attention_masks.append([1] * length + [0] * (max_len - length))
+            position_ids.append(list(range(max_len)))
+            seqlen_q = length - seq.num_cached_tokens
+            seqlen_k = length
+            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
+            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+
+            if not seq.block_table:  # warmup
+                continue
+            for pos in range(length):
+                block_idx = pos // self.block_size
+                page_id = seq.block_table[block_idx]
+                offset = pos % self.block_size
+                slot = page_id * self.block_size + offset
+                slot_mapping.append(slot)
+
+        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:
+            block_tables = self.prepare_block_tables(seqs)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        attention_mask = torch.tensor(attention_masks, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        position_ids = torch.tensor(position_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(lengths, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        set_context(True, slot_mapping, context_lens, block_tables)
+        return input_ids, position_ids, attention_mask
+
+    def prepare_decode(self, seqs):
+        input_ids, position_ids = [], []
+        slot_mapping, context_lens = [], []
+
+        for seq in seqs:
+            length = len(seq)
+            input_ids.append(seq.last_token)
+            position_ids.append(length - 1)
+            context_lens.append(length)
+            offset_in_block = (length - 1) % self.block_size
+            slot_mapping.append(seq.block_table[-1] * self.block_size + offset_in_block)
+
+        block_tables = self.prepare_block_tables(seqs)
+        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        position_ids = torch.tensor(position_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        attention_mask = torch.ones_like(input_ids, dtype=torch.int64).cuda(non_blocking=True)
+        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        set_context(False, slot_mapping, context_lens, block_tables)
+        return input_ids, position_ids, attention_mask
+
+    @torch.inference_mode()
+    def run(self, seqs, is_prefill):
+        if is_prefill:
+            input_ids, position_ids, attention_mask = self.prepare_prefill(seqs)
+        else:
+            input_ids, position_ids, attention_mask = self.prepare_decode(seqs)
+            input_ids = input_ids.unsqueeze(1)
+            position_ids = position_ids.unsqueeze(1)
+            attention_mask = attention_mask.unsqueeze(1)
+
+        logits = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            use_cache=False,
+        ).logits
+
+        if is_prefill:
+            context = get_context()
+            lengths = context.context_lens
+            bsz, seqlen, vocab_size = logits.shape
+            assert lengths.numel() == bsz
+            last_logits = []
+            for _b in range(bsz):
+                length = int(lengths[_b].item())
+                last_logits.append(logits[_b, length - 1])
+            logits_for_sampling = torch.stack(last_logits, dim=0)
+        else:
+            logits_for_sampling = logits[:, -1, :]
+
+        next_tokens = self.sampler.sample(seqs, logits_for_sampling)
+        reset_context()
+        return next_tokens

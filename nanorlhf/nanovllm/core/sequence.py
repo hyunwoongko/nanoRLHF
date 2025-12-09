@@ -3,6 +3,7 @@ from enum import Enum, auto
 from itertools import count
 
 from nanorlhf.kernels.utils.vllm import KVCACHE_BLOCK_SIZE
+from nanorlhf.nanovllm.utils.sampling_params import SamplingParams
 
 
 class SequenceStatus(Enum):
@@ -16,12 +17,20 @@ class FinishReason(Enum):
     STOP = auto()
     NOT_FINISHED = auto()
 
+    def __str__(self):
+        if self == FinishReason.LENGTH:
+            return "length"
+        elif self == FinishReason.STOP:
+            return "stop"
+        else:
+            return "not_finished"
+
 
 class Sequence:
     counter = count()
     block_size = KVCACHE_BLOCK_SIZE
 
-    def __init__(self, token_ids, sampling_params):
+    def __init__(self, token_ids, sampling_params=SamplingParams()):
         self.seq_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
@@ -33,6 +42,7 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
+        self.top_p = sampling_params.top_p
         self.finish_reason = FinishReason.NOT_FINISHED
 
     def __len__(self):

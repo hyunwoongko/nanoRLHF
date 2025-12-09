@@ -14,12 +14,7 @@ def flash_attn_decode_kernel_split_k(
     stride_max_q_bh, stride_max_q_split, stride_max_q_seq,
     stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq,
     softmax_scale,
-    max_seqlen_k,
     block_n_per_split,
-    block_table_ptr,
-    block_table_batch_stride,
-    page_block_size,
-    use_block_table: tl.constexpr,
     causal: tl.constexpr,
     dim: tl.constexpr,
     block_size_q: tl.constexpr,
@@ -35,15 +30,11 @@ def flash_attn_decode_kernel_split_k(
 
     offs_q = q_start + tl.arange(0, block_size_q)
     offs_k = tl.arange(0, block_size_k)
-    offs_d = tl.arange(0, dim)
     q_mask = offs_q < seq_len_q
 
     q_bh = q_ptr + pid_bh * stride_q_bh
     k_bh = k_ptr + pid_bh * stride_k_bh
     v_bh = v_ptr + pid_bh * stride_v_bh
-
-    k_bh_cache = k_bh
-    v_bh_cache = v_bh
 
     q_block_ptr = tl.make_block_ptr(
         base=q_bh,
@@ -68,60 +59,39 @@ def flash_attn_decode_kernel_split_k(
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
     for kv_start in range(k_low, k_high, block_size_k):
-        kv_idx = kv_start + offs_k
-        kv_mask = kv_idx < k_high
+        k_block_ptr = tl.make_block_ptr(
+            base=k_bh,
+            shape=(seq_len_k, dim),
+            offsets=(kv_start, 0),
+            block_shape=(block_size_k, dim),
+            strides=(stride_k_seq, stride_k_dim),
+            order=(1, 0),
+        )
+        v_block_ptr = tl.make_block_ptr(
+            base=v_bh,
+            shape=(seq_len_k, dim),
+            offsets=(kv_start, 0),
+            block_shape=(block_size_k, dim),
+            strides=(stride_v_seq, stride_v_dim),
+            order=(1, 0),
+        )
 
-        if not use_block_table:
-            k_block_ptr = tl.make_block_ptr(
-                base=k_bh,
-                shape=(seq_len_k, dim),
-                offsets=(kv_start, 0),
-                block_shape=(block_size_k, dim),
-                strides=(stride_k_seq, stride_k_dim),
-                order=(1, 0),
-            )
-            v_block_ptr = tl.make_block_ptr(
-                base=v_bh,
-                shape=(seq_len_k, dim),
-                offsets=(kv_start, 0),
-                block_shape=(block_size_k, dim),
-                strides=(stride_v_seq, stride_v_dim),
-                order=(1, 0),
-            )
-            k_tile = tl.load(
-                k_block_ptr,
-                boundary_check=(0, 1),
-                padding_option="zero",
-            )
-            v_tile = tl.load(
-                v_block_ptr,
-                boundary_check=(0, 1),
-                padding_option="zero",
-            )
-        else:
-            pag_idx = kv_idx // page_block_size
-            page_offs = kv_idx % page_block_size
-
-            table_row = pid_bh * block_table_batch_stride + pag_idx
-            page_id = tl.load(block_table_ptr + table_row, mask=kv_mask, other=0).to(tl.int32)
-            cache_row = page_id * page_block_size + page_offs
-            cache_row_mask = kv_mask & (cache_row < max_seqlen_k)
-
-            k_row_ptrs = (
-                k_bh_cache
-                + cache_row[:, None] * stride_k_seq
-                + offs_d[None, :] * stride_k_dim
-            )
-            v_row_ptrs = (
-                v_bh_cache
-                + cache_row[:, None] * stride_v_seq
-                + offs_d[None, :] * stride_v_dim
-            )
-            elem_mask = cache_row_mask[:, None] & (offs_d[None, :] < dim)
-            k_tile = tl.load(k_row_ptrs, mask=elem_mask, other=0.0)
-            v_tile = tl.load(v_row_ptrs, mask=elem_mask, other=0.0)
+        k_tile = tl.load(
+            k_block_ptr,
+            boundary_check=(0, 1),
+            padding_option="zero",
+        )
+        v_tile = tl.load(
+            v_block_ptr,
+            boundary_check=(0, 1),
+            padding_option="zero",
+        )
 
         scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
+
+        kv_idx = kv_start + offs_k
+        kv_mask = kv_idx < k_high
+        # kv_mask = kv_idx < seq_len_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:

@@ -25,17 +25,15 @@ class Scheduler:
         self.waiting.append(seq)
 
     def schedule(self):
-        # prefill stage:
         scheduled_seqs = []
         num_seqs = 0
         num_batched_tokens = 0
         while self.waiting and num_seqs < self.max_num_seqs:
-            seq = self.waiting[0]  # first come, first served
-            if num_batched_tokens + len(seq) > self.max_num_batched_tokens:
-                break  # cannot prefill more sequences in this batch
+            seq = self.waiting[0]
+            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+                break
             num_seqs += 1
             self.block_manager.allocate(seq)
-            # do not need to compute cached tokens
             num_batched_tokens += len(seq) - seq.num_cached_tokens
             seq.status = SequenceStatus.RUNNING
             self.waiting.popleft()
@@ -44,26 +42,20 @@ class Scheduler:
         if scheduled_seqs:
             return scheduled_seqs, True
 
-        # decode stage:
         while self.running and num_seqs < self.max_num_seqs:
             seq = self.running.popleft()
             while not self.block_manager.can_append(seq):
-                # if we don't have enough blocks, we need to release some running sequences
-                # but will give them higher priority in the next scheduling round.
                 if self.running:
                     self.preempt(self.running.pop())
                 else:
                     self.preempt(seq)
                     break
             else:
-                # we can append a new token to this sequence
                 num_seqs += 1
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
-        self.running.extendleft(reversed(self.running))
-        # why reversed?
-        # because we want to keep the original order of running sequences.
+        self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 
     def preempt(self, seq):

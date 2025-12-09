@@ -56,6 +56,9 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
+    def can_allocate(self, seq):
+        return len(self.free_block_ids) >= seq.num_blocks
+
     def allocate(self, seq):
         assert not seq.block_table
         h = -1

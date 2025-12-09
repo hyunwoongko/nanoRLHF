@@ -11,13 +11,13 @@ import triton.language as tl
         triton.Config({"block_size_q": 32, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
         triton.Config({"block_size_q": 64, "tile_size_kv": 32, "num_warps": 4, "num_stages": 2}),
     ],
-    key=["seq_len_kv", "dim"]
+    key=["seq_len_k", "dim"]
 )
 @triton.jit
 def flash_attn_kernel_fwd(
     q_ptr, k_ptr, v_ptr, o_ptr,
     max_q_ptr, ez_sum_ptr,
-    seq_len_q, seq_len_kv,
+    seq_len_q, seq_len_k,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
     stride_v_bh, stride_v_seq, stride_v_dim,
@@ -181,10 +181,10 @@ def flash_attn_kernel_fwd(
     ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
-    for kv_start in range(0, seq_len_kv, tile_size_kv):
+    for kv_start in range(0, seq_len_k, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
             base=k_bh,
-            shape=(seq_len_kv, dim),
+            shape=(seq_len_k, dim),
             offsets=(kv_start, 0),
             block_shape=(tile_size_kv, dim),
             strides=(stride_k_seq, stride_k_dim),
@@ -192,7 +192,7 @@ def flash_attn_kernel_fwd(
         )
         v_block_ptr = tl.make_block_ptr(
             base=v_bh,
-            shape=(seq_len_kv, dim),
+            shape=(seq_len_k, dim),
             offsets=(kv_start, 0),
             block_shape=(tile_size_kv, dim),
             strides=(stride_v_seq, stride_v_dim),
@@ -212,11 +212,11 @@ def flash_attn_kernel_fwd(
 
         scores = tl.dot(q, tl.trans(k)) * softmax_scale
         kv_idx = kv_start + offs_kv
-        kv_mask = kv_idx < seq_len_kv
+        kv_mask = kv_idx < seq_len_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
-            offset = seq_len_kv - seq_len_q
+            offset = seq_len_k - seq_len_q
             q_pos = (offset + offs_q)[:, None]
             kv_pos = kv_idx[None, :]
             causal_mask = kv_pos > q_pos
@@ -252,40 +252,48 @@ def flash_attn_kernel_fwd(
 
 
 def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
-    bsz, num_heads, seq_len_q, dim_head = q.shape
-    seq_len_kv = k.shape[2]
-    assert k.shape == v.shape == (bsz, num_heads, seq_len_kv, dim_head)
+    if q.ndim == 4:
+        bsz, num_heads, seq_len_q, dim = q.shape
+        seq_len_k = k.shape[2]
+        bh = bsz * num_heads
+        assert k.shape == v.shape == (bsz, num_heads, seq_len_k, dim)
 
-    bh = bsz * num_heads
+        def merge_heads(x):
+            return x.contiguous().view(bh, x.shape[2], dim)
 
-    def merge_heads(x):
-        return x.contiguous().view(bh, x.shape[2], dim_head)
+        q = merge_heads(q)
+        k = merge_heads(k)
+        v = merge_heads(v)
+    elif q.ndim == 3:
+        bh, seq_len_q, dim = q.shape
+        seq_len_k = k.shape[1]
+        bsz = 1
+        num_heads = bh
+        assert k.shape == v.shape == (bh, seq_len_k, dim)
+    else:
+        raise ValueError("q, k, v must be 3D or 4D tensors")
 
     def grid(meta):
         return triton.cdiv(seq_len_q, meta["block_size_q"]), bh
 
-    q_merged = merge_heads(q)
-    k_merged = merge_heads(k)
-    v_merged = merge_heads(v)
-
-    o = torch.empty_like(q_merged)
+    o = torch.empty_like(q)
     max_q = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
     ez_sum = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
 
-    stride_q_bh, stride_q_seq, stride_q_dim = q_merged.stride()
-    stride_k_bh, stride_k_seq, stride_k_dim = k_merged.stride()
-    stride_v_bh, stride_v_seq, stride_v_dim = v_merged.stride()
+    stride_q_bh, stride_q_seq, stride_q_dim = q.stride()
+    stride_k_bh, stride_k_seq, stride_k_dim = k.stride()
+    stride_v_bh, stride_v_seq, stride_v_dim = v.stride()
     stride_o_bh, stride_o_seq, stride_o_dim = o.stride()
     stride_max_bh, stride_max_seq = max_q.stride()
     stride_ez_sum_bh, stride_ez_sum_seq = ez_sum.stride()
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim_head ** 0.5)
+        softmax_scale = 1.0 / (dim ** 0.5)
 
     flash_attn_kernel_fwd[grid](
-        q_merged, k_merged, v_merged, o,
+        q, k, v, o,
         max_q, ez_sum,
-        seq_len_q, seq_len_kv,
+        seq_len_q, seq_len_k,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
         stride_v_bh, stride_v_seq, stride_v_dim,
@@ -294,8 +302,8 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
         stride_ez_sum_bh, stride_ez_sum_seq,
         softmax_scale=softmax_scale,
         causal=causal,
-        dim=dim_head,
+        dim=dim,
     )
 
-    o = o.view(bsz, num_heads, seq_len_q, dim_head)
+    o = o.view(bsz, num_heads, seq_len_q, dim)
     return o, max_q, ez_sum

@@ -96,39 +96,29 @@ def _flash_attention_forward(
         out = pad_input(out_unpad, indices_q, query_states.size(0), query_length)
 
     elif is_fa_with_varlen_kwargs or is_fa_with_position_ids:
-        if cu_seq_lens_q is None or cu_seq_lens_k is None:
-            try:
-                q, k, v, (cu_seq_lens_q, cu_seq_lens_k), _ = _prepare_from_posids(
-                    query_states, key_states, value_states, position_ids
-                )
-            except TypeError:
-                q, k, v, (cu_seq_lens_q, cu_seq_lens_k), _ = _prepare_from_posids(
-                    query_states, key_states, value_states, position_ids, query_length
-                )
-        else:
-            bsz = query_states.size(0)
-            q_len = query_states.size(1)
-            k_len = key_states.size(1)
-            num_heads = query_states.size(2)
+        bsz = query_states.size(0)
+        q_len = query_states.size(1)
+        k_len = key_states.size(1)
+        num_heads = query_states.size(2)
 
-            q = query_states.reshape(-1, num_heads, query_states.size(-1))
-            k = key_states.reshape(-1, key_states.size(2), key_states.size(-1))
-            v = value_states.reshape(-1, value_states.size(2), value_states.size(-1))
+        q = query_states.reshape(-1, num_heads, query_states.size(-1))
+        k = key_states.reshape(-1, key_states.size(2), key_states.size(-1))
+        v = value_states.reshape(-1, value_states.size(2), value_states.size(-1))
 
-            cu_seq_lens_q = torch.arange(
-                0,
-                (bsz * q_len) + 1,
-                step=q_len,
-                dtype=torch.int32,
-                device=query_states.device,
-            )
-            cu_seq_lens_k = torch.arange(
-                0,
-                (bsz * k_len) + 1,
-                step=k_len,
-                dtype=torch.int32,
-                device=query_states.device,
-            )
+        cu_seq_lens_q = torch.arange(
+            0,
+            (bsz * q_len) + 1,
+            step=q_len,
+            dtype=torch.int32,
+            device=query_states.device,
+        )
+        cu_seq_lens_k = torch.arange(
+            0,
+            (bsz * k_len) + 1,
+            step=k_len,
+            dtype=torch.int32,
+            device=query_states.device,
+        )
 
         if "mps" in str(query_states.device):
             cu_seq_lens_k = cu_seq_lens_k.clone()
