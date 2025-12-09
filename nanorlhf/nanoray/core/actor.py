@@ -178,7 +178,7 @@ class ActorMethod:
             ),
         )
 
-    def remote(self, *args: Any, **kwargs: Any):
+    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any):
         """
         Submit an actor method call to the scheduler (returns an ObjectRef)
 
@@ -209,7 +209,7 @@ class ActorMethod:
             runtime_env=o.runtime_env,
             task_id=new_task_id(),
         )
-        return sess.submit(task, blocking=True)
+        return sess.submit(task, blocking=blocking)
 
 
 class ActorClass:
@@ -261,7 +261,7 @@ class ActorClass:
         )
         return out
 
-    def remote(self, *args: Any, **kwargs: Any):
+    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any):
         """
         Enqueue an actor creation task. The returned `ObjectRef` resolves
         to and `ActorRef(actor_id, owner_node_id)`.
@@ -290,7 +290,7 @@ class ActorClass:
             bundle_index=o.bundle_index,
             runtime_env=o.runtime_env,
         )
-        return sess.submit(task, blocking=True)
+        return sess.submit(task, blocking=blocking)
 
 
 def actor(cls: type) -> ActorClass:

@@ -24,6 +24,7 @@ class Session:
         nodes (Dict[str, Tuple[WorkerLike, Dict[str, Any]]]):
             Mapping of `node_id -> (worker, capacity_dict)`.
             `capacity_dict` fields: `{"cpus": float, "gpus": float, "resources": dict}`.
+        local_workers (Dict[str, WorkerLike]): Mapping of local `node_id -> worker`.
         default_node_id (Optional[str]): Node to use for `put()` convenience.
         router (Optional[Router]): Router used for remote object placement/lookup.
         rpc (Optional[RpcClient]): RPC client used for remote object transfer.
@@ -70,6 +71,7 @@ class Session:
         self,
         policy: SchedulingPolicy,
         nodes: Dict[str, Tuple[WorkerLike, Dict[str, Any]]],
+        local_workers: Dict[str, WorkerLike] = None,
         default_node_id: Optional[str] = None,
         *,
         router: Optional[Router] = None,
@@ -81,16 +83,12 @@ class Session:
         self._workers: Dict[str, WorkerLike] = {nid: w for nid, (w, _) in nodes.items()}
 
         # Only local workers (those exposing a `.store` attribute)
-        self._local_workers: Dict[str, WorkerLike] = {
-            nid: w for nid, w in self._workers.items() if hasattr(w, "store")
-        }
+        self._local_workers: Dict[str, WorkerLike] = local_workers
 
         # Default node id resolution and driver cache setup
         if self._local_workers:
             self._default_node_id = (
-                default_node_id
-                if (default_node_id in self._local_workers)
-                else next(iter(self._local_workers))
+                default_node_id if (default_node_id in self._local_workers) else next(iter(self._local_workers))
             )
             self._driver_store: Optional[ObjectStore] = None
         else:
@@ -148,8 +146,7 @@ class Session:
             produced = self.scheduler.drain()
             if not produced:
                 raise RuntimeError(
-                    "Task could not be placed (no progress). "
-                    "Check resources/placement group/pin constraints."
+                    "Task could not be placed (no progress). " "Check resources/placement group/pin constraints."
                 )
             return produced[-1]
         else:
@@ -293,7 +290,7 @@ class Session:
         bundles: List[Union[Bundle, Dict]],
         strategy: str = PlacementStrategy.PACK,
         *,
-        pg_id: Optional[str] = None
+        pg_id: Optional[str] = None,
     ) -> PlacementGroup:
         """
         Create and register a placement group on this session's scheduler.
@@ -306,8 +303,10 @@ class Session:
         Returns:
             PlacementGroup: The created placement group.
         """
-        assert strategy.upper() in (PlacementStrategy.PACK, PlacementStrategy.SPREAD), \
-            f"`strategy` must be either PACK or SPREAD, got {strategy}."
+        assert strategy.upper() in (
+            PlacementStrategy.PACK,
+            PlacementStrategy.SPREAD,
+        ), f"`strategy` must be either PACK or SPREAD, got {strategy}."
 
         pid = pg_id or new_placement_group_id()
 
@@ -340,6 +339,7 @@ _GLOBAL_SESSION: Optional[Session] = None
 def init_session(
     policy: SchedulingPolicy,
     nodes: Dict[str, Tuple[WorkerLike, Dict[str, Any]]],
+    local_workers: Dict[str, WorkerLike] = None,
     default_node_id: Optional[str] = None,
 ) -> Session:
     """
@@ -350,6 +350,7 @@ def init_session(
         nodes (Dict[str, Tuple[WorkerLike, Dict[str, Any]]]):
             Mapping of `node_id -> (worker, capacity_dict)`.
             `capacity_dict` fields: `{"cpus": float, "gpus": float, "resources": dict}`.
+        local_workers (Dict[str, WorkerLike]): Mapping of local `node_id -> worker`.
         default_node_id (Optional[str]): Node to use for `put()` convenience.
 
     Returns:
@@ -366,7 +367,12 @@ def init_session(
         >>> _ = init_session(RoundRobin(), nodes, default_node_id="A")
     """
     global _GLOBAL_SESSION
-    _GLOBAL_SESSION = Session(policy=policy, nodes=nodes, default_node_id=default_node_id)
+    _GLOBAL_SESSION = Session(
+        policy=policy,
+        nodes=nodes,
+        local_workers=local_workers,
+        default_node_id=default_node_id,
+    )
     return _GLOBAL_SESSION
 
 
@@ -464,9 +470,7 @@ def drain() -> List[ObjectRef]:
 
 
 def create_placement_group(
-    bundles: List[Union[Bundle, Dict]],
-    strategy: str = PlacementStrategy.PACK,
-    pg_id: Optional[str] = None
+    bundles: List[Union[Bundle, Dict]], strategy: str = PlacementStrategy.PACK, pg_id: Optional[str] = None
 ) -> PlacementGroup:
     """
     Convenience function: create a placement group via the global session.

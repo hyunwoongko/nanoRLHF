@@ -60,10 +60,10 @@ def show_owners(title: str, refs):
 
 
 def main():
-    # 0) Init (LOCAL multi-worker, no RPC)
+    # 0) Init (LOCAL multi-worker)
     cfg = {
-        "A": nanoray.NodeConfig(local=True, cpus=1.0),
-        "B": nanoray.NodeConfig(local=True, cpus=1.0),
+        "A": nanoray.NodeConfig(cpus=1.0, rpc=True, port=8080),
+        "B": nanoray.NodeConfig(cpus=1.0, rpc=True, port=8081),
     }
     nanoray.init(cfg, default_node_id="A")
     banner("Init")

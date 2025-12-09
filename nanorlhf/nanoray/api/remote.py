@@ -117,7 +117,7 @@ class RemoteFunction:
             bundle_index=self.bundle_index,
         )
 
-    def remote(self, *args: Any, **kwargs: Any) -> Optional[ObjectRef]:
+    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any) -> Optional[ObjectRef]:
         """
         Submit this function call to the global session's scheduler.
 
@@ -136,7 +136,7 @@ class RemoteFunction:
         """
         task = self.task(*args, **kwargs)
         sess = get_session()
-        return sess.submit(task, blocking=True)
+        return sess.submit(task, blocking=blocking)
 
 
 def remote(_fn: Optional[Callable[..., Any]] = None, **opts: Any) -> Callable[..., RemoteFunction] | RemoteFunction:

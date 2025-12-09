@@ -29,28 +29,19 @@ class NodeConfig:
         resources (Optional[Dict[str, float]]): Custom named resources.
 
         # Local node options
-        local (bool): True if this node runs in-process (this Python).
-        start_server (bool): If True, start an RpcServer for this local node.
-        host (str): Bind host for local RpcServer.
-        port (Optional[int]): Bind port for local RpcServer.
-        token (Optional[str]): Bearer token for this node’s RPC auth.
-
-        # Remote node options
-        address (Optional[str]): "http://host:port" for a remote node (if not local).
-        remote_token (Optional[str]): Bearer token to reach the remote node.
+        rpc (bool): If True, start an RpcServer node.
+        host (str): Bind host for RpcServer.
+        port (Optional[int]): Bind port for RpcServer.
+        token (Optional[str]): Bearer token for auth.
     """
     cpus: float = 1.0
     gpus: float = 0.0
     resources: Optional[Dict[str, float]] = None
 
-    local: bool = True
-    start_server: bool = False
+    rpc: bool = False
     host: str = "127.0.0.1"
     port: Optional[int] = None
     token: Optional[str] = None
-
-    address: Optional[str] = None
-    remote_token: Optional[str] = None
 
 
 # Keep server handles so `shutdown()` can close them.
@@ -114,7 +105,7 @@ def init(
 
     # zero-arg default
     if nodes is None:
-        nodes = {platform.node(): NodeConfig(local=True, start_server=True)}
+        nodes = {platform.node(): NodeConfig(rpc=True)}
 
     logger.info("Initializing nanoray runtime with nodes: %s", nodes)
 
@@ -126,13 +117,14 @@ def init(
 
     # 1) Create local workers and (optionally) start local RPC servers.
     for nid, cfg in nodes.items():
-        if cfg.local:
+        is_local = cfg.host in ("127.0.0.1", "localhost")
+        if is_local:
             store = ObjectStore(nid)
             worker = Worker(store=store)
             local_workers[nid] = worker
 
             # If asked, start an RpcServer in a background thread and register endpoint.
-            if cfg.start_server:
+            if cfg.rpc:
                 port = cfg.port if cfg.port is not None else 0
                 srv = RpcServer(nid, worker, host=cfg.host, port=port, token=cfg.token)
                 t = threading.Thread(target=srv.start, name=f"rpcd-{nid}", daemon=True)
@@ -153,22 +145,21 @@ def init(
 
                 registry.register(nid, f"http://{cfg.host}:{actual_port}", token=cfg.token)
 
-        if cfg.address:
-            registry.register(nid, cfg.address, token=(cfg.remote_token or cfg.token))
-
     # 2) Build `WorkerLike` entries (local vs remote) and capacity dicts.
     rpc = RpcClient(registry=registry)
     for nid, cfg in nodes.items():
+        is_local = cfg.host in ("127.0.0.1", "localhost")
         cap = {
             "cpus": cfg.cpus,
             "gpus": cfg.gpus,
             "resources": cfg.resources or {},
         }
-        if cfg.local:
-            worker = local_workers[nid]
+        if is_local:
+            if cfg.rpc:
+                worker = RemoteWorkerProxy(node_id=nid, rpc=rpc)
+            else:
+                worker = local_workers[nid]
         else:
-            if not cfg.address:
-                raise ValueError(f"Node {nid}: non-local nodes require an 'address'")
             worker = RemoteWorkerProxy(node_id=nid, rpc=rpc)
         sched_nodes[nid] = (worker, cap)
 
@@ -177,6 +168,7 @@ def init(
     sess = init_session(
         policy=pol,
         nodes=sched_nodes,
+        local_workers=local_workers,
         default_node_id=default_node_id,
     )
     sess._router = router
