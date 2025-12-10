@@ -11,6 +11,7 @@ from nanorlhf.nanoray.utils import new_actor_id, task_result_object_id
 import multiprocessing as mp
 
 _PROCESS_ACTORS: Dict[str, object] = {}
+_MAX_PROCESS_WORKERS = 16
 
 
 def _invoke(fn, args, kwargs):
@@ -73,15 +74,6 @@ class Worker:
         >>> store.get(ref)
         7
 
-        >>> # With a process pool (regular function tasks only)
-        >>> from nanorlhf.nanoray.runtime.process_pool import ProcessPool
-        >>> pool = ProcessPool(max_workers=2)
-        >>> w2 = Worker(store=store, node_id="A", pool=pool)
-        >>> ref2 = w2.execute_task(task)  # executed in a separate process
-        >>> store.get(ref2)
-        7
-        >>> pool.shutdown()
-
         >>> # Actors: creation and method calls are *always* in-process
         >>> from nanorlhf.nanoray.api.remote import actor
         >>> from nanorlhf.nanoray.api.session import get
@@ -139,11 +131,11 @@ class Worker:
                     init_args = tuple(fn.get("args", ()))
                     init_kwargs = dict(fn.get("kwargs", {}) or {})
 
-                    executor = ProcessPoolExecutor(16, mp_context=mp.get_context("spawn"))
+                    executor = ProcessPoolExecutor(_MAX_PROCESS_WORKERS, mp_context=mp.get_context("spawn"))
                     self._actor_executors[actor_id] = executor
                     payload = dumps((cls, init_args, init_kwargs))
                     create_future = executor.submit(_create_actor_process, actor_id, payload)
-                    result_future: Future = Future()
+                    result_future = Future()
 
                     def _on_created(done: Future):
                         try:
@@ -205,5 +197,7 @@ class Worker:
         """
         ref = self.execute_task(task)
         return ObjectRef(
-            object_id=ref.object_id, owner_node_id=self.store.node_id, size_bytes=self.store.get_size(ref.object_id)
+            object_id=ref.object_id,
+            owner_node_id=self.store.node_id,
+            size_bytes=self.store.get_size(ref.object_id),
         )

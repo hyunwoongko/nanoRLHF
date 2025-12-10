@@ -164,6 +164,17 @@ class RpcServer:
                     external object stores (e.g., presigned S3 URLs).
             """
 
+            def log_message(self, format: str, *args: Any):
+                """
+                Override to suppress default logging.
+
+                Discussion:
+                    Q. Why override `log_message`?
+                        The default implementation logs every request to stderr,
+                        which can clutter output in high-throughput scenarios.
+                        Overriding it to a no-op silences these logs.
+                """
+
             # ------ Helper methods ------
             def _json(self) -> Dict[str, Any]:
                 """

@@ -1,6 +1,5 @@
 import torch
-from transformers import AutoModelForCausalLM
-from transformers import modeling_utils
+from transformers import AutoModelForCausalLM, modeling_utils
 
 from nanorlhf import nanoray
 from nanorlhf.kernels.utils.vllm import (

@@ -11,7 +11,6 @@ from nanorlhf.nanoray.network.proxy import RemoteWorkerProxy
 from nanorlhf.nanoray.network.router import NodeRegistry, Router
 from nanorlhf.nanoray.network.rpc_client import RpcClient
 from nanorlhf.nanoray.network.rpc_server import RpcServer
-from nanorlhf.nanoray.runtime.process_pool import ProcessPool
 from nanorlhf.nanoray.runtime.worker import Worker
 from nanorlhf.nanoray.scheduler.policies import SchedulingPolicy, RoundRobin
 from nanorlhf.nanoray.scheduler.scheduler import WorkerLike
