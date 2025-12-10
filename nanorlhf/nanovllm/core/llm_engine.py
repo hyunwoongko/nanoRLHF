@@ -18,15 +18,16 @@ class LLMEngine:
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model)
         config.eos = self.tokenizer.eos_token_id
 
         self.node_ids = self.init_ray(config)
         self.model_runners = self.create_model(config)
 
         # `num_kvcache_blocks` is computed lazily in ModelRunner,
-        # so pass it to Scheduler after ModelRunner creation.
-        self.scheduler = Scheduler(self.model_runners[0].config.remote(blocking=True))
+        # so pass it to Scheduler after remote creation of ModelRunner.
+        model_runner_config = self.model_runners[0].get_config.remote(blocking=True)
+        self.scheduler = Scheduler(nanoray.get(model_runner_config))
 
     def init_ray(self, config):
         nodes = {}

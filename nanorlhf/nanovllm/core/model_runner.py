@@ -53,6 +53,11 @@ class ModelRunner:
         self.warmup_model()
         self.allocate_kv_cache()
 
+    def get_config(self):
+        # This is necessary to pass `config` to Scheduler.
+        # https://discuss.ray.io/t/how-can-i-get-attribute-of-a-actor/7153
+        return self.config
+
     def warmup_model(self):
         dtype = getattr(self.config.hf_config, "torch_dtype", torch.float16)
         for module in self.model.modules():
