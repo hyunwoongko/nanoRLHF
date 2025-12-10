@@ -5,7 +5,6 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
-from nanorlhf.nanoray import init, NodeConfig
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.scheduler import Scheduler
 from nanorlhf.nanovllm.core.sequence import Sequence
@@ -34,7 +33,7 @@ class LLMEngine:
         base_port = 9200
         if config.tensor_parallel_size > 1:
             for rank in range(config.tensor_parallel_size):
-                nodes[f"node-{rank + 1}"] = NodeConfig(
+                nodes[f"node-{rank + 1}"] = nanoray.NodeConfig(
                     cpus=4.0,
                     gpus=1.0,
                     rpc=True,
@@ -42,7 +41,7 @@ class LLMEngine:
                     port=base_port + rank,
                 )
         else:
-            nodes["node-1"] = NodeConfig(
+            nodes["node-1"] = nanoray.NodeConfig(
                 cpus=4.0,
                 gpus=1.0,
                 rpc=False,
@@ -50,7 +49,7 @@ class LLMEngine:
                 port=base_port,
             )
 
-        session = init(nodes, default_node_id="node-1")
+        session = nanoray.init(nodes, default_node_id="node-1")
         node_ids = list(session._workers.keys())
 
         if len(node_ids) < config.tensor_parallel_size:

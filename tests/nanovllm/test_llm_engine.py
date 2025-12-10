@@ -71,8 +71,8 @@ if __name__ == "__main__":
     temperature = 0.7
     top_p = 0.9
 
-    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature, top_p)
     nano_outputs, nano_time = nano_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature, top_p)
+    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature, top_p)
 
     print(f"HuggingFace generation time: {hf_time:.2f} seconds")
     print(f"NanoVLLM generation time: {nano_time:.2f} seconds")
