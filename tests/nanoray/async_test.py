@@ -119,8 +119,8 @@ def main():
     cpus = len(durations)
 
     config = {
-        "rpc-node-1": nanoray.NodeConfig(cpus=cpus, rpc=True, port=8090),
-        "rpc-node-2": nanoray.NodeConfig(cpus=cpus, rpc=True, port=8091),
+        "rpc-node-1": nanoray.NodeConfig(cpus=cpus, rpc=True, port=8092),
+        "rpc-node-2": nanoray.NodeConfig(cpus=cpus, rpc=True, port=8093),
         "local-node-1": nanoray.NodeConfig(cpus=cpus, rpc=False),
         "local-node-2": nanoray.NodeConfig(cpus=cpus, rpc=False),
     }

@@ -178,7 +178,7 @@ class ActorMethod:
             ),
         )
 
-    def remote(self, *args: Any, blocking: bool = True, **kwargs: Any):
+    def remote(self, *args: Any, blocking: bool = False, **kwargs: Any):
         """
         Submit an actor method call to the scheduler (returns an ObjectRef)
 
