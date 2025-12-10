@@ -1,7 +1,7 @@
 from dataclasses import fields
 from time import perf_counter
 
-from tqdm.auto import tqdm
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
