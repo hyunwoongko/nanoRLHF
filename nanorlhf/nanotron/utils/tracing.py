@@ -506,12 +506,8 @@ class ModelParallelTracer:
             handles.append(module.register_forward_pre_hook(pre_hook))
 
         self.model.eval()
-        try:
-            with torch.no_grad():
-                _ = self.model(inputs)
-        except Exception:
-            with torch.no_grad():
-                _ = self.model({"input_ids": inputs})
+        with torch.no_grad():
+            _ = self.model(inputs)
 
         for handle in handles:
             try:

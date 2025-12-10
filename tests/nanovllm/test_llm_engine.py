@@ -8,7 +8,7 @@ import datasets
 import torch
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers import modeling_utils
 from nanorlhf.kernels.utils.huggingface import flash_attention_forward
 from nanorlhf.nanovllm import LLM, SamplingParams
 
@@ -39,8 +39,8 @@ def hf_generation(model_name, max_new_tokens, temperature, top_p):
         torch_dtype=getattr(hf_config, "torch_dtype", torch.float16),
     )
 
-    if "nanoRLHF" not in ALL_ATTENTION_FUNCTIONS:
-        ALL_ATTENTION_FUNCTIONS["nanoRLHF"] = flash_attention_forward
+    if "nanoRLHF" not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
+        modeling_utils.ALL_ATTENTION_FUNCTIONS["nanoRLHF"] = flash_attention_forward
     if not hasattr(model.config, "_attention_implementation"):
         model.config._attention_implementation = "nanoRLHF"
 

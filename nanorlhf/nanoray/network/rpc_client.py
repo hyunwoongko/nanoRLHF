@@ -135,4 +135,3 @@ class RpcClient:
             owner_node_id=ref_info["owner_node_id"],
             size_bytes=ref_info.get("size_bytes"),
         )
-

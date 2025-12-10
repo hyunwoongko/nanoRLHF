@@ -121,8 +121,7 @@ def init(
         is_local = cfg.host in ("127.0.0.1", "localhost")
         if is_local:
             store = ObjectStore(nid)
-            pool = ProcessPool(max_workers=max(1, int(cfg.cpus)))
-            worker = Worker(store=store, pool=pool)
+            worker = Worker(store=store)
             local_workers[nid] = worker
 
             # If asked, start an RpcServer in a background thread and register endpoint.

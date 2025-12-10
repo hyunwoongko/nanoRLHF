@@ -4,6 +4,8 @@ from time import perf_counter
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
+from nanorlhf import nanoray
+from nanorlhf.nanoray import init, NodeConfig
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.scheduler import Scheduler
 from nanorlhf.nanovllm.core.sequence import Sequence
@@ -15,10 +17,80 @@ class LLMEngine:
         config_fields = {field.name for field in fields(Config)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = Config(model, **config_kwargs)
-        self.model_runner = ModelRunner(config)
-        self.scheduler = Scheduler(config)
+
         self.tokenizer = AutoTokenizer.from_pretrained(config.model, use_fast=True)
         config.eos = self.tokenizer.eos_token_id
+
+        self.node_ids = self.init_ray(config)
+        self.model_runners = self.create_model(config)
+
+        # `num_kvcache_blocks` is computed lazily in ModelRunner,
+        # so pass it to Scheduler after ModelRunner creation.
+        self.scheduler = Scheduler(self.model_runners[0].config.remote(blocking=True))
+
+    def init_ray(self, config):
+        nodes = {}
+        base_port = 9200
+        if config.tensor_parallel_size > 1:
+            for rank in range(config.tensor_parallel_size):
+                nodes[f"node-{rank + 1}"] = NodeConfig(
+                    cpus=4.0,
+                    gpus=1.0,
+                    rpc=True,
+                    host=config.host,
+                    port=base_port + rank,
+                )
+        else:
+            nodes["node-1"] = NodeConfig(
+                cpus=4.0,
+                gpus=1.0,
+                rpc=False,
+                host=config.host,
+                port=base_port,
+            )
+
+        session = init(nodes, default_node_id="node-1")
+        node_ids = list(session._workers.keys())
+
+        if len(node_ids) < config.tensor_parallel_size:
+            raise RuntimeError(
+                "`nanoray` was initialized with fewer nodes than `tensor_parallel_size`; "
+                "please provide at least one NodeConfig per tensor-parallel rank."
+            )
+
+        return node_ids
+
+    def create_model(self, config: Config):
+        refs = []
+        for rank in range(config.tensor_parallel_size):
+            node_id = self.node_ids[rank % len(self.node_ids)]
+            ref = ModelRunner.options(pinned_node_id=node_id).remote(config, rank=rank, blocking=False)
+            if ref is not None:
+                refs.append(ref)
+
+        while len(refs) < config.tensor_parallel_size:
+            produced = nanoray.drain()
+            if not produced:
+                raise RuntimeError("Failed to launch all ModelRunner actors; no progress during drain.")
+            refs.extend(produced)
+
+        return [nanoray.get(r) for r in refs[: config.tensor_parallel_size]]
+
+    def run_model(self, seqs, is_prefill):
+        refs = []
+        for runner in self.model_runners:
+            ref = runner.run.remote(seqs, is_prefill, blocking=False)
+            if ref is not None:
+                refs.append(ref)
+
+        while len(refs) < len(self.model_runners):
+            produced = nanoray.drain()
+            if not produced:
+                raise RuntimeError("Model forward calls could not be placed; no progress during drain.")
+            refs.extend(produced)
+
+        results = [nanoray.get(r) for r in refs[: len(self.model_runners)]]
+        return results[0]
 
     def add_request(self, prompt, sampling_params):
         if isinstance(prompt, str):
@@ -28,7 +100,7 @@ class LLMEngine:
 
     def step(self):
         seqs, is_prefill = self.scheduler.schedule()
-        token_ids = self.model_runner.run(seqs, is_prefill)
+        token_ids = self.run_model(seqs, is_prefill)
         self.scheduler.postprocess(seqs, token_ids)
         outputs = [(seq.seq_id, seq.completion_token_ids, seq.finish_reason) for seq in seqs if seq.is_finished]
         num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)

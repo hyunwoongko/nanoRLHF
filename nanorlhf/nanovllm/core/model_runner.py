@@ -1,35 +1,54 @@
-import pickle
-
 import torch
 from transformers import AutoModelForCausalLM
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers import modeling_utils
 
+from nanorlhf import nanoray
 from nanorlhf.kernels.utils.vllm import (
-    paged_flash_attention_forward,
     set_context,
     reset_context,
     get_context,
+    paged_flash_attention_forward,
 )
+from nanorlhf.nanotron import TensorParallel, MPU
 from nanorlhf.nanovllm.core.sampler import Sampler
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import Config
 
 
+@nanoray.actor
 class ModelRunner:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, rank: int):
         self.config = config
         self.block_size = config.kvcache_block_size
+        self.device = torch.device("cuda")
         self.kv_cache = None
 
-        if "nanoRLHF_paged" not in ALL_ATTENTION_FUNCTIONS:
-            ALL_ATTENTION_FUNCTIONS["nanoRLHF_paged"] = paged_flash_attention_forward
+        model = AutoModelForCausalLM.from_pretrained(
+            config.model, torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16)
+        )
+        if config.tensor_parallel_size > 1:
+            mpu = MPU(
+                rank=rank,
+                local_rank=rank,
+                world_size=config.tensor_parallel_size,
+                local_world_size=config.tensor_parallel_size,
+                host=config.host,
+                port=config.port,
+                data_parallel_size=1,
+                pipeline_parallel_size=1,
+                tensor_parallel_size=config.tensor_parallel_size,
+                backend=config.backend,
+                seed=config.seed,
+            )
+            self.model = TensorParallel(model, mpu)
+            self.model.parallelize()
+        else:
+            self.model = model.to(self.device)
 
-        self.device = torch.device("cuda")
-        self.model = AutoModelForCausalLM.from_pretrained(
-            config.model,
-            torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16),
-            attn_implementation="nanoRLHF_paged",
-        ).to(self.device)
+        if "nanoRLHF_paged" not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
+            modeling_utils.ALL_ATTENTION_FUNCTIONS["nanoRLHF_paged"] = paged_flash_attention_forward
+        model.config._attn_implementation = "nanoRLHF_paged"
+
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
@@ -62,6 +81,7 @@ class ModelRunner:
         num_kv_heads = getattr(hf_config, "num_key_value_heads", None)
         if num_kv_heads is None:
             num_kv_heads = hf_config.num_attention_heads
+        num_kv_heads = num_kv_heads // config.tensor_parallel_size
 
         head_dim = getattr(hf_config, "head_dim", None)
         if head_dim is None:

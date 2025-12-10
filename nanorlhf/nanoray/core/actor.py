@@ -113,13 +113,14 @@ class ActorOptions:
         bundle_index (Optional[int]): Bundle index for SPREAD strategy.
         runtime_env (Optional[RuntimeEnv]): Per-call runtime environment.
     """
+
     num_cpus: float = 0.0
     num_gpus: float = 0.0
     resources: Dict[str, float] = field(default_factory=dict)
 
     # placement / pinning
-    pinned_node_id: Optional[str] = None                  # ActorClass.create 전용
-    placement_group: Optional[PlacementGroup] = None      # object in → .id passed to Task
+    pinned_node_id: Optional[str] = None
+    placement_group: Optional[PlacementGroup] = None
     bundle_index: Optional[int] = None
 
     # env
