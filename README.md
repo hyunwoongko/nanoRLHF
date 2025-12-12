@@ -30,6 +30,8 @@ Even without massive resources, I still believe that individuals can create mean
 | 🟢 DONE | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
 
 ## Installation
+In this project, internal APIs from libraries such as Hugging Face Transformers are used in a hackable way, so all dependency versions except PyTorch are strictly pinned. 
+It is strongly recommended to run the code in an isolated environment such as a Conda virtual environment.
 
 ```bash
 git clone https://github.com/hyunwoongko/nanoRLHF
