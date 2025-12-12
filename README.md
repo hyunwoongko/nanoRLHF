@@ -6,10 +6,18 @@
 
 </p>
 
-This project aims to perform RLHF training from scratch, implementing almost all core components manually except for PyTorch and Triton. Each module is a minimal, educational reimplementation of large-scale systems focusing on clarity and core concepts rather than production readiness. This includes SFT and RL training pipeline with evaluation, for training a small Qwen3 model on open-source math datasets.
+This project aims to perform RLHF training from scratch, implementing almost all core components manually except for PyTorch and Triton. 
+Each module is a minimal, educational reimplementation of large-scale systems focusing on clarity and core concepts rather than production readiness. 
+This includes SFT and RL training pipeline with evaluation, for training a small Qwen3 model on open-source math datasets.
 
 ## Motivation
-A few years ago, it still felt possible for an individual to meaningfully train and contribute a model, and I was fortunate to do so with [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable open-source Korean LLM, thanks to support from the open-source community. But as the field entered an era where large companies train massive models at unimaginable scale and release them freely, individual efforts began to feel small by comparison. The same shift happened in libraries, where frameworks maintained by full-time corporate teams quickly outpaced what a single person could sustainably build or maintain. I have always loved open source, but in this reality, facing clear limits in time and capital, I found myself stepping back from it for a while. Eventually, I reframed the question, not how to compete, but how a single person could still be genuinely useful. Inspired by projects like Karpathy’s nano series, I returned to building small, clear, educational implementations like nanoRLHF, focused not on scale or efficiency, but on understanding and teaching. Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
+A few years ago, it still felt possible for an individual to meaningfully train and contribute a model, and I was fortunate to do so with [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable open-source Korean LLM, despite not owning a single GPU, thanks to support from the open-source community. 
+But as the field entered an era where large companies train [massive](https://huggingface.co/deepseek-ai/DeepSeek-R1) [models](https://huggingface.co/Qwen/Qwen3-235B-A22B) at unimaginable scale and release them freely, individual efforts began to feel small by comparison. 
+The same shift happened in libraries, where [frameworks](https://github.com/volcengine/verl) [maintained](https://github.com/NVIDIA/Megatron-LM) [by full-time corporate teams](https://github.com/langchain-ai/langchain) quickly outpaced what a single person could sustainably build or maintain. 
+I have always loved open source, but in this reality, facing clear limits in time and capital, I found myself stepping back from it for a while. 
+Eventually, I reframed the question, not how to compete, but how a single person could still be genuinely useful. 
+Inspired by projects like Karpathy’s nano series, I returned to building small, clear, educational implementations like nanoRLHF, focused not on scale or efficiency, but on understanding and teaching. 
+Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
 
 ## Contents 
 | Status  | Packages                                                                          | Description                       | References                                                                                                         | Examples                                                                            |
