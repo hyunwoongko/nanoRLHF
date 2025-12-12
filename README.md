@@ -29,6 +29,10 @@ Even without massive resources, I still believe that individuals can create mean
 | 🟡 WIP  | `nanoverl`                                                                        | RLHF training framework           | [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF),                      | not available                                                                       |
 | 🟢 DONE | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
 
+## Pre-requisites
+I worked on this project using a single server equipped with 8 H200 GPUs. 
+It should also run well on A100 80GB GPUs, but to fully experiment with all features including 3D parallelism, a server with at least 8 GPUs is required.
+
 ## Installation
 In this project, internal APIs from libraries such as Hugging Face Transformers are used in a hackable way, so all dependency versions except PyTorch are strictly pinned. 
 It is strongly recommended to run the code in an isolated environment such as a Conda virtual environment.
