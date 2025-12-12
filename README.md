@@ -47,7 +47,7 @@ pip install -e .
 ### Supervised training
 
 In the examples included in this project, supervised fine-tuning is performed using [NuminaMath-CoT-Small-Hard-200k](https://huggingface.co/datasets/NotASI/NuminaMath-CoT-Small-Hard-200k). 
-From the original dataset, 180,000 samples are used as training data, and 1,000 samples are used as validation data.
+From the original dataset, 180k samples are used as training data, and 1k samples are used as validation data.
 Running the following command will tokenize the dataset and save it to the specified path.
 
 ```bash
