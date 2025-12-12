@@ -8,6 +8,30 @@
 
 This project aims to perform RLHF training from scratch, implementing almost all core components manually except for PyTorch and Triton. Each module is a minimal, educational reimplementation of large-scale systems focusing on clarity and core concepts rather than production readiness. This includes SFT and RL training pipeline with evaluation, for training a small Qwen3 model on open-source math datasets.
 
+## Contents 
+| Status  | Packages                                                                          | Description                       | References                                                                                                         | Examples                                                                            |
+|---------|-----------------------------------------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
+| 🟢 DONE | [`nanosets`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanosets) | zero-copy dataset library         | [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)                      | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanosets.py) |
+| 🟢 DONE | [`nanotron`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanotron) | model and data parallelism engine | [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)                   | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanotron.py) |
+| 🟢 DONE | [`nanovllm`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanovllm) | high performance inference engine | [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)             | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanovllm.py) |
+| 🟢 DONE | [`nanoray`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoray)   | distributed computing engine      | [ray](https://github.com/ray-project/ray)                                                                          | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanoray.py)  |
+| 🟡 WIP  | `nanoverl`                                                                        | RLHF training framework           | [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF),                      | not available                                                                       |
+| 🟢 DONE | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
+
+## Installation
+
+```bash
+git clone https://github.com/hyunwoongko/nanoRLHF
+cd nanoRLHF
+pip install -e .
+```
+
+## Prepare Dataset
+- Supervised training
+```bash
+bash ./scripts/prepare_sft_data.sh 
+```
+
 ## Motivation
 
 A few years ago, it still felt realistic for an individual to think, "I'll just train my own model." I had no GPUs of my own, but thanks to some open-source libraries I had built, I was lucky enough to work with excellent teams like Hugging Face, the DeepSpeed team, and EleutherAI. Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM. That was meaningful back then.  By 2025, though, big companies train models like Qwen3 on tens of trillions of tokens with what is likely tens of thousands of GPUs, then release them for free. In that world, a smaller, weaker model trained by one person on a few GPUs does not move the needle very much.
@@ -16,13 +40,20 @@ The same thing is happening with libraries. Modern LLM frameworks such as Megatr
 
 So in recent years, I barely did any open-source work. I felt that even if I built something, it would be hard to create anything truly meaningful because I lacked capital and time. Now I changed the question. Instead of "How do I compete with that?", I started thinking "How can a single person, with a few GPUs and a few hours a day after work, still do that is genuinely useful?" That brought me back to what Andrej Karpathy did with his "nano" series: small, from-scratch implementations that teach, rather than compete. The nanoRLHF project follows that idea. It is not meant to be the fastest or most complete library. It is meant to be a small, readable, PyTorch-only reference that shows how RLHF and LLM infrastructure actually work, and will later come with Jupyter notebooks and free video lectures. These projects will never have the scale or efficiency of company-level systems. But I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can still positively influence others.
 
-## Contents 
-| Status  | Packages                                                                          | Description                       | References                                                                                                         | Examples                                                                            |
-|---------|-----------------------------------------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
-| 🟢 DONE | [`nanosets`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanosets) | zero-copy dataset library         | [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)                      | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanosets.py) |
-| 🟢 DONE | [`nanotron`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanotron) | model and data parallelism engine | [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)                   | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanotron.py) |
-| 🟢 DONE | [`nanovllm`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanovllm) | high performance inference engine | [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)             | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanovllm.py) |
-| 🟢 DONE | [`nanoray`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoray)   | distributed computing engine      | [ray](https://github.com/ray-project/ray)                                                                          | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanoray.py)  |
-| 🔴 TODO | `nanoverl`                                                                        | RLHF training framework           | [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF),                      | not available                                                                       |
-| 🟢 DONE | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
+## License
+This project is licensed under the Apache 2.0 License.
+```
+Copyright 2025 Hyunwoong Ko
 
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+   http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```

@@ -1,9 +1,11 @@
+import os
 import random
 from typing import List, Optional, Union, Callable, Dict, Any, Sequence
 
 from nanorlhf.nanosets.io.ipc import read_table, write_table
 from nanorlhf.nanosets.io.json_io import from_json, from_jsonl, to_json, to_jsonl
 from nanorlhf.nanosets.table.record_batch import RecordBatch
+from nanorlhf.nanosets.table.schema import Schema
 from nanorlhf.nanosets.table.table import Table
 from nanorlhf.nanosets.utils import DEFAULT_BATCH_SIZE, ext
 
@@ -30,14 +32,17 @@ class Dataset:
         strict_keys: bool = False,
         batch_size: Optional[int] = DEFAULT_BATCH_SIZE,
     ) -> "Dataset":
-        table = Table.from_list(rows, strict_keys=strict_keys, batch_size=batch_size)
-        return cls(table)
+        return cls(Table.from_list(rows, strict_keys=strict_keys, batch_size=batch_size))
 
     def save_to_disk(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
         with open(path, "wb") as fp:
             write_table(fp, self._table)
 
     def to_json(self, path: str, lines: bool = True) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+
         with open(path, "w", encoding="utf-8") as fp:
             if lines:
                 to_jsonl(fp, self._table)

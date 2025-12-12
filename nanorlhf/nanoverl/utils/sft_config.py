@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 import yaml
@@ -73,3 +73,18 @@ class SFTConfig:
             optim=optim_config,
             training=training_config,
         )
+
+    def to_yaml(self, file_path: str):
+        data_dict = {
+            "data": asdict(self.data),
+            "model": asdict(self.model),
+            "optim": asdict(self.optim),
+            "training": asdict(self.training),
+        }
+        with open(file_path, "w") as f:
+            yaml.dump(data_dict, f)
+
+
+if __name__ == '__main__':
+    # Example usage
+    config = SFTConfig().to_yaml('sft_config_example.yaml')
