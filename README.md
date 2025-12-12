@@ -8,6 +8,9 @@
 
 This project aims to perform RLHF training from scratch, implementing almost all core components manually except for PyTorch and Triton. Each module is a minimal, educational reimplementation of large-scale systems focusing on clarity and core concepts rather than production readiness. This includes SFT and RL training pipeline with evaluation, for training a small Qwen3 model on open-source math datasets.
 
+## Motivation
+A few years ago, it still felt possible for an individual to meaningfully train and contribute a model, and I was fortunate to do so with [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable open-source Korean LLM, thanks to support from the open-source community. But as the field entered an era where large companies train massive models at unimaginable scale and release them freely, individual efforts began to feel small by comparison. The same shift happened in libraries, where frameworks maintained by full-time corporate teams quickly outpaced what a single person could sustainably build or maintain. I have always loved open source, but in this reality, facing clear limits in time and capital, I found myself stepping back from it for a while. Eventually, I reframed the question, not how to compete, but how a single person could still be genuinely useful. Inspired by projects like Karpathy’s nano series, I returned to building small, clear, educational implementations like nanoRLHF, focused not on scale or efficiency, but on understanding and teaching. Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
+
 ## Contents 
 | Status  | Packages                                                                          | Description                       | References                                                                                                         | Examples                                                                            |
 |---------|-----------------------------------------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
@@ -26,19 +29,11 @@ cd nanoRLHF
 pip install -e .
 ```
 
-## Prepare Dataset
+## Preparing Dataset
 - Supervised training
 ```bash
 bash ./scripts/prepare_sft_data.sh 
 ```
-
-## Motivation
-
-A few years ago, it still felt realistic for an individual to think, "I'll just train my own model." I had no GPUs of my own, but thanks to some open-source libraries I had built, I was lucky enough to work with excellent teams like Hugging Face, the DeepSpeed team, and EleutherAI. Through that, I got access to 512 GPUs and used them to train [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable Korean LLM. That was meaningful back then.  By 2025, though, big companies train models like Qwen3 on tens of trillions of tokens with what is likely tens of thousands of GPUs, then release them for free. In that world, a smaller, weaker model trained by one person on a few GPUs does not move the needle very much.
-
-The same thing is happening with libraries. Modern LLM frameworks such as Megatron-LM or verl are maintained by full-time teams. An individual can still hack together a good framework after work, but it is very hard to keep up with the maintenance and feature velocity of a dedicated corporate team. Projects like OpenRLHF showed what a small group can do, but once a similar library with stronger backing appears, it naturally becomes the choice.
-
-So in recent years, I barely did any open-source work. I felt that even if I built something, it would be hard to create anything truly meaningful because I lacked capital and time. Now I changed the question. Instead of "How do I compete with that?", I started thinking "How can a single person, with a few GPUs and a few hours a day after work, still do that is genuinely useful?" That brought me back to what Andrej Karpathy did with his "nano" series: small, from-scratch implementations that teach, rather than compete. The nanoRLHF project follows that idea. It is not meant to be the fastest or most complete library. It is meant to be a small, readable, PyTorch-only reference that shows how RLHF and LLM infrastructure actually work, and will later come with Jupyter notebooks and free video lectures. These projects will never have the scale or efficiency of company-level systems. But I still believe that even without huge capital or full-time hours, an individual can create something meaningful, and that work can still positively influence others.
 
 ## License
 This project is licensed under the Apache 2.0 License.
