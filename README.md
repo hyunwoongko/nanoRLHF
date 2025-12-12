@@ -44,7 +44,7 @@ pip install -e .
 ```
 
 ## Preparing Dataset
-### Supervised training
+#### Supervised training
 
 In the examples included in this project, supervised fine-tuning is performed using [NuminaMath-CoT-Small-Hard-200k](https://huggingface.co/datasets/NotASI/NuminaMath-CoT-Small-Hard-200k). 
 From the original dataset, 180k samples are used as training data, and 1k samples are used as validation data.
@@ -54,7 +54,7 @@ Running the following command will tokenize the dataset and save it to the speci
 bash ./scripts/prepare_sft_data.sh 
 ```
 
-- Reinforcement Learning
+#### Reinforcement Learning
 ```bash
 bash ./scripts/prepare_rl_data.sh 
 ```
