@@ -41,6 +41,9 @@ def prepare_dataset(config: str, files: str, training_type: str = "sft"):
     tokenizer = AutoTokenizer.from_pretrained(config.model.partial_pretrain)
 
     # 6) preprocess dataset
-    # TODO
     set_seed(config.training.seed)
     random.shuffle(raw_dataset)
+
+    for sample in raw_dataset:
+        messages = sample[config.data.messages_key]
+        for
