@@ -1,13 +1,9 @@
 import torch
-from transformers import AutoModelForCausalLM, modeling_utils
+from transformers import AutoModelForCausalLM
 
 from nanorlhf import nanoray
-from nanorlhf.kernels.utils.vllm import (
-    set_context,
-    reset_context,
-    get_context,
-    paged_flash_attention_forward,
-)
+from nanorlhf.kernels import patch_kernel
+from nanorlhf.kernels.utils.vllm import set_context, reset_context, get_context
 from nanorlhf.nanotron import TensorParallel, MPU
 from nanorlhf.nanovllm.core.sampler import Sampler
 from nanorlhf.nanovllm.core.sequence import Sequence
@@ -44,10 +40,7 @@ class ModelRunner:
         else:
             self.model = model.to(self.device)
 
-        if "nanoRLHF_paged" not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
-            modeling_utils.ALL_ATTENTION_FUNCTIONS["nanoRLHF_paged"] = paged_flash_attention_forward
-        model.config._attn_implementation = "nanoRLHF_paged"
-
+        self.model = patch_kernel(self.model, use_paged_attention=True)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
@@ -125,6 +118,9 @@ class ModelRunner:
                     break
 
     def prepare_block_tables(self, seqs):
+        if any(len(seq.block_table) == 0 for seq in seqs):
+            return None
+
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -132,42 +128,74 @@ class ModelRunner:
 
     def prepare_prefill(self, seqs):
         lengths = [len(s) for s in seqs]
-        max_len = max(lengths)
+        seqlens_q = []
+        seqlens_k = []
+        packed_ids = []
+        packed_pos = []
+        slot_mapping = []
+        block_tables = self.prepare_block_tables(seqs)
 
-        pad_id = getattr(self.config, "pad_token_id", None)
-        if pad_id is None:
-            pad_id = self.config.eos
-
-        input_ids, attention_masks, position_ids = [], [], []
-        cu_seqlens_q, cu_seqlens_k, slot_mapping = [0], [0], []
-        block_tables = None
         for seq in seqs:
             length = len(seq)
-            input_ids.append(list(seq.token_ids) + [pad_id] * (max_len - length))
-            attention_masks.append([1] * length + [0] * (max_len - length))
-            position_ids.append(list(range(max_len)))
-            seqlen_q = length - seq.num_cached_tokens
-            seqlen_k = length
-            cu_seqlens_q.append(cu_seqlens_q[-1] + seqlen_q)
-            cu_seqlens_k.append(cu_seqlens_k[-1] + seqlen_k)
+            prefix = int(seq.num_cached_tokens)
+            assert 0 <= prefix <= length
 
-            if not seq.block_table:  # warmup
-                continue
-            for pos in range(length):
-                block_idx = pos // self.block_size
-                page_id = seq.block_table[block_idx]
-                offset = pos % self.block_size
-                slot = page_id * self.block_size + offset
-                slot_mapping.append(slot)
+            suffix_ids = list(seq.token_ids[prefix:length])
+            suffix_len = len(suffix_ids)
+            assert suffix_len > 0, "suffix_len must be > 0 for prefill"
 
-        if cu_seqlens_k[-1] > cu_seqlens_q[-1]:
-            block_tables = self.prepare_block_tables(seqs)
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        attention_mask = torch.tensor(attention_masks, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        position_ids = torch.tensor(position_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+            packed_ids.extend(suffix_ids)
+            packed_pos.extend(range(prefix, length))
+            seqlens_q.append(suffix_len)
+            seqlens_k.append(length)
+
+            if block_tables is not None:
+                assert len(seq.block_table) > 0, "block_tables is not None but seq.block_table is empty"
+                for pos in range(prefix, length):
+                    block_idx = pos // self.block_size
+                    assert block_idx < len(seq.block_table), (
+                        f"block_table too short: block_idx={block_idx}, len(block_table)={len(seq.block_table)}, "
+                        f"pos={pos}, length={length}, block_size={self.block_size}"
+                    )
+                    page_id = seq.block_table[block_idx]
+                    offset = pos % self.block_size
+                    slot_mapping.append(page_id * self.block_size + offset)
+
+        if block_tables is None:
+            seqlens_k = seqlens_q[:]
+
+        cu_q = [0]
+        cu_k = [0]
+        for lq in seqlens_q:
+            cu_q.append(cu_q[-1] + lq)
+        for lk in seqlens_k:
+            cu_k.append(cu_k[-1] + lk)
+
+        cu_seqlens_q = torch.tensor(cu_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seqlens_k = torch.tensor(cu_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        max_seqlen_q = int(max(seqlens_q))
+        max_seqlen_k = int(max(seqlens_k))
+
+        input_ids = torch.tensor([packed_ids], dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        position_ids = torch.tensor([packed_pos], dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        attention_mask = None
+
+        if len(slot_mapping) == 0:
+            slot_mapping = torch.empty((0,), dtype=torch.int32, device=self.device)
+        else:
+            slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         context_lens = torch.tensor(lengths, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        set_context(True, slot_mapping, context_lens, block_tables)
+
+        set_context(
+            True,
+            slot_mapping=slot_mapping,
+            context_lens=context_lens,
+            block_tables=block_tables,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_q,
+            max_seqlen_k=max_seqlen_k,
+        )
         return input_ids, position_ids, attention_mask
 
     def prepare_decode(self, seqs):
@@ -210,14 +238,8 @@ class ModelRunner:
 
         if is_prefill:
             context = get_context()
-            lengths = context.context_lens
-            bsz, seqlen, vocab_size = logits.shape
-            assert lengths.numel() == bsz
-            last_logits = []
-            for _b in range(bsz):
-                length = int(lengths[_b].item())
-                last_logits.append(logits[_b, length - 1])
-            logits_for_sampling = torch.stack(last_logits, dim=0)
+            last_pos = context.cu_seqlens_q[1:].to(logits.device, dtype=torch.int64) - 1
+            logits_for_sampling = logits[0, last_pos, :]
         else:
             logits_for_sampling = logits[:, -1, :]
 

@@ -51,6 +51,22 @@ def _get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[
     return None
 
 
+def _convert_4d_mask_to_2d_mask(attention_mask):
+    padding_mask = None
+    if attention_mask is not None:
+        if attention_mask.dim() == 4:
+            assert attention_mask.dtype != torch.bool
+            attention_mask_row0 = attention_mask[:, 0, -1, :]
+            padding_mask = attention_mask_row0 == 0
+
+        elif attention_mask.dim() == 2:
+            padding_mask = attention_mask
+        else:
+            raise ValueError(f"Unsupported attention_mask dim: {attention_mask.dim()}")
+
+    return padding_mask
+
+
 def _flash_attention_forward(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -62,6 +78,8 @@ def _flash_attention_forward(
     position_ids: Optional[torch.Tensor] = None,
     cu_seq_lens_q: Optional[torch.LongTensor] = None,
     cu_seq_lens_k: Optional[torch.LongTensor] = None,
+    max_length_q: Optional[int] = None,
+    max_length_k: Optional[int] = None,
     target_dtype: Optional[torch.dtype] = None,
     **kwargs,
 ):
@@ -72,10 +90,14 @@ def _flash_attention_forward(
 
     flash_kwargs = {"causal": is_causal, "softmax_scale": softmax_scale}
     is_fa_with_position_ids = _is_packed_sequence(position_ids, batch_size=query_states.size(0))
-    is_fa_with_varlen_kwargs = all(kwarg is not None for kwarg in (cu_seq_lens_q, cu_seq_lens_k))
+    is_fa_with_varlen_kwargs = all(
+        kwarg is not None for kwarg in (cu_seq_lens_q, cu_seq_lens_k, max_length_q, max_length_k)
+    )
 
     if attention_mask is not None:
-        q, k, v, indices_q, (cu_seq_lens_q, cu_seq_lens_k), _ = _upad_input(
+        attention_mask = _convert_4d_mask_to_2d_mask(attention_mask)
+
+        q, k, v, indices_q, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _upad_input(
             query_states, key_states, value_states, attention_mask, query_length, unpad_input
         )
 
@@ -88,6 +110,8 @@ def _flash_attention_forward(
             v,
             cu_seqlens_q=cu_seq_lens_q,
             cu_seqlens_k=cu_seq_lens_k,
+            max_seqlen_q=max_length_q,
+            max_seqlen_k=max_length_k,
             **flash_kwargs,
         )
         if isinstance(out_unpad, tuple):
@@ -96,29 +120,14 @@ def _flash_attention_forward(
         out = pad_input(out_unpad, indices_q, query_states.size(0), query_length)
 
     elif is_fa_with_varlen_kwargs or is_fa_with_position_ids:
-        bsz = query_states.size(0)
-        q_len = query_states.size(1)
-        k_len = key_states.size(1)
-        num_heads = query_states.size(2)
-
-        q = query_states.reshape(-1, num_heads, query_states.size(-1))
-        k = key_states.reshape(-1, key_states.size(2), key_states.size(-1))
-        v = value_states.reshape(-1, value_states.size(2), value_states.size(-1))
-
-        cu_seq_lens_q = torch.arange(
-            0,
-            (bsz * q_len) + 1,
-            step=q_len,
-            dtype=torch.int32,
-            device=query_states.device,
-        )
-        cu_seq_lens_k = torch.arange(
-            0,
-            (bsz * k_len) + 1,
-            step=k_len,
-            dtype=torch.int32,
-            device=query_states.device,
-        )
+        if cu_seq_lens_q is None or cu_seq_lens_k is None:
+            q, k, v, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _prepare_from_posids(
+                query_states, key_states, value_states, position_ids
+            )
+        else:
+            q = query_states.reshape(-1, query_states.size(-2), query_states.size(-1))
+            k = key_states.reshape(-1, key_states.size(-2), key_states.size(-1))
+            v = value_states.reshape(-1, value_states.size(-2), value_states.size(-1))
 
         if "mps" in str(query_states.device):
             cu_seq_lens_k = cu_seq_lens_k.clone()
@@ -129,6 +138,8 @@ def _flash_attention_forward(
             v,
             cu_seqlens_q=cu_seq_lens_q,
             cu_seqlens_k=cu_seq_lens_k,
+            max_seqlen_q=max_length_q,
+            max_seqlen_k=max_length_k,
             **flash_kwargs,
         )
         if isinstance(out, tuple):
@@ -141,7 +152,9 @@ def _flash_attention_forward(
         k_fixed = key_states.transpose(1, 2).contiguous()
         v_fixed = value_states.transpose(1, 2).contiguous()
 
-        out = flash_attn_func(q_fixed, k_fixed, v_fixed, **flash_kwargs)
+        # attention mask actually is not used here, but we provide flash_attn_func
+        # with attention mask to provide this even without huggingface dependencies.
+        out = flash_attn_func(q_fixed, k_fixed, v_fixed, attention_mask, **flash_kwargs)
         if isinstance(out, tuple):
             out = out[0]
 

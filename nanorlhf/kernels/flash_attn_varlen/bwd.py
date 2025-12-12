@@ -120,7 +120,7 @@ def flash_attn_varlen_bwd_kernel(
         padding_option="zero"
     ).to(tl.float32)
 
-    max_q = tl.load(max_q_head_base + q_indices * stride_max_q_tok, mask=q_mask, other=-float("inf"))
+    max_q = tl.load(max_q_head_base + q_indices * stride_max_q_tok, mask=q_mask, other=0.0)
     ez_sum = tl.load(ez_sum_head_base + q_indices * stride_ez_sum_tok, mask=q_mask, other=1.0)
 
     u = tl.sum(do * o, axis=1)

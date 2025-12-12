@@ -12,10 +12,11 @@ license = { file = "LICENSE" }
 keywords = ["rlhf", "rl", "llm", "language model", "deep learning", "ai"]
 dependencies = [
   "torch",
-  "triton",
-  "transformers",
-  "cloudpickle",
-  "zstandard"
+  "triton==3.4.0",
+  "cloudpickle==3.1.1",
+  "zstandard==0.25.0",
+  "wandb==0.17.9",
+  "transformers==4.57.3",
 ]
 
 [project.urls]

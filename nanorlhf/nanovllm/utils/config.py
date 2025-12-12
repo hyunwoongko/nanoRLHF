@@ -11,7 +11,7 @@ class Config:
     model: str
     max_num_batched_tokens: int = 65536
     max_num_seqs: int = 1024
-    max_model_len: int = 4096
+    max_model_len: int = 8192
     gpu_memory_utilization: float = 0.9
     eos: int = -1
     kvcache_block_size: int = KVCACHE_BLOCK_SIZE

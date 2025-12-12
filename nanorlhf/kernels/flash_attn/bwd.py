@@ -2,21 +2,12 @@ import torch
 import triton
 import triton.language as tl
 
-@triton.autotune(
-    configs=[
-        triton.Config({"block_size_q": 64, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
-        triton.Config({"block_size_q": 128, "tile_size_kv": 64, "num_warps": 8, "num_stages": 2}),
-        triton.Config({"block_size_q": 64, "tile_size_kv": 128, "num_warps": 8, "num_stages": 2}),
-        triton.Config({"block_size_q": 32, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
-        triton.Config({"block_size_q": 64, "tile_size_kv": 32, "num_warps": 4, "num_stages": 2}),
-    ],
-    key=["seq_len_kv", "dim"],
-)
+
 @triton.jit
 def flash_attn_kernel_bwd(
     q_ptr, k_ptr, v_ptr, do_ptr,
     dq_ptr, dk_ptr, dv_ptr,
-    max_q_ptr, ez_sum_ptr,
+    max_q_ptr, ez_sum_ptr, mask_ptr,
     seq_len_q, seq_len_kv,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
@@ -25,10 +16,13 @@ def flash_attn_kernel_bwd(
     stride_dq_bh, stride_dq_seq, stride_dq_dim,
     stride_dk_bh, stride_dk_seq, stride_dk_dim,
     stride_dv_bh, stride_dv_seq, stride_dv_dim,
-    stride_max_bh, stride_max_seq,
+    stride_max_q_bh, stride_max_q_seq,
     stride_ez_sum_bh, stride_ez_sum_seq,
+    stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+    num_heads, mask_num_heads,
     softmax_scale,
     causal: tl.constexpr,
+    has_mask: tl.constexpr,
     dim: tl.constexpr,
     block_size_q: tl.constexpr,
     tile_size_kv: tl.constexpr,
@@ -96,9 +90,9 @@ def flash_attn_kernel_bwd(
 
     # Load max_q and ez_sum
     max_q = tl.load(
-        max_q_ptr + pid_bh * stride_max_bh + offs_q * stride_max_seq,
+        max_q_ptr + pid_bh * stride_max_q_bh + offs_q * stride_max_q_seq,
         mask=q_mask,
-        other=-float("inf"),
+        other=0.0,
     )
     ez_sum = tl.load(
         ez_sum_ptr + pid_bh * stride_ez_sum_bh + offs_q * stride_ez_sum_seq,
@@ -108,6 +102,13 @@ def flash_attn_kernel_bwd(
 
     ez_sum = tl.maximum(ez_sum, 1e-6)
     dq = tl.zeros((block_size_q, dim), dtype=tl.float32)
+
+    if has_mask:
+        batch_idx = pid_bh // num_heads
+        head_idx = pid_bh % num_heads
+        mask_head_idx = tl.minimum(head_idx, mask_num_heads - 1)
+        mask_bh = mask_ptr + batch_idx * stride_mask_b + mask_head_idx * stride_mask_h
+
     for kv_start in range(0, seq_len_kv, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
             base=k_bh,
@@ -137,6 +138,23 @@ def flash_attn_kernel_bwd(
         )
 
         scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
+
+        if has_mask:
+            mask_block_ptr = tl.make_block_ptr(
+                base=mask_bh,  # noqa
+                shape=(seq_len_q, seq_len_kv),
+                offsets=(q_start, kv_start),
+                block_shape=(block_size_q, tile_size_kv),
+                strides=(stride_mask_q, stride_mask_k),
+                order=(1, 0),
+            )
+            mask_tile = tl.load(
+                mask_block_ptr,
+                boundary_check=(0, 1),
+                padding_option="zero",
+            )
+            scores = scores + mask_tile.to(tl.float32)
+
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seq_len_kv
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
@@ -161,35 +179,32 @@ def flash_attn_kernel_bwd(
         dp = tl.dot(do, tl.trans(v), out_dtype=tl.float32)
 
         # ds = (dp - Σ_k dp_ik p_ik) * p_ij
-        ds = (dp - tl.sum(dp * p, axis=1)[:, None]) * p
+        row_dp_p = tl.sum(dp * p, axis=1)
+        ds = (dp - row_dp_p[:, None]) * p
         ds_half = ds.to(q.dtype)
 
         dq += tl.dot(ds_half, k, out_dtype=tl.float32) * softmax_scale
         dk_tile = tl.dot(tl.trans(ds_half), q, out_dtype=tl.float32) * softmax_scale
 
-        kv_idx = kv_start + offs_kv
-        mask_kv = kv_idx < seq_len_kv
-
-        dv_ptrs = dv_bh + kv_idx[:, None] * stride_dv_seq + tl.arange(0, dim)[None, :] * stride_dv_dim
         dk_ptrs = dk_bh + kv_idx[:, None] * stride_dk_seq + tl.arange(0, dim)[None, :] * stride_dk_dim
+        dv_ptrs = dv_bh + kv_idx[:, None] * stride_dv_seq + tl.arange(0, dim)[None, :] * stride_dv_dim
 
-        dv_tile_out = dv_tile.to(v.dtype)
         dk_tile_out = dk_tile.to(k.dtype)
+        dv_tile_out = dv_tile.to(v.dtype)
 
-        tl.atomic_add(dv_ptrs, dv_tile_out, mask=mask_kv[:, None])
-        tl.atomic_add(dk_ptrs, dk_tile_out, mask=mask_kv[:, None])
+        tl.atomic_add(dk_ptrs, dk_tile_out, mask=kv_mask[:, None])
+        tl.atomic_add(dv_ptrs, dv_tile_out, mask=kv_mask[:, None])
 
     dq_out = dq.to(q.dtype)
     tl.store(dq_block_ptr, dq_out, boundary_check=(0, 1))
 
 
-def flash_attn_bwd(q, k, v, do, max_q, ez_sum, causal=True, softmax_scale=None):
-    bsz, num_heads, seq_len_q, dim_head = q.shape
+def flash_attn_bwd(q, k, v, do, max_q, ez_sum, attention_mask=None, causal=True, softmax_scale=None):
+    bsz, num_heads_q, seq_len_q, dim_head = q.shape
     seq_len_kv = k.shape[2]
-    assert k.shape == v.shape == (bsz, num_heads, seq_len_kv, dim_head)
-    assert max_q.shape == ez_sum.shape == (bsz * num_heads, seq_len_q)
+    assert max_q.shape == ez_sum.shape == (bsz * num_heads_q, seq_len_q)
 
-    bh = bsz * num_heads
+    bh = bsz * num_heads_q
 
     def merge_heads(x):
         return x.contiguous().view(bh, x.shape[2], dim_head)
@@ -202,32 +217,46 @@ def flash_attn_bwd(q, k, v, do, max_q, ez_sum, causal=True, softmax_scale=None):
     def grid(meta):
         return triton.cdiv(seq_len_q, meta["block_size_q"]), bh
 
-    q_m = merge_heads(q)
-    k_m = merge_heads(k)
-    v_m = merge_heads(v)
-    do_m = merge_heads(do)
+    q = merge_heads(q)
+    k = merge_heads(k)
+    v = merge_heads(v)
+    do = merge_heads(do)
 
-    dq_m = torch.zeros_like(q_m)
-    dk_m = torch.zeros_like(k_m)
-    dv_m = torch.zeros_like(v_m)
+    dq = torch.zeros_like(q)
+    dk = torch.zeros_like(k)
+    dv = torch.zeros_like(v)
 
-    stride_q_bh, stride_q_seq, stride_q_dim = q_m.stride()
-    stride_k_bh, stride_k_seq, stride_k_dim = k_m.stride()
-    stride_v_bh, stride_v_seq, stride_v_dim = v_m.stride()
-    stride_do_bh, stride_do_seq, stride_do_dim = do_m.stride()
-    stride_dq_bh, stride_dq_seq, stride_dq_dim = dq_m.stride()
-    stride_dk_bh, stride_dk_seq, stride_dk_dim = dk_m.stride()
-    stride_dv_bh, stride_dv_seq, stride_dv_dim = dv_m.stride()
-    stride_max_bh, stride_max_seq = max_q.stride()
+    stride_q_bh, stride_q_seq, stride_q_dim = q.stride()
+    stride_k_bh, stride_k_seq, stride_k_dim = k.stride()
+    stride_v_bh, stride_v_seq, stride_v_dim = v.stride()
+    stride_do_bh, stride_do_seq, stride_do_dim = do.stride()
+    stride_dq_bh, stride_dq_seq, stride_dq_dim = dq.stride()
+    stride_dk_bh, stride_dk_seq, stride_dk_dim = dk.stride()
+    stride_dv_bh, stride_dv_seq, stride_dv_dim = dv.stride()
+    stride_max_q_bh, stride_max_q_seq = max_q.stride()
     stride_ez_sum_bh, stride_ez_sum_seq = ez_sum.stride()
+
+    has_mask = attention_mask is not None
+    if has_mask:
+        assert attention_mask.ndim == 4
+        assert attention_mask.shape[0] == bsz
+        assert attention_mask.shape[-2] == seq_len_q or attention_mask.shape[-1] == seq_len_kv
+
+        mask = attention_mask.contiguous()
+        mask_num_heads = mask.shape[1]
+        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k = mask.stride()
+    else:
+        mask = q  # dummy
+        mask_num_heads = 1
+        stride_mask_b = stride_mask_h = stride_mask_q = stride_mask_k = 0
 
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim_head ** 0.5)
 
     flash_attn_kernel_bwd[grid](
-        q_m, k_m, v_m, do_m,
-        dq_m, dk_m, dv_m,
-        max_q, ez_sum,
+        q, k, v, do,
+        dq, dk, dv,
+        max_q, ez_sum, mask,
         seq_len_q, seq_len_kv,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
@@ -236,14 +265,20 @@ def flash_attn_bwd(q, k, v, do, max_q, ez_sum, causal=True, softmax_scale=None):
         stride_dq_bh, stride_dq_seq, stride_dq_dim,
         stride_dk_bh, stride_dk_seq, stride_dk_dim,
         stride_dv_bh, stride_dv_seq, stride_dv_dim,
-        stride_max_bh, stride_max_seq,
+        stride_max_q_bh, stride_max_q_seq,
         stride_ez_sum_bh, stride_ez_sum_seq,
+        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+        num_heads=num_heads_q,
+        mask_num_heads=mask_num_heads,
         softmax_scale=softmax_scale,
         causal=causal,
+        has_mask=has_mask,
         dim=dim_head,
+        block_size_q=64,
+        tile_size_kv=64,
     )
 
-    dq = unmerge_heads(dq_m, bsz, num_heads)
-    dk = unmerge_heads(dk_m, bsz, num_heads)
-    dv = unmerge_heads(dv_m, bsz, num_heads)
+    dq = unmerge_heads(dq, bsz, num_heads_q)
+    dk = unmerge_heads(dk, bsz, num_heads_q)
+    dv = unmerge_heads(dv, bsz, num_heads_q)
     return dq, dk, dv

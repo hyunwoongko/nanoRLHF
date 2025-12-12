@@ -6,19 +6,11 @@ from nanorlhf.kernels.flash_attn_varlen.fwd import flash_attn_varlen_fwd
 
 class FlashAttnVarlenFunc(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k, causal=True, softmax_scale=None):
+    def forward(ctx, q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None):
         assert q.dim() == 3 and k.dim() == 3 and v.dim() == 3
-        assert q.shape[0] == cu_seqlens_q[-1].item()
-        assert k.shape[0] == cu_seqlens_k[-1].item()
 
         bsz = cu_seqlens_q.shape[0] - 1
         _, num_heads, dim = q.shape
-
-        seqlens_q = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).to(torch.int32)
-        seqlens_k = (cu_seqlens_k[1:] - cu_seqlens_k[:-1]).to(torch.int32)
-
-        max_seqlen_q = int(seqlens_q.max().item())
-        max_seqlen_k = int(seqlens_k.max().item())
 
         o, max_q, ez_sum = flash_attn_varlen_fwd(
             q, k, v,

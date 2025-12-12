@@ -3,20 +3,10 @@ import triton
 import triton.language as tl
 
 
-@triton.autotune(
-    configs=[
-        triton.Config({"block_size_q": 64, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
-        triton.Config({"block_size_q": 128, "tile_size_kv": 64, "num_warps": 8, "num_stages": 2}),
-        triton.Config({"block_size_q": 64, "tile_size_kv": 128, "num_warps": 8, "num_stages": 2}),
-        triton.Config({"block_size_q": 32, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
-        triton.Config({"block_size_q": 64, "tile_size_kv": 32, "num_warps": 4, "num_stages": 2}),
-    ],
-    key=["seq_len_k", "dim"]
-)
 @triton.jit
 def flash_attn_kernel_fwd(
     q_ptr, k_ptr, v_ptr, o_ptr,
-    max_q_ptr, ez_sum_ptr,
+    max_q_ptr, ez_sum_ptr, mask_ptr,
     seq_len_q, seq_len_k,
     stride_q_bh, stride_q_seq, stride_q_dim,
     stride_k_bh, stride_k_seq, stride_k_dim,
@@ -24,8 +14,11 @@ def flash_attn_kernel_fwd(
     stride_o_bh, stride_o_seq, stride_o_dim,
     stride_max_bh, stride_max_seq,
     stride_ez_sum_bh, stride_ez_sum_seq,
+    stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+    num_heads, mask_num_heads,
     softmax_scale,
     causal: tl.constexpr,
+    has_mask: tl.constexpr,
     dim: tl.constexpr,
     block_size_q: tl.constexpr,
     tile_size_kv: tl.constexpr,
@@ -181,6 +174,12 @@ def flash_attn_kernel_fwd(
     ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
+    if has_mask:
+        batch_idx = pid_bh // num_heads
+        head_idx = pid_bh % num_heads
+        mask_head_idx = tl.minimum(head_idx, mask_num_heads - 1)
+        mask_bh = mask_ptr + batch_idx * stride_mask_b + mask_head_idx * stride_mask_h
+
     for kv_start in range(0, seq_len_k, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
             base=k_bh,
@@ -211,6 +210,24 @@ def flash_attn_kernel_fwd(
         )
 
         scores = tl.dot(q, tl.trans(k)) * softmax_scale
+
+        if has_mask:
+            mask_block_ptr = tl.make_block_ptr(
+                base=mask_bh,  # noqa
+                shape=(seq_len_q, seq_len_k),
+                offsets=(q_start, kv_start),
+                block_shape=(block_size_q, tile_size_kv),
+                strides=(stride_mask_q, stride_mask_k),
+                order=(1, 0),
+            )
+            mask_tile = tl.load(
+                mask_block_ptr,
+                boundary_check=(0, 1),
+                padding_option="zero",
+            )
+            # mask tile is already has -inf where masked.
+            scores = scores + mask_tile.to(tl.float32)
+
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seq_len_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
@@ -251,12 +268,15 @@ def flash_attn_kernel_fwd(
     tl.store(ez_sum_ptrs, ez_sum, mask=q_mask)
 
 
-def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
-    if q.ndim == 4:
-        bsz, num_heads, seq_len_q, dim = q.shape
+def flash_attn_fwd(q, k, v, attention_mask=None, causal=True, softmax_scale=None):
+    input_ndim = q.ndim
+
+    if input_ndim == 4:
+        bsz, num_heads_q, seq_len_q, dim = q.shape
         seq_len_k = k.shape[2]
-        bh = bsz * num_heads
-        assert k.shape == v.shape == (bsz, num_heads, seq_len_k, dim)
+        bh = bsz * num_heads_q
+        assert k.shape[-1] == dim and v.shape[-1] == dim
+        assert k.shape[0] == bsz and v.shape[0] == bsz
 
         def merge_heads(x):
             return x.contiguous().view(bh, x.shape[2], dim)
@@ -264,11 +284,11 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
         q = merge_heads(q)
         k = merge_heads(k)
         v = merge_heads(v)
-    elif q.ndim == 3:
+    elif input_ndim == 3:
         bh, seq_len_q, dim = q.shape
         seq_len_k = k.shape[1]
         bsz = 1
-        num_heads = bh
+        num_heads_q = bh
         assert k.shape == v.shape == (bh, seq_len_k, dim)
     else:
         raise ValueError("q, k, v must be 3D or 4D tensors")
@@ -277,8 +297,8 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
         return triton.cdiv(seq_len_q, meta["block_size_q"]), bh
 
     o = torch.empty_like(q)
-    max_q = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
-    ez_sum = torch.empty(bh, seq_len_q, device=q.device, dtype=torch.float32)
+    max_q = torch.full((bh, seq_len_q), -float("inf"), device=q.device, dtype=torch.float32)
+    ez_sum = torch.zeros(bh, seq_len_q, device=q.device, dtype=torch.float32)
 
     stride_q_bh, stride_q_seq, stride_q_dim = q.stride()
     stride_k_bh, stride_k_seq, stride_k_dim = k.stride()
@@ -287,12 +307,26 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
     stride_max_bh, stride_max_seq = max_q.stride()
     stride_ez_sum_bh, stride_ez_sum_seq = ez_sum.stride()
 
+    has_mask = attention_mask is not None
+    if has_mask:
+        assert attention_mask.ndim == 4
+        assert attention_mask.shape[0] == bsz
+        assert attention_mask.shape[-2] == seq_len_q or attention_mask.shape[-1] == seq_len_k
+
+        mask = attention_mask.contiguous()
+        mask_num_heads = mask.shape[1]
+        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k = mask.stride()
+    else:
+        mask = q  # dummy
+        mask_num_heads = 1
+        stride_mask_b = stride_mask_h = stride_mask_q = stride_mask_k = 0
+
     if softmax_scale is None:
         softmax_scale = 1.0 / (dim ** 0.5)
 
     flash_attn_kernel_fwd[grid](
         q, k, v, o,
-        max_q, ez_sum,
+        max_q, ez_sum, mask,
         seq_len_q, seq_len_k,
         stride_q_bh, stride_q_seq, stride_q_dim,
         stride_k_bh, stride_k_seq, stride_k_dim,
@@ -300,10 +334,17 @@ def flash_attn_fwd(q, k, v, causal=True, softmax_scale=None):
         stride_o_bh, stride_o_seq, stride_o_dim,
         stride_max_bh, stride_max_seq,
         stride_ez_sum_bh, stride_ez_sum_seq,
+        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+        num_heads=num_heads_q,
+        mask_num_heads=mask_num_heads,
         softmax_scale=softmax_scale,
         causal=causal,
+        has_mask=has_mask,
         dim=dim,
+        block_size_q=64,
+        tile_size_kv=64,
     )
 
-    o = o.view(bsz, num_heads, seq_len_q, dim)
+    if input_ndim == 4:
+        o = o.view(bsz, num_heads_q, seq_len_q, dim)
     return o, max_q, ez_sum

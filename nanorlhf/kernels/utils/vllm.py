@@ -17,6 +17,10 @@ class Context:
     slot_mapping: Optional[torch.Tensor] = None
     context_lens: Optional[torch.Tensor] = None
     block_tables: Optional[torch.Tensor] = None
+    cu_seqlens_q: Optional[torch.Tensor] = None
+    cu_seqlens_k: Optional[torch.Tensor] = None
+    max_seqlen_q: Optional[int] = None
+    max_seqlen_k: Optional[int] = None
 
 
 KVCACHE_BLOCK_SIZE = 256
@@ -27,13 +31,26 @@ def get_context() -> Context:
     return GLOBAL_CONTEXT
 
 
-def set_context(is_prefill, slot_mapping=None, context_lens=None, block_tables=None):
+def set_context(
+    is_prefill,
+    slot_mapping=None,
+    context_lens=None,
+    block_tables=None,
+    cu_seqlens_q=None,
+    cu_seqlens_k=None,
+    max_seqlen_q=None,
+    max_seqlen_k=None,
+):
     global GLOBAL_CONTEXT
     GLOBAL_CONTEXT = Context(
         is_prefill=is_prefill,
         slot_mapping=slot_mapping,
         context_lens=context_lens,
         block_tables=block_tables,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_q=max_seqlen_q,
+        max_seqlen_k=max_seqlen_k,
     )
 
 
@@ -42,39 +59,16 @@ def reset_context():
     GLOBAL_CONTEXT = Context()
 
 
-def store_kv_to_cache(
-    context,
-    key_states_not_repeated,
-    value_states_not_repeated,
-    key_cache,
-    value_cache,
-    bsz,
-    device,
-):
+def store_kv_to_cache(context, key_states_not_repeated, value_states_not_repeated, key_cache, value_cache):
     if context.is_prefill:
-        assert context.context_lens is not None, "prefill requires context_lens for KV cache write"
-        lengths = context.context_lens.to(device)
-        assert lengths.numel() == bsz
-
-        k_pieces = []
-        v_pieces = []
-        for b in range(bsz):
-            length = int(lengths[b].item())
-            if length == 0:
-                continue
-            k_pieces.append(key_states_not_repeated[b, :length])
-            v_pieces.append(value_states_not_repeated[b, :length])
-
-        if k_pieces:
-            k_for_cache = torch.cat(k_pieces, dim=0).unsqueeze(0)
-            v_for_cache = torch.cat(v_pieces, dim=0).unsqueeze(0)
-            store_kv_to_cache_kernel(
-                key_states_not_repeated=k_for_cache,
-                value_states_not_repeated=v_for_cache,
-                key_cache=key_cache,
-                value_cache=value_cache,
-                slot_mapping=context.slot_mapping,
-            )
+        assert context.cu_seqlens_q is not None
+        store_kv_to_cache_kernel(
+            key_states_not_repeated=key_states_not_repeated,
+            value_states_not_repeated=value_states_not_repeated,
+            key_cache=key_cache,
+            value_cache=value_cache,
+            slot_mapping=context.slot_mapping,
+        )
     else:
         k_for_cache = key_states_not_repeated[:, -1:, :, :]
         v_for_cache = value_states_not_repeated[:, -1:, :, :]
@@ -98,53 +92,53 @@ def compute_prefill(
     scaling,
     is_causal,
 ):
+    assert context.cu_seqlens_q is not None and context.cu_seqlens_k is not None
+    assert context.max_seqlen_q is not None and context.max_seqlen_k is not None
+
+    device = query_states.device
+    cu_q = context.cu_seqlens_q.to(device=device, dtype=torch.int32)
+    cu_k = context.cu_seqlens_k.to(device=device, dtype=torch.int32)
+    max_q = int(context.max_seqlen_q)
+    max_k = int(context.max_seqlen_k)
+
+    total_q = int(cu_q[-1].item())
+    total_k = int(cu_k[-1].item())
+    if context.block_tables is None:
+        assert total_k == total_q, f"no-cache prefill expects total_k==total_q, got {total_k} vs {total_q}"
+
     bsz, q_len, num_heads, _ = query_states.shape
-    k_len = key_states.shape[1]
+    assert bsz == 1, f"packed prefill expects batch=1, got {bsz}"
 
-    cu_seqlens_q = torch.arange(
-        0,
-        (bsz * q_len) + 1,
-        step=q_len,
-        dtype=torch.int32,
-        device=query_states.device,
-    )
-    cu_seqlens_k = torch.arange(
-        0,
-        (bsz * k_len) + 1,
-        step=k_len,
-        dtype=torch.int32,
-        device=query_states.device,
-    )
-
-    if "mps" in str(query_states.device):
-        cu_seqlens_k = cu_seqlens_k.clone()
+    q = query_states.reshape(-1, num_heads, dim).contiguous()
 
     if context.block_tables is not None:
         k_bh, v_bh = load_kv_from_cache_prefill(
             context=context,
-            cu_seqlens_k=cu_seqlens_k,
+            cu_seqlens_k=cu_k,
             key_cache=key_cache,
             value_cache=value_cache,
             num_heads=num_heads,
             dim=dim,
         )
     else:
-        k_bh = key_states.reshape(-1, num_heads, key_states.size(-1))
-        v_bh = value_states.reshape(-1, num_heads, value_states.size(-1))
+        k_bh = key_states.reshape(-1, num_heads, dim).contiguous()
+        v_bh = value_states.reshape(-1, num_heads, dim).contiguous()
 
     out = flash_attn_varlen_func(
-        query_states.reshape(-1, num_heads, query_states.size(-1)),
+        q,
         k_bh,
         v_bh,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k=cu_seqlens_k,
+        cu_seqlens_q=cu_q,
+        cu_seqlens_k=cu_k,
+        max_seqlen_q=max_q,
+        max_seqlen_k=max_k,
         softmax_scale=scaling,
         causal=is_causal,
     )
     if isinstance(out, tuple):
         out = out[0]
 
-    out = out.view(query_states.size(0), -1, out.size(-2), out.size(-1))
+    out = out.view(1, -1, out.size(-2), out.size(-1))
     return out, None
 
 
@@ -191,6 +185,7 @@ def paged_flash_attention_forward(
     value: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     scaling: Optional[float] = None,
+    position_ids: Optional[torch.Tensor] = None,
     is_causal: Optional[bool] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
@@ -209,8 +204,6 @@ def paged_flash_attention_forward(
         )
 
     bsz, num_heads, seqlen_q, dim = query.shape
-    device = query.device
-
     query_states = query.transpose(1, 2)
     key_states = key.transpose(1, 2)
     value_states = value.transpose(1, 2)
@@ -242,8 +235,6 @@ def paged_flash_attention_forward(
             value_states_not_repeated=value_states_not_repeated,
             key_cache=key_cache,
             value_cache=value_cache,
-            bsz=bsz,
-            device=device,
         )
 
     if context.is_prefill:

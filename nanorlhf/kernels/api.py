@@ -1,17 +1,16 @@
 from nanorlhf.kernels.flash_attn.ops import FlashAttentionFunc
 from nanorlhf.kernels.flash_attn_varlen.ops import FlashAttnVarlenFunc
 from nanorlhf.kernels.rmsnorm.ops import FusedRMSNormFunc
-from nanorlhf.kernels.rotary.ops import apply_rotary_func
 from nanorlhf.kernels.utils.padding import pad_input as _pad_input, unpad_input as _unpad_input
 from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode
 
 
-def flash_attn_func(q, k, v, causal=True, softmax_scale=None, **kwargs):
-    return FlashAttentionFunc.apply(q, k, v, causal, softmax_scale)
+def flash_attn_func(q, k, v, attention_mask=None, causal=True, softmax_scale=None, **kwargs):
+    return FlashAttentionFunc.apply(q, k, v, attention_mask, causal, softmax_scale)
 
 
-def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, causal=True, softmax_scale=None, **kwargs):
-    return FlashAttnVarlenFunc.apply(q, k, v, cu_seqlens_q, cu_seqlens_k, causal, softmax_scale)
+def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None, **kwargs):
+    return FlashAttnVarlenFunc.apply(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal, softmax_scale)
 
 
 def flash_attn_decode_func(q, k, v, split_k=None, causal=True, softmax_scale=None, block_size_q=16, block_size_k=16):
@@ -20,10 +19,6 @@ def flash_attn_decode_func(q, k, v, split_k=None, causal=True, softmax_scale=Non
 
 def rms_norm(x, weight, eps=1e-6):
     return FusedRMSNormFunc.apply(x, weight, eps)
-
-
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
-    return apply_rotary_func(q, k, cos, sin, position_ids, unsqueeze_dim)
 
 
 def pad_input(hidden_states, indices, batch, seqlen):

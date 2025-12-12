@@ -1,18 +1,28 @@
-import importlib
 from functools import partial
 
-from transformers import modeling_utils
+from transformers import modeling_utils, masking_utils
 
-from nanorlhf.kernels.api import rms_norm, apply_rotary_pos_emb
+from nanorlhf.kernels.api import rms_norm
 from nanorlhf.kernels.utils.huggingface import flash_attention_forward
+from nanorlhf.kernels.utils.vllm import paged_flash_attention_forward
 
 
-def patch_kernel(model):
+def patch_kernel(model, use_paged_attention=False):
     # patch flash attention kernel
-    if "nanoRLHF" not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
-        modeling_utils.ALL_ATTENTION_FUNCTIONS["nanoRLHF"] = flash_attention_forward
-    if not hasattr(model.config, "_attention_implementation"):
-        model.config._attention_implementation = "nanoRLHF"
+    if use_paged_attention:
+        attn_impl = "nanoRLHF_paged"
+        attn_func = paged_flash_attention_forward
+        mask_func = lambda *args, **kwargs: None
+    else:
+        attn_impl = "nanoRLHF"
+        attn_func = flash_attention_forward
+        mask_func = masking_utils.eager_mask
+
+    if attn_impl not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
+        modeling_utils.ALL_ATTENTION_FUNCTIONS._global_mapping[attn_impl] = attn_func
+        masking_utils.ALL_MASK_ATTENTION_FUNCTIONS._global_mapping[attn_impl] = mask_func
+    if hasattr(model.config, "_attn_implementation"):
+        model.config._attn_implementation = attn_impl
 
     # patch rms norm kernel
     for module in model.modules():
@@ -22,10 +32,5 @@ def patch_kernel(model):
                 rms_eps = getattr(module, "variance_epsilon", 1e-6)
             if hasattr(module, "weight"):
                 module.forward = partial(rms_norm, weight=module.weight, eps=rms_eps)
-
-    # patch rotary position embedding kernel
-    modeling_module = importlib.import_module(model.__class__.__module__)
-    if hasattr(modeling_module, "apply_rotary_pos_emb"):
-        modeling_module.apply_rotary_pos_emb = apply_rotary_pos_emb
 
     return model
