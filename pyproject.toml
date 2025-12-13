@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanorlhf"
-version = "0.1.0"
+version = "0.0"
 description = "nanoRLHF: from-scratch journey into how LLMs and RLHF really work."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,6 +17,9 @@ dependencies = [
   "zstandard==0.25.0",
   "wandb==0.17.9",
   "transformers==4.57.3",
+]
+authors = [
+  {name = "hyunwoongko", email = "gusdnd852@naver.com"}
 ]
 
 [project.urls]

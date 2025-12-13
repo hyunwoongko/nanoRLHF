@@ -15,7 +15,7 @@ A few years ago, it still felt possible for an individual to meaningfully train 
 But as the field entered an era where large companies train [massive](https://huggingface.co/deepseek-ai/DeepSeek-R1) [models](https://huggingface.co/Qwen/Qwen3-235B-A22B) at unimaginable scale and release them freely, individual efforts began to feel small by comparison. 
 The same shift happened in libraries. [Open sources](https://github.com/volcengine/verl) [maintained](https://github.com/NVIDIA/Megatron-LM) [by full-time corporate teams](https://github.com/langchain-ai/langchain) quickly outpaced what a single person could sustainably build or maintain. 
 I have always loved developing my own open source, but in this reality, facing clear limits in time and capital, I found myself stepping back from it for a while. 
-Eventually, I reframed the question, not how to compete, but how a single person could still be genuinely useful. 
+Eventually, I reframed the question, not how to compete, but how a single person could still create something genuinely useful. 
 Inspired by projects like [Karpathy’s nano series](https://github.com/karpathy/nanoGPT), I returned to building small, clear, educational implementations, focused not on scale or efficiency, but on understanding and teaching. 
 Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
 
