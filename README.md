@@ -38,6 +38,9 @@ In this project, internal APIs from libraries such as Hugging Face Transformers 
 It is strongly recommended to run the code in an isolated environment such as a Conda virtual environment.
 
 ```bash
+conda create -n nanorlhf python=3.10
+conda activate nanorlhf
+
 git clone https://github.com/hyunwoongko/nanoRLHF
 cd nanoRLHF
 pip install -e .
