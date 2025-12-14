@@ -111,8 +111,8 @@ class SFTTrainer:
         node_ids = list(session._workers.keys())
         if len(node_ids) < self.global_world_size:
             raise RuntimeError(
-                "`nanoray` was initialized with fewer nodes than `tensor_parallel_size`; "
-                "please provide at least one NodeConfig per tensor-parallel rank."
+                "`nanoray` was initialized with fewer nodes than `global_world_size`; "
+                "please provide at least one NodeConfig per global rank."
             )
 
         return node_ids

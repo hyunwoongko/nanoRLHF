@@ -80,7 +80,6 @@ def post_process_hf_model(
     batch_size = logits.shape[0]
 
     if labels is None:
-        print(payload["user_inputs"].keys())
         output_type = get_output_type(model)
         return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
 
