@@ -8,13 +8,11 @@ import yaml
 class DataConfig:
     train_batch_size: int = 128
     valid_batch_size: int = 128
-    train_files: Optional[str] = None
-    valid_files: Optional[str] = None
-    messages_key: str = "messages"
-    tools_key: str = "tools"
-    enable_thinking_key: str = "enable_thinking"
-    max_length: int = 8192
-    truncation: str = "error"
+    train_micro_batch_size: int = 8
+    valid_micro_batch_size: int = 1
+    train_data: Optional[str] = None
+    valid_data: Optional[str] = None
+    num_workers: int = 8
 
 
 @dataclass
@@ -24,7 +22,11 @@ class ModelConfig:
     pipeline_parallel_size: int = 1
     data_parallel_size: int = 1
     zero_stage: int = 0
-    enable_gradient_checkpointing: bool = True
+    host: str = "127.0.0.1"
+    port: int = 23333
+    backend: str = "nccl"
+    seed: int = 42
+    gradient_checkpointing_enable: bool = True
 
 
 @dataclass
@@ -35,6 +37,7 @@ class OptimConfig:
     lr_warmup_steps_ratio: float = 0.1
     lr_scheduler: str = "cosine"
     clip_grad: float = 1.0
+    weight_decay: float = 1e-3
 
 
 @dataclass
@@ -43,11 +46,10 @@ class TrainingConfig:
     project_name: str = "project"
     experiment_name: str = "experiment"
     total_epochs: int = 3
-    logger: str = "wandb"
+    wandb: bool = True
     seed: int = 42
     save_freq: int = 300
     test_freq: int = 300
-    n_gpus_per_node: int = 8
 
 
 @dataclass
@@ -83,8 +85,3 @@ class SFTConfig:
         }
         with open(file_path, "w") as f:
             yaml.dump(data_dict, f)
-
-
-if __name__ == '__main__':
-    # Example usage
-    config = SFTConfig().to_yaml('sft_config_example.yaml')

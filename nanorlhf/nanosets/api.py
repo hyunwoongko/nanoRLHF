@@ -18,6 +18,20 @@ class Dataset:
     def table(self) -> Table:
         return self._table
 
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            n = len(self)
+            if item < 0:
+                item += n
+            if not (0 <= item < n):
+                raise IndexError(f"Index {item} out of range [0, {n})")
+            return self.select([item]).to_dict()[0]
+        elif isinstance(item, slice):
+            indices = list(range(*item.indices(len(self))))
+            return self.select(indices).to_dict()
+        else:
+            raise TypeError("Invalid argument type.")
+
     def __len__(self) -> int:
         return self._table.length
 

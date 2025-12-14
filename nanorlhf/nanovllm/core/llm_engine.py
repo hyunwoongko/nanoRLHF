@@ -34,24 +34,13 @@ class LLMEngine:
         if config.tensor_parallel_size > 1:
             for rank in range(config.tensor_parallel_size):
                 nodes[f"node-{rank + 1}"] = nanoray.NodeConfig(
-                    cpus=4.0,
-                    gpus=1.0,
-                    rpc=True,
-                    host=config.host,
-                    port=base_port + rank,
+                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=base_port + rank
                 )
         else:
-            nodes["node-1"] = nanoray.NodeConfig(
-                cpus=4.0,
-                gpus=1.0,
-                rpc=False,
-                host=config.host,
-                port=base_port,
-            )
+            nodes["node-1"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=base_port)
 
         session = nanoray.init(nodes, default_node_id="node-1")
         node_ids = list(session._workers.keys())
-
         if len(node_ids) < config.tensor_parallel_size:
             raise RuntimeError(
                 "`nanoray` was initialized with fewer nodes than `tensor_parallel_size`; "

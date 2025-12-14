@@ -29,4 +29,4 @@ class FlashAttentionFunc(torch.autograd.Function):
         dq, dk, dv = flash_attn_bwd(
             q, k, v, grad_o, max_q, ez_sum, attention_mask=attention_mask, causal=causal, softmax_scale=softmax_scale
         )
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None

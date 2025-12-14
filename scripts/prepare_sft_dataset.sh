@@ -25,8 +25,8 @@ seed=1234
 num_workers=32
 mp_chunksize=512
 
-echo "Start to preprocess SFT training dataset..."
-python3 ./scripts/prepare_dataset.py \
+#echo "Start to preprocess SFT training dataset..."
+python3 -m nanorlhf.nanoverl.dataset.prepare_dataset \
     --files="$train0,$train1,$train2,$train3,$train4,$train5" \
     --output_path="${data_path}/preprocessed/train.nano" \
     --tokenizer_name_or_path="$tokenizer_name_or_path" \
@@ -40,7 +40,7 @@ python3 ./scripts/prepare_dataset.py \
     --mp_chunksize=$mp_chunksize
 
 echo "Start to preprocess SFT validation dataset..."
-python3 ./scripts/prepare_dataset.py \
+python3 -m nanorlhf.nanoverl.dataset.prepare_dataset \
     --files="$valid" \
     --output_path="${data_path}/preprocessed/valid.nano" \
     --tokenizer_name_or_path="$tokenizer_name_or_path" \

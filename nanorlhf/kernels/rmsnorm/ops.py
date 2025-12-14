@@ -60,7 +60,7 @@ class FusedRMSNormFunc(torch.autograd.Function):
         g = grad_output.to(torch.float32)
         M = x_2d.shape[0]
 
-        g_2d = g.view(M, hidden_size).contiguous()
+        g_2d = g.contiguous().view(M, hidden_size)
         dx_2d = torch.empty_like(x_2d, device=device, dtype=torch.float32)
         dw = torch.zeros_like(w_f32, device=device, dtype=torch.float32)
 

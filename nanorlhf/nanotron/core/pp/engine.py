@@ -3,6 +3,7 @@ from typing import List, Dict, Any
 import torch
 import torch.distributed as dist
 from torch import nn
+from transformers.modeling_flash_attention_utils import _is_packed_sequence
 
 from nanorlhf.nanotron.core.pp.buffer import PipelineBuffer
 from nanorlhf.nanotron.core.pp.loss import MicroLossTensor
@@ -91,7 +92,13 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                     >>>     optimizer.step()                                # ← Update weights
     """
 
-    def __init__(self, model: nn.Module, mpu: MPU, micro_batch_size: int = 1):
+    def __init__(
+        self,
+        model: nn.Module,
+        mpu: MPU,
+        micro_batch_size: int = 1,
+        gradient_checkpointing_enable: bool = False,
+    ):
         super().__init__(model, mpu, parallelization_priority=0)
         # distributed related
         self.p2p = P2P(mpu, mode=ParallelMode.PIPELINE)
@@ -117,14 +124,27 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         self.micro_offset = 0
         self.micro_batches = None
         self.micro_batch_size = micro_batch_size
+        self.gradient_checkpointing_enable = gradient_checkpointing_enable
 
     def _forward(self, *args, **kwargs):
         """Do forward pass with pipeline parallelism."""
         _kwargs = to_kwargs(self.model_forward, args, kwargs)
         _kwargs["use_cache"] = False
 
+        if "input_ids" in _kwargs and "position_ids" in _kwargs:
+            is_packed_sequence = _is_packed_sequence(
+                position_ids=_kwargs["position_ids"],
+                batch_size=_kwargs["input_ids"].size(0),
+            )
+        else:
+            is_packed_sequence = False
+
+        if is_packed_sequence:
+            self.micro_batches = self._split_packed_batches(_kwargs)
+        else:
+            self.micro_batches = self._split_batches(_kwargs)
+
         self.micro_offset = 0
-        self.micro_batches = self._split_batches(_kwargs)
         self._reserve_buffers(self.num_micro_batches)
 
         for micro_idx in range(self.num_micro_batches):
@@ -248,19 +268,59 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                 if hasattr(m, "weight") and m.weight is not None:
                     weight = m.weight.data.clone().contiguous().cuda()
                     dist.broadcast(
-                        weight,
-                        src=self.stage_to_rank[src_rank],
-                        group=self.mpu.get_group(ParallelMode.PIPELINE)
+                        weight, src=self.stage_to_rank[src_rank], group=self.mpu.get_group(ParallelMode.PIPELINE)
                     )
                     m.weight.data = weight
                 if hasattr(m, "bias") and m.bias is not None:
                     bias = m.bias.data.clone().contiguous().cuda()
                     dist.broadcast(
-                        bias,
-                        src=self.stage_to_rank[src_rank],
-                        group=self.mpu.get_group(ParallelMode.PIPELINE)
+                        bias, src=self.stage_to_rank[src_rank], group=self.mpu.get_group(ParallelMode.PIPELINE)
                     )
                     m.bias.data = bias
+
+    def _split_packed_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
+        pos = batches["position_ids"]
+        pos_1d = pos[0]
+        starts = (pos_1d == 0).nonzero(as_tuple=False).flatten()
+        ends = torch.cat([starts[1:], torch.tensor([pos_1d.numel()], device=pos.device, dtype=starts.dtype)], dim=0)
+        cu_seq_lens = torch.cat([torch.zeros(1, device=pos.device, dtype=ends.dtype), ends], dim=0).to(torch.int32)
+        num_seqs = int(cu_seq_lens.numel() - 1)
+        assert num_seqs % self.micro_batch_size == 0, (
+            "For packed batches, number of sequences must be divisible by micro_batch_size. "
+            f"Got num_seqs={num_seqs}, micro_batch_size={self.micro_batch_size}."
+        )
+
+        self.batch_size = num_seqs
+        self.num_micro_batches = self.batch_size // self.micro_batch_size
+        micro_batches = [{} for _ in range(self.num_micro_batches)]
+        total_tokens = int(cu_seq_lens[-1].item())
+
+        for micro_idx in range(self.num_micro_batches):
+            seq_start = micro_idx * self.micro_batch_size
+            seq_end = seq_start + self.micro_batch_size
+
+            tok_start = int(cu_seq_lens[seq_start].item())
+            tok_end = int(cu_seq_lens[seq_end].item())
+            micro_batch: Dict[str, Any] = {}
+
+            for k, v in batches.items():
+                if not torch.is_tensor(v):
+                    micro_batch[k] = v
+                    continue
+
+                if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
+                    micro_cu_seq_lens = cu_seq_lens[seq_start : seq_end + 1].clone()
+                    micro_cu_seq_lens = micro_cu_seq_lens - micro_cu_seq_lens[0]
+                    micro_batch[k] = micro_cu_seq_lens
+                    continue
+
+                if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
+                    micro_batch[k] = v[:, tok_start:tok_end]
+                    continue
+
+                micro_batch[k] = v
+            micro_batches[micro_idx] = micro_batch
+        return micro_batches
 
     def _split_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -339,7 +399,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         hidden_states = snapshot.output_tensor
         layer_inputs = {snapshot.input_param_name: snapshot.output_tensor, **snapshot.kwargs}
         for layer in self.mp_plan.main_module_list[1 : self.local_end]:
-            hidden_states = run_layer(layer, layer_inputs)
+            hidden_states = run_layer(layer, layer_inputs, snapshot.input_param_name, self.gradient_checkpointing_enable)
             layer_inputs[snapshot.input_param_name] = hidden_states
 
         return {
@@ -356,7 +416,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
 
         hidden_states = layer_inputs[input_param_name]
         for layer in self.mp_plan.main_module_list[self.local_start : self.local_end]:
-            hidden_states = run_layer(layer, layer_inputs)
+            hidden_states = run_layer(layer, layer_inputs, input_param_name, self.gradient_checkpointing_enable)
             layer_inputs[input_param_name] = hidden_states
 
         return {

@@ -94,7 +94,30 @@ def _flash_attention_forward(
         kwarg is not None for kwarg in (cu_seq_lens_q, cu_seq_lens_k, max_length_q, max_length_k)
     )
 
-    if attention_mask is not None:
+    if is_fa_with_varlen_kwargs or is_fa_with_position_ids:
+        q, k, v, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _prepare_from_posids(
+            query_states, key_states, value_states, position_ids
+        )
+
+        if "mps" in str(query_states.device):
+            cu_seq_lens_k = cu_seq_lens_k.clone()
+
+        out = flash_attn_varlen_func(
+            q,
+            k,
+            v,
+            cu_seqlens_q=cu_seq_lens_q,
+            cu_seqlens_k=cu_seq_lens_k,
+            max_seqlen_q=max_length_q,
+            max_seqlen_k=max_length_k,
+            **flash_kwargs,
+        )
+        if isinstance(out, tuple):
+            out = out[0]
+
+        out = out.view(query_states.size(0), -1, out.size(-2), out.size(-1))
+
+    elif attention_mask is not None:
         attention_mask = _convert_4d_mask_to_2d_mask(attention_mask)
 
         q, k, v, indices_q, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _upad_input(
@@ -118,35 +141,6 @@ def _flash_attention_forward(
             out_unpad = out_unpad[0]
 
         out = pad_input(out_unpad, indices_q, query_states.size(0), query_length)
-
-    elif is_fa_with_varlen_kwargs or is_fa_with_position_ids:
-        if cu_seq_lens_q is None or cu_seq_lens_k is None:
-            q, k, v, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _prepare_from_posids(
-                query_states, key_states, value_states, position_ids
-            )
-        else:
-            q = query_states.reshape(-1, query_states.size(-2), query_states.size(-1))
-            k = key_states.reshape(-1, key_states.size(-2), key_states.size(-1))
-            v = value_states.reshape(-1, value_states.size(-2), value_states.size(-1))
-
-        if "mps" in str(query_states.device):
-            cu_seq_lens_k = cu_seq_lens_k.clone()
-
-        out = flash_attn_varlen_func(
-            q,
-            k,
-            v,
-            cu_seqlens_q=cu_seq_lens_q,
-            cu_seqlens_k=cu_seq_lens_k,
-            max_seqlen_q=max_length_q,
-            max_seqlen_k=max_length_k,
-            **flash_kwargs,
-        )
-        if isinstance(out, tuple):
-            out = out[0]
-
-        out = out.view(query_states.size(0), -1, out.size(-2), out.size(-1))
-
     else:
         q_fixed = query_states.transpose(1, 2).contiguous()
         k_fixed = key_states.transpose(1, 2).contiguous()

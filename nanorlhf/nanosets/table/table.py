@@ -19,6 +19,23 @@ class Table:
         self.batches: List[RecordBatch] = batches
         self.length: int = sum(b.length for b in batches)
 
+    def __getitem__(self, item):
+        if isinstance(item, int):
+            n = self.length
+            if item < 0:
+                item += n
+            if not (0 <= item < n):
+                raise IndexError(f"Index {item} out of range [0, {n})")
+            return self.slice(item, 1).to_list()[0]
+        elif isinstance(item, slice):
+            indices = list(range(*item.indices(len(self))))
+            return self.take(indices)
+        else:
+            raise TypeError("Invalid argument type.")
+
+    def __len__(self):
+        return self.length
+
     @classmethod
     def from_batches(cls, batches: List[RecordBatch]) -> "Table":
         return cls(batches)

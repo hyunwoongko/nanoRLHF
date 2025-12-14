@@ -1,10 +1,10 @@
 import logging
-from functools import partial
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import torch
 from torch import nn
 from torch.nn import MSELoss, BCEWithLogitsLoss
+from torch.utils.checkpoint import checkpoint
 from transformers.modeling_outputs import (
     TokenClassifierOutput,
     CausalLMOutputWithPast,
@@ -25,24 +25,26 @@ def is_causal_lm(model):
     return class_name.endswith("CausalLM") or class_name.endswith("LMHeadModel")
 
 
-def run_layer(layer: nn.Module, inputs: Dict[str, Any]) -> torch.Tensor:
-    """
-    Run a single layer with the given inputs and return the hidden states.
-    If the layer returns a tuple or list, the first element is assumed to be the hidden states.
+def run_layer(
+    layer: nn.Module,
+    inputs: Dict[str, Any],
+    input_param_name: str,
+    gradient_checkpointing_enable: bool,
+) -> torch.Tensor:
+    hidden_states = inputs[input_param_name]
+    if gradient_checkpointing_enable:
 
-    Args:
-        layer (nn.Module): The layer to run.
-        inputs (Dict[str, Any]): The input arguments for the layer.
+        def fn(hs, **kw):
+            return layer(**{input_param_name: hs, **kw})
 
-    Returns:
-        torch.Tensor: The hidden states output by the layer.
-    """
-    hidden_states = layer(**inputs)
-    if isinstance(hidden_states, (list, tuple)):
-        hidden_states = hidden_states[0]
-        if not torch.is_tensor(hidden_states):
-            raise RuntimeError("Layer forward did not return a tensor in first position.")
-    return hidden_states
+        kw = {k: v for k, v in inputs.items() if k != input_param_name}
+        out = checkpoint(fn, hidden_states, **kw, use_reentrant=False)
+    else:
+        out = layer(**inputs)
+
+    if isinstance(out, (list, tuple)):
+        out = out[0]
+    return out
 
 
 def get_output_type(model: nn.Module):
@@ -78,6 +80,7 @@ def post_process_hf_model(
     batch_size = logits.shape[0]
 
     if labels is None:
+        print(payload["user_inputs"].keys())
         output_type = get_output_type(model)
         return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
 

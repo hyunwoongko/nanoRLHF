@@ -137,8 +137,8 @@ def preprocess_sft(
         else:
             raise ValueError(f"Unsupported role: {role}")
 
-    input_ids = list(itertools.chain(input_ids))[:max_length]
-    loss_mask = list(itertools.chain(loss_mask))[:max_length]
+    input_ids = list(itertools.chain(*input_ids))[:max_length]
+    loss_mask = list(itertools.chain(*loss_mask))[:max_length]
     return input_ids, loss_mask
 
 

@@ -1,0 +1,39 @@
+data:
+  train_batch_size: 32
+  valid_batch_size: 32
+  train_micro_batch_size: 8
+  valid_micro_batch_size: 1
+  train_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/valid.nano
+  valid_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/valid.nano
+  num_workers: 8
+
+model:
+  partial_pretrain: Qwen/Qwen3-0.6B
+  tensor_parallel_size: 2
+  pipeline_parallel_size: 2
+  data_parallel_size: 2
+  zero_stage: 1
+  host: 127.0.0.1
+  port: 23333
+  backend: nccl
+  seed: 42
+  gradient_checkpointing_enable: true
+
+optim:
+  lr: 5e-6
+  beta1: 0.9
+  beta2: 0.95
+  lr_warmup_steps_ratio: 0.1
+  lr_scheduler: cosine
+  clip_grad: 1.0
+  weight_decay: 1e-3
+
+training:
+  default_local_dir: ./checkpoints
+  project_name: project
+  experiment_name: sft
+  total_epochs: 1
+  wandb: true
+  seed: 42
+  save_freq: 15
+  test_freq: 15

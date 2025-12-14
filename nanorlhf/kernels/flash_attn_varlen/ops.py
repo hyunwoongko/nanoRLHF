@@ -52,4 +52,4 @@ class FlashAttnVarlenFunc(torch.autograd.Function):
             softmax_scale=softmax_scale,
         )
 
-        return dq, dk, dv, None, None, None, None
+        return dq, dk, dv, None, None, None, None, None, None, None

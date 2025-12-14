@@ -1,6 +1,6 @@
 import os
 import random
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import numpy as np
 import torch
@@ -22,7 +22,7 @@ class MPU:
     MPU is a model parallel unit that handles the distribution of model parameters.
 
     Examples:
-        >>> from nanorlhf.nanotron.distributed.mpu import MPU, ParallelMode
+        >>> from nanorlhf.nanotron.distributed.actor_mpu import MPU, ParallelMode
 
         >>> # Initialize from torch.distributed.launch
         >>> mpu = MPU.from_torch(
@@ -928,3 +928,31 @@ class MPU:
                 add_seed(ParallelMode.TENSOR, tp_seed)
 
             set_mode(ParallelMode.DATA)
+
+    @staticmethod
+    def get_rank_from_global_rank(
+        global_rank: int,
+        data_parallel_size: int,
+        tensor_parallel_size: int,
+        pipeline_parallel_size: int,
+    ) -> Tuple[int, int, int]:
+        """
+        Get the (data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank)
+        from the given global rank. This is useful when needs local ranks without
+        distributed initialization.
+
+        Args:
+            global_rank (int): The global rank.
+            data_parallel_size (int): The data parallel size.
+            tensor_parallel_size (int): The tensor parallel size.
+            pipeline_parallel_size (int): The pipeline parallel size.
+
+        Returns:
+            Tuple[int, int, int]: The (data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank).
+        """
+        model_parallel_size = tensor_parallel_size * pipeline_parallel_size
+        data_parallel_rank = global_rank // model_parallel_size
+        model_parallel_rank = global_rank % model_parallel_size
+        tensor_parallel_rank = model_parallel_rank % tensor_parallel_size
+        pipeline_parallel_rank = model_parallel_rank // tensor_parallel_size
+        return data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank

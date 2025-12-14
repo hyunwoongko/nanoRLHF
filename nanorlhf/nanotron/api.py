@@ -21,11 +21,18 @@ def TensorParallel(model: nn.Module, mpu: MPU) -> nn.Module:  # noqa
     return model
 
 
-def PipelineParallel(model: nn.Module, mpu: MPU, micro_batch_size: int = 1) -> nn.Module:  # noqa
+def PipelineParallel(
+    model: nn.Module, mpu: MPU, micro_batch_size: int = 1, gradient_checkpointing_enable: bool = False
+) -> nn.Module:  # noqa
     if mpu.get_world_size(ParallelMode.PIPELINE) == 1:
         return model
 
-    wrapper = PipelineParallelWrapper(model, mpu, micro_batch_size=micro_batch_size)
+    wrapper = PipelineParallelWrapper(
+        model,
+        mpu,
+        micro_batch_size=micro_batch_size,
+        gradient_checkpointing_enable=gradient_checkpointing_enable,
+    )
     register_wrapper(module=model, mode=ParallelMode.PIPELINE, wrapper=wrapper)
     return model
 
@@ -40,7 +47,12 @@ def DataParallel(  # noqa
     if mpu.get_world_size(ParallelMode.DATA) == 1:
         return model, optimizer
 
-    wrapper = DataParallelWrapper(model, mpu, zero_stage=zero_stage, accum_steps=accum_steps)
+    wrapper = DataParallelWrapper(
+        model,
+        mpu,
+        zero_stage=zero_stage,
+        accum_steps=accum_steps,
+    )
     register_wrapper(module=model, mode=ParallelMode.DATA, wrapper=wrapper)
     if optimizer is not None:
         optimizer = wrapper.get_zero_optimizer(optimizer)

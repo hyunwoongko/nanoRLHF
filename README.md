@@ -62,6 +62,17 @@ bash ./scripts/prepare_sft_data.sh
 bash ./scripts/prepare_rl_data.sh 
 ```
 
+## Training
+#### Supervised Fine-tuning
+```bash
+bash ./scripts/train_sft.sh 
+```
+
+#### Reinforcement Learning
+```bash
+bash ./scripts/train_rl.sh 
+```
+
 ## License
 This project is licensed under the Apache 2.0 License.
 ```

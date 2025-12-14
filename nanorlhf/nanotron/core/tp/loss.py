@@ -85,7 +85,7 @@ class VocabParallelCrossEntropyLoss(_Loss):
 
 
 def maybe_vocab_parallel_cross_entropy(logits: torch.Tensor, labels: torch.Tensor, mpu: MPU):
-    if mpu.get_world_size(ParallelMode.TENSOR) > 1:
+    if mpu is not None and mpu.get_world_size(ParallelMode.TENSOR) > 1:
         loss_fn = VocabParallelCrossEntropyLoss(mpu=mpu)
     else:
         loss_fn = torch.nn.CrossEntropyLoss()

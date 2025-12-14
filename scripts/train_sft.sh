@@ -1,0 +1,1 @@
+python3 -m nanorlhf.nanoverl.trainer.sft_trainer --config ./configs/train_sft.yaml
