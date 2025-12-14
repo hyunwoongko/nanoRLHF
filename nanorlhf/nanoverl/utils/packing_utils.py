@@ -71,9 +71,9 @@ def split_packed_batch(
             continue
 
         if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
-            local = cu_seq_lens[seq_start : seq_end + 1].clone()
-            local -= local[0]
-            local_batch[k] = local
+            local_cu_seq_lens = v[seq_start: seq_end + 1].clone()
+            local_cu_seq_lens = local_cu_seq_lens - local_cu_seq_lens[0]
+            local_batch[k] = local_cu_seq_lens
             continue
 
         if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
