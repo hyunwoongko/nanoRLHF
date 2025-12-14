@@ -50,36 +50,19 @@ class LLMEngine:
         return node_ids
 
     def create_model(self, config: Config):
-        refs = []
+        object_refs = []
         for rank in range(config.tensor_parallel_size):
             node_id = self.node_ids[rank % len(self.node_ids)]
-            ref = ModelRunner.options(pinned_node_id=node_id).remote(config, rank=rank, blocking=False)
-            if ref is not None:
-                refs.append(ref)
-
-        while len(refs) < config.tensor_parallel_size:
-            produced = nanoray.drain()
-            if not produced:
-                raise RuntimeError("Failed to launch all ModelRunner actors; no progress during drain.")
-            refs.extend(produced)
-
-        return [nanoray.get(r) for r in refs[: config.tensor_parallel_size]]
+            object_ref = ModelRunner.options(pinned_node_id=node_id).remote(config, rank=rank, blocking=False)
+            object_refs.append(object_ref)
+        return nanoray.get(object_refs)
 
     def run_model(self, seqs, is_prefill):
-        refs = []
+        object_refs = []
         for runner in self.model_runners:
-            ref = runner.run.remote(seqs, is_prefill, blocking=False)
-            if ref is not None:
-                refs.append(ref)
-
-        while len(refs) < len(self.model_runners):
-            produced = nanoray.drain()
-            if not produced:
-                raise RuntimeError("Model forward calls could not be placed; no progress during drain.")
-            refs.extend(produced)
-
-        results = [nanoray.get(r) for r in refs[: len(self.model_runners)]]
-        return results[0]
+            object_ref = runner.run.remote(seqs, is_prefill, blocking=False)
+            object_refs.append(object_ref)
+        return nanoray.get(object_refs)[0]
 
     def add_request(self, prompt, sampling_params):
         if isinstance(prompt, str):

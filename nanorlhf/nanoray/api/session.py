@@ -204,7 +204,7 @@ class Session:
             return worker.store.put(value)  # type: ignore[attr-defined]
         return self._cache_store().put(value)
 
-    def get(self, ref: Optional[ObjectRef]) -> Any:
+    def _get(self, ref: Optional[ObjectRef]) -> Any:
         """
         Retrieve the Python value for a given (possibly pending) reference.
 
@@ -296,6 +296,31 @@ class Session:
             "Object not found in local stores and networking hooks are not configured. "
             "Provide `router` and `rpc` to enable remote get()."
         )
+
+    def get(self, ref: Union[ObjectRef, List[ObjectRef], None]) -> Union[Any, List[Any]]:
+        """
+        Retrieve multiple Python values for a list of (possibly pending) references.
+
+        Args:
+            ref (Union[ObjectRef, List[ObjectRef], None]): Handle(s) to fetch.
+                If `None`, this means the call was enqueued but not placed yet;
+                we will drive the scheduler once and use the most recently produced
+                result as the target. If a list, all entries are fetched.
+
+        Returns:
+            Union[Any, List[Any]]: The stored Python object(s).
+        """
+        if not isinstance(ref, (list, tuple)):
+            return self._get(ref)
+        else:
+            expected = len(ref)
+            object_refs = [r for r in ref if r is not None]
+            while len(object_refs) < expected:
+                produced = self.drain()
+                if not produced:
+                    raise RuntimeError("`nanoray` calls could not be placed; no progress during drain.")
+                object_refs.extend(produced)
+            return [self._get(r) for r in object_refs[:expected]]
 
     def create_placement_group(
         self,
@@ -406,15 +431,15 @@ def get_session() -> Session:
     return _GLOBAL_SESSION
 
 
-def get(ref: ObjectRef) -> Any:
+def get(ref: Union[ObjectRef, List[ObjectRef]]) -> Union[Any, List[Any]]:
     """
     Convenience function: fetch a value via the global session.
 
     Args:
-        ref (ObjectRef): Handle whose value should be fetched.
+        ref (Union[ObjectRef, List[ObjectRef]]): Handle(s) to fetch.
 
     Returns:
-        Any: The stored Python object.
+        Union[Any, List[Any]]: The stored Python object(s).
 
     Examples:
         >>> # Single-node smoke

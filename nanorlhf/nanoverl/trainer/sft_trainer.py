@@ -130,16 +130,6 @@ class SFTTrainer:
 
         return node_ids
 
-    def get_ray(self, object_refs):
-        expected = len(object_refs)
-        object_refs = [r for r in object_refs if r is not None]
-        while len(object_refs) < expected:
-            produced = nanoray.drain()
-            if not produced:
-                raise RuntimeError("nanoray calls could not be placed; no progress during drain.")
-            object_refs.extend(produced)
-        return [nanoray.get(r) for r in object_refs[:expected]]
-
     def create_model(self, config):
         object_refs = []
         for global_rank in range(self.global_world_size):
@@ -153,7 +143,7 @@ class SFTTrainer:
                 blocking=False,
             )
             object_refs.append(object_ref)
-        return self.get_ray(object_refs)
+        return nanoray.get(object_refs)
 
     def step(self, input_batch, train: bool):
         per_data_parallel_batches = []
@@ -169,8 +159,7 @@ class SFTTrainer:
             input_batch = per_data_parallel_batches[data_parallel_rank]
             object_ref = self.models[global_rank].step.remote(input_batch, train, blocking=False)
             object_refs.append(object_ref)
-
-        return self.get_ray(object_refs)[0]
+        return nanoray.get(object_refs)[0]
 
     def save_parallelized(self):
         save_dir = f"{self.config.training.default_local_dir}/global_step_{self.global_step}"
@@ -178,7 +167,7 @@ class SFTTrainer:
         for model in self.models:
             object_ref = model.save_parallelized.remote(save_dir, blocking=False)
             object_refs.append(object_ref)
-        self.get_ray(object_refs)
+        nanoray.get(object_refs)
 
         with open(f"{self.config.training.default_local_dir}/latest_checkpointed_iteration.txt", "w") as f:
             f.write(str(self.global_step))
@@ -195,13 +184,13 @@ class SFTTrainer:
                 self.global_step += 1
 
                 output = self.step(batch, train=True)
-                train_loss = output["loss"]
-                pbar.set_postfix(loss=f"{train_loss:.6f}", lr=f"{output['lr']:.6e}", global_step=self.global_step)
+                train_loss, lr = output["loss"], output["lr"]
+                pbar.set_postfix(loss=f"{train_loss:.6f}", lr=f"{lr:.6e}", global_step=self.global_step)
                 self.log(
                     {
                         "train/loss": train_loss,
                         "train/epoch": epoch,
-                        "train/lr": output["lr"],
+                        "train/lr": lr,
                         "train/global_step": self.global_step,
                     }
                 )
