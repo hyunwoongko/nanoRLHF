@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, Optional
 
 import torch
 
@@ -35,34 +35,34 @@ def packed_collate_fn(batch):
     }
 
 
-def packed_distributed_sampler(
+def split_packed_batch(
     batch: Dict[str, Any],
-    data_parallel_rank: int,
-    data_parallel_size: int,
+    chunk_idx: int,
+    num_chunks: int,
+    cu_seq_lens: Optional[torch.Tensor] = None,
 ):
-    if data_parallel_size == 1:
-        return batch
+    if cu_seq_lens is None:
+        if "position_ids" not in batch:
+            raise KeyError("batch must contain 'position_ids' to split as micro batches")
+        pos = batch["position_ids"]
+        starts = (pos[0] == 0).nonzero(as_tuple=False).flatten()
+        ends = torch.cat([starts[1:], torch.tensor([pos[0].numel()], device=pos.device)], dim=0)
+        cu_seq_lens = torch.cat([torch.zeros(1, device=pos.device, dtype=ends.dtype), ends], dim=0)
 
-    cu_seq_lens = batch["cu_seq_lens_q"]
-    num_seqs = int(cu_seq_lens.numel()) - 1
-    if num_seqs <= 0:
-        raise ValueError("No sequences found in the packed batch.")
+    num_seqs = cu_seq_lens.numel() - 1
+    chunk_size = num_seqs // num_chunks
+    seq_start = chunk_idx * chunk_size
+    seq_end = seq_start + chunk_size
 
-    if num_seqs % data_parallel_size != 0:
-        raise ValueError(
-            f"Number of sequences {num_seqs} is not divisible by data parallel size {data_parallel_size}."
-        )
-
-    local_num_seqs = num_seqs // data_parallel_size
-    seq_start = data_parallel_rank * local_num_seqs
-    seq_end = seq_start + local_num_seqs
+    if seq_start >= num_seqs:
+        raise IndexError("chunk_rank out of range")
 
     tok_start = cu_seq_lens[seq_start].item()
     tok_end = cu_seq_lens[seq_end].item()
     total_tokens = cu_seq_lens[-1].item()
 
     if not (0 <= tok_start <= tok_end <= total_tokens):
-        raise ValueError("Invalid token range computed for the data parallel split.")
+        raise ValueError("Invalid token slice")
 
     local_batch = {}
     for k, v in batch.items():
@@ -71,13 +71,15 @@ def packed_distributed_sampler(
             continue
 
         if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
-            local_cu_seq_lens = v[seq_start : seq_end + 1].clone()
-            local_cu_seq_lens = local_cu_seq_lens - local_cu_seq_lens[0]
-            local_batch[k] = local_cu_seq_lens
+            local = cu_seq_lens[seq_start : seq_end + 1].clone()
+            local -= local[0]
+            local_batch[k] = local
             continue
 
         if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
             local_batch[k] = v[:, tok_start:tok_end].contiguous()
             continue
+
         local_batch[k] = v
+
     return local_batch

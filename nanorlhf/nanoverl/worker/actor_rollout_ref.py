@@ -8,6 +8,7 @@ from nanorlhf.kernels import patch_kernel
 from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel
 from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
+from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 
 def initialize_model(config, rank, enable_gradient: bool = False):
@@ -74,6 +75,7 @@ def initialize_model(config, rank, enable_gradient: bool = False):
             mpu=mpu,
             optimizer=optimizer,
             zero_stage=config.model.zero_stage if enable_gradient else 0,
+            accum_steps=config.data.train_batch_size // config.data.train_micro_batch_size,
         )
         model.parallelize()
     else:
@@ -107,43 +109,44 @@ class ActorRolloutRef:
         if train:
             self.actor.train()
             self.optimizer.zero_grad(set_to_none=True)
+            micro_batch_size = self.config.data.train_micro_batch_size
         else:
             self.actor.eval()
+            micro_batch_size = self.config.data.valid_micro_batch_size
 
-        loss_num = torch.zeros((), device=batch["input_ids"].device, dtype=torch.float32)
-        loss_den = torch.zeros((), device=batch["input_ids"].device, dtype=torch.float32)
+        batch_size = (batch["position_ids"] == 0).sum().item()
+        num_micro_batches = batch_size // micro_batch_size
+
+        if self.config.model.pipeline_parallel_size > 1:
+            pp_wrapper = self.actor.__nanotron_wrappers__[ParallelMode.PIPELINE]
+            pp_wrapper.micro_batch_size = micro_batch_size
+            micro_batches = pp_wrapper._split_packed_batches(batch)
+            micro_batch_iterator = enumerate(self.actor(**batch))
+        else:
+            micro_batches = [split_packed_batch(batch, i, num_micro_batches) for i in range(num_micro_batches)]
+            micro_batch_iterator = enumerate(micro_batches)
+
+        device = batch["input_ids"].device
+        sum_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
+        num_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
+
+        num_micro_valid_token_per_batch = [(m["labels"][:, 1:] != -100).sum() for m in micro_batches]
+        num_total_valid_tokens = sum(num_micro_valid_token_per_batch).to(device).clamp_min(1)
 
         with torch.set_grad_enabled(train):
-            if self.config.model.pipeline_parallel_size > 1:
-                pp_wrapper = self.actor.__nanotron_wrappers__[ParallelMode.PIPELINE]
-                pp_wrapper.micro_batch_size = (
-                    self.config.data.train_micro_batch_size if train else self.config.data.valid_micro_batch_size
-                )
-                micro_batches = pp_wrapper._split_packed_batches(batch)
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    for micro_idx, micro_output in enumerate(self.actor(**batch)):
-                        assert micro_idx < len(micro_batches)
-                        micro_batch = micro_batches[micro_idx]
-                        micro_loss = micro_output.loss
+            for mico_idx, micro_input_or_output in micro_batch_iterator:
+                if self.config.model.pipeline_parallel_size > 1:
+                    micro_loss = micro_input_or_output.loss
+                else:
+                    micro_loss = self.actor(**micro_input_or_output).loss
 
-                        if train:
-                            micro_loss.backward()
+                num_micro_valid_tokens = num_micro_valid_token_per_batch[mico_idx].to(device).detach()
+                sum_of_valid_losses += (micro_loss.detach() * num_micro_valid_tokens).float()
+                num_of_valid_losses += num_micro_valid_tokens.float()
 
-                        micro_denom = (micro_batch["labels"][:, 1:] != -100).sum()
-                        micro_denom = micro_denom.to(dtype=micro_loss.dtype, device=micro_loss.device)
-                        loss_num += (micro_loss.detach() * micro_denom.detach()).float()
-                        loss_den += micro_denom.detach().float()
-            else:
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    loss = self.actor(**batch).loss
-
-                    if train:
-                        loss.backward()
-
-                    denom = (batch["labels"][:, 1:] != -100).sum()
-                    denom = denom.to(dtype=loss.dtype, device=loss.device)
-                    loss_num += (loss.detach() * denom).float()
-                    loss_den += denom.float()
+                if train:
+                    contribution = num_micro_valid_tokens / num_total_valid_tokens
+                    (micro_loss * contribution).backward()
 
             if train and self.optimizer is not None:
                 torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.optim.clip_grad)
@@ -152,10 +155,10 @@ class ActorRolloutRef:
                     self.scheduler.step()
 
         if self.config.model.data_parallel_size > 1:
-            dist.all_reduce(loss_num, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
-            dist.all_reduce(loss_den, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
+            dist.all_reduce(sum_of_valid_losses, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
+            dist.all_reduce(num_of_valid_losses, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
 
-        final_loss = (loss_num / loss_den.clamp_min(1.0)).item()
+        final_loss = (sum_of_valid_losses / num_of_valid_losses.clamp_min(1.0)).item()
         lr = self.optimizer.param_groups[0]["lr"]
         return {"loss": float(final_loss), "lr": float(lr)}
 

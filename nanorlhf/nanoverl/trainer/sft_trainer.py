@@ -9,7 +9,7 @@ from tqdm import tqdm
 from nanorlhf import nanoray
 from nanorlhf.nanotron import MPU
 from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
-from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn, packed_distributed_sampler
+from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn, split_packed_batch
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 from nanorlhf.nanoverl.worker.actor_rollout_ref import ActorRolloutRef
 
@@ -20,6 +20,19 @@ class SFTTrainer:
         self.train_dataloader = self.load_dataloader(self.config, split="train")
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
+
+        if self.config.data.train_batch_size % self.config.data.train_micro_batch_size != 0:
+            raise ValueError(
+                "`train_batch_size` must be divisible by `train_micro_batch_size`. "
+                f"Got train_batch_size={self.config.data.train_batch_size} and "
+                f"train_micro_batch_size={self.config.data.train_micro_batch_size}."
+            )
+        if self.config.data.valid_batch_size % self.config.data.valid_micro_batch_size != 0:
+            raise ValueError(
+                "`valid_batch_size` must be divisible by `valid_micro_batch_size`. "
+                f"Got valid_batch_size={self.config.data.valid_batch_size} and "
+                f"valid_micro_batch_size={self.config.data.valid_micro_batch_size}."
+            )
 
         self.global_world_size = (
             self.config.model.data_parallel_size
@@ -69,11 +82,11 @@ class SFTTrainer:
             shuffle = drop_last = False
 
             if config.model.pipeline_parallel_size > 1:
-                micro_batch_size = config.data.valid_micro_batch_size
-                assert len(dataset) % micro_batch_size == 0, (
+                valid_micro_batch_size = config.data.valid_micro_batch_size
+                assert len(dataset) % valid_micro_batch_size == 0, (
                     "For pipeline parallel validation, because we don't drop the last incomplete batch, "
-                    "the dataset size must be divisible by the micro batch size. "
-                    f"valid dataset size: {len(dataset)}, valid micro batch size: {micro_batch_size}"
+                    "the dataset size must be divisible by the `valid_micro_batch_size`. "
+                    f"valid dataset size: {len(dataset)}, valid micro batch size: {valid_micro_batch_size}."
                 )
 
         return DataLoader(
@@ -145,10 +158,8 @@ class SFTTrainer:
     def step(self, input_batch, train: bool):
         per_data_parallel_batches = []
         for data_parallel_rank in range(self.config.model.data_parallel_size):
-            data_parallel_batch = packed_distributed_sampler(
-                input_batch,
-                data_parallel_rank=data_parallel_rank,
-                data_parallel_size=self.config.model.data_parallel_size,
+            data_parallel_batch = split_packed_batch(
+                input_batch, chunk_idx=data_parallel_rank, num_chunks=self.config.model.data_parallel_size
             )
             per_data_parallel_batches.append(data_parallel_batch)
 
@@ -184,13 +195,13 @@ class SFTTrainer:
                 self.global_step += 1
 
                 output = self.step(batch, train=True)
-                train_loss = float(output["loss"])
+                train_loss = output["loss"]
                 pbar.set_postfix(loss=f"{train_loss:.6f}", lr=f"{output['lr']:.6e}", global_step=self.global_step)
                 self.log(
                     {
                         "train/loss": train_loss,
                         "train/epoch": epoch,
-                        "train/lr": float(output["lr"]),
+                        "train/lr": output["lr"],
                         "train/global_step": self.global_step,
                     }
                 )
@@ -199,7 +210,7 @@ class SFTTrainer:
                     valid_losses = []
                     for valid_batch in tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True):
                         valid_output = self.step(valid_batch, train=False)
-                        valid_losses.append(float(valid_output["loss"]))
+                        valid_losses.append(valid_output["loss"])
                     mean_valid_loss = sum(valid_losses) / max(len(valid_losses), 1)
                     self.log(
                         {

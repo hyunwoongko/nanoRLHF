@@ -23,6 +23,7 @@ from nanorlhf.nanotron.utils.wrapping import (
     tag_modules,
     tag_module,
 )
+from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 
 class PipelineParallelWrapper(ParallelizationWrapper):
@@ -279,47 +280,23 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                     m.bias.data = bias
 
     def _split_packed_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if "position_ids" not in batches:
+            raise KeyError("batch must contain 'position_ids' to split as micro batches")
         pos = batches["position_ids"]
-        pos_1d = pos[0]
-        starts = (pos_1d == 0).nonzero(as_tuple=False).flatten()
-        ends = torch.cat([starts[1:], torch.tensor([pos_1d.numel()], device=pos.device, dtype=starts.dtype)], dim=0)
-        cu_seq_lens = torch.cat([torch.zeros(1, device=pos.device, dtype=ends.dtype), ends], dim=0).to(torch.int32)
-        num_seqs = int(cu_seq_lens.numel() - 1)
-        assert num_seqs % self.micro_batch_size == 0, (
-            "For packed batches, number of sequences must be divisible by micro_batch_size. "
-            f"Got num_seqs={num_seqs}, micro_batch_size={self.micro_batch_size}."
-        )
+        starts = (pos[0] == 0).nonzero(as_tuple=False).flatten()
+        ends = torch.cat([starts[1:], torch.tensor([pos[0].numel()], device=pos.device)], dim=0)
+        cu_seq_lens = torch.cat([torch.zeros(1, device=pos.device, dtype=ends.dtype), ends], dim=0)
+        num_seqs = cu_seq_lens.numel() - 1
 
         self.batch_size = num_seqs
         self.num_micro_batches = self.batch_size // self.micro_batch_size
+
         micro_batches = [{} for _ in range(self.num_micro_batches)]
-        total_tokens = int(cu_seq_lens[-1].item())
-
         for micro_idx in range(self.num_micro_batches):
-            seq_start = micro_idx * self.micro_batch_size
-            seq_end = seq_start + self.micro_batch_size
+            micro_batches[micro_idx] = split_packed_batch(
+                batches, chunk_idx=micro_idx, num_chunks=self.num_micro_batches, cu_seq_lens=cu_seq_lens
+            )
 
-            tok_start = int(cu_seq_lens[seq_start].item())
-            tok_end = int(cu_seq_lens[seq_end].item())
-            micro_batch: Dict[str, Any] = {}
-
-            for k, v in batches.items():
-                if not torch.is_tensor(v):
-                    micro_batch[k] = v
-                    continue
-
-                if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
-                    micro_cu_seq_lens = cu_seq_lens[seq_start : seq_end + 1].clone()
-                    micro_cu_seq_lens = micro_cu_seq_lens - micro_cu_seq_lens[0]
-                    micro_batch[k] = micro_cu_seq_lens
-                    continue
-
-                if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
-                    micro_batch[k] = v[:, tok_start:tok_end]
-                    continue
-
-                micro_batch[k] = v
-            micro_batches[micro_idx] = micro_batch
         return micro_batches
 
     def _split_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -399,7 +376,9 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         hidden_states = snapshot.output_tensor
         layer_inputs = {snapshot.input_param_name: snapshot.output_tensor, **snapshot.kwargs}
         for layer in self.mp_plan.main_module_list[1 : self.local_end]:
-            hidden_states = run_layer(layer, layer_inputs, snapshot.input_param_name, self.gradient_checkpointing_enable)
+            hidden_states = run_layer(
+                layer, layer_inputs, snapshot.input_param_name, self.gradient_checkpointing_enable
+            )
             layer_inputs[snapshot.input_param_name] = hidden_states
 
         return {
