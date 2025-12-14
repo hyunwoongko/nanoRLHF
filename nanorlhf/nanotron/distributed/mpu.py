@@ -22,7 +22,7 @@ class MPU:
     MPU is a model parallel unit that handles the distribution of model parameters.
 
     Examples:
-        >>> from nanorlhf.nanotron.distributed.actor_mpu import MPU, ParallelMode
+        >>> from nanorlhf.nanotron.distributed.mpu import MPU, ParallelMode
 
         >>> # Initialize from torch.distributed.launch
         >>> mpu = MPU.from_torch(
