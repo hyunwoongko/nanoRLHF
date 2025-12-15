@@ -67,7 +67,7 @@ bash ./scripts/prepare_sft_data.sh
 Supervised fine-tuning is performed using [Qwen3-4B-base](https://huggingface.co/Qwen/Qwen3-4B-base) model with 3D parallelism by default config. 
 If you want to modify hyperparameters, please edit `configs/train_sft.yaml` file.
 Running the following command will start supervised fine-tuning. 
-Moreover, you can monitor the training process using wandb if you have wandb account.
+Moreover, you can monitor the training process if you have wandb account.
 
 ```bash
 bash ./scripts/train_sft.sh 
