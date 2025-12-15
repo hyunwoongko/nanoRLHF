@@ -20,6 +20,7 @@ class SFTTrainer:
         self.train_dataloader = self.load_dataloader(self.config, split="train")
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
+        self.global_step = 0
 
         if self.config.data.train_batch_size % self.config.data.train_micro_batch_size != 0:
             raise ValueError(
@@ -50,7 +51,6 @@ class SFTTrainer:
             )
             self.data_parallel_ranks.append(dp_rank)
 
-        self.global_step = 0
         self.node_ids = self.init_ray(self.config)
         self.models = self.create_model(self.config)
         self.maybe_init_logger()
