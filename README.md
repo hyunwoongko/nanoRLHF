@@ -30,7 +30,7 @@ Even without massive resources, I still believe that individuals can create mean
 | 🟢 DONE | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
 
 ## Pre-requisites
-I worked on this project using a single server equipped with 8 H200 GPUs. 
+I worked on this project using a single server with 8 * H200 GPUs. 
 It should also run well on A100 80GB GPUs, but to fully experiment with all features including 3D parallelism, a server with at least 8 GPUs is required.
 
 ## Installation
