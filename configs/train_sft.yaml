@@ -32,8 +32,8 @@ training:
   default_local_dir: ./checkpoints
   project_name: math
   experiment_name: sft
-  total_epochs: 1
+  total_epochs: 3
   wandb: true
   seed: 42
-  save_freq: 15
-  test_freq: 15
+  save_freq: 500
+  test_freq: 500
