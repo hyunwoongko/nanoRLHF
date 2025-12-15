@@ -157,14 +157,19 @@ class SFTTrainer:
         return nanoray.get(object_refs)[0]
 
     def save_parallelized(self):
-        save_dir = f"{self.config.training.default_local_dir}/global_step_{self.global_step}"
+        experiment_dir = (
+            f"{self.config.training.default_local_dir}"
+            f"/{self.config.training.project_name}"
+            f"/{self.config.training.experiment_name}"
+        )
+        save_dir = f"{experiment_dir}/step_{self.global_step}"
         object_refs = []
         for model in self.models:
             object_ref = model.save_parallelized.remote(save_dir, blocking=False)
             object_refs.append(object_ref)
         nanoray.get(object_refs)
 
-        with open(f"{self.config.training.default_local_dir}/latest_checkpointed_iteration.txt", "w") as f:
+        with open(f"{experiment_dir}/latest_checkpointed_iteration.txt", "w") as f:
             f.write(str(self.global_step))
         print(f"\n[SAVE] Saved checkpoint at step {self.global_step} to {save_dir}")
 
