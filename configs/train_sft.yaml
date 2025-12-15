@@ -1,6 +1,6 @@
 data:
   train_batch_size: 128
-  valid_batch_size: 128
+  valid_batch_size: 100
   train_micro_batch_size: 32
   valid_micro_batch_size: 20
   train_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/train.nano
