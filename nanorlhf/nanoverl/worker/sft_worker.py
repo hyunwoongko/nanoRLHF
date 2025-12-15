@@ -11,29 +11,23 @@ from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 
-def initialize_model(config, rank, enable_gradient: bool = False):
+def initialize_model(config, rank):
     model = AutoModelForCausalLM.from_pretrained(
         config.model.partial_pretrain,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
     )
 
-    if enable_gradient:
-        optimizer = AdamW(
-            get_optimizer_param_groups(model, float(config.optim.weight_decay)),
-            lr=float(config.optim.lr),
-            weight_decay=float(config.optim.weight_decay),
-            betas=(float(config.optim.beta1), float(config.optim.beta2)),
-        )
-        if config.model.gradient_checkpointing_enable:
-            if config.model.pipeline_parallel_size == 1:
-                # pipeline parallel engine controls grad checkpointing itself.
-                model.gradient_checkpointing_enable()
-    else:
-        optimizer = None
-        model.eval()
-        for p in model.parameters():
-            p.requires_grad_(False)
+    optimizer = AdamW(
+        get_optimizer_param_groups(model, float(config.optim.weight_decay)),
+        lr=float(config.optim.lr),
+        weight_decay=float(config.optim.weight_decay),
+        betas=(float(config.optim.beta1), float(config.optim.beta2)),
+    )
+    if config.model.gradient_checkpointing_enable:
+        if config.model.pipeline_parallel_size == 1:
+            # pipeline parallel engine controls grad checkpointing itself.
+            model.gradient_checkpointing_enable()
 
     total_world_size = (
         config.model.data_parallel_size * config.model.tensor_parallel_size * config.model.pipeline_parallel_size
@@ -92,7 +86,7 @@ class SFTWorker:
         self.rank = rank
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model.partial_pretrain, trust_remote_code=True)
-        self.model, self.mpu, self.optimizer = initialize_model(config, rank, enable_gradient=True)
+        self.model, self.mpu, self.optimizer = initialize_model(config, rank)
         self.model.train()
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)
 
