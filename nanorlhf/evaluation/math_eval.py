@@ -1,14 +1,16 @@
 """
 python3 -m nanorlhf.evaluation.math_eval \
     --model <model_name_or_path> \
-    --test_data MATH-500
+    --test MATH-500
 """
+
 import json
 import os
 from argparse import ArgumentParser
 from typing import Optional
 
 from math_verify import parse, verify
+from transformers import AutoTokenizer
 
 from nanorlhf.nanosets import load_dataset
 from nanorlhf.nanovllm import LLM, SamplingParams
@@ -52,19 +54,21 @@ def get_unnormalized_answer(text: str) -> str:
         return "[invalidanswer]"
 
 
-def load_test_dataset(test_data):
-    data_path = f"./data/{test_data}/dev.jsonl"
+def load_test_dataset(test):
+    data_path = f"./data/{test}/test.jsonl"
     return load_dataset(data_path)
 
 
 def generate_model_answer(model, dataset):
     sampling_params = SamplingParams(max_tokens=2048, temperature=0.0, top_p=1.0)
+    tokenizer = AutoTokenizer.from_pretrained(model)
     llm = LLM(model)
 
     prompts = []
     for idx in range(len(dataset)):
         sample = dataset[idx]
         messages = [{"role": "user", "content": sample["problem"]}]
+        messages = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompts.append(messages)
 
     outputs = llm.generate(prompts, sampling_params=sampling_params)
@@ -73,6 +77,7 @@ def generate_model_answer(model, dataset):
 
 def evaluate_model_answer(model_outputs, dataset):
     accuracy = 0
+    model_outputs_for_saving = []
     for idx in range(len(dataset)):
         sample = dataset[idx]
         model_text = model_outputs[idx]["text"]
@@ -87,24 +92,52 @@ def evaluate_model_answer(model_outputs, dataset):
 
         model_answer = parse(get_unnormalized_answer(model_text))
         accuracy += int(verify(gold_answer, model_answer))
+        model_outputs_for_saving.append(
+            {
+                "problem": sample["problem"],
+                "model_text": model_text,
+                "gold_text": sample["solution"],
+                "model_answer": str(model_answer),
+                "gold_answer": str(gold_answer),
+            }
+        )
 
     accuracy /= len(dataset)
-    return {"accuracy": accuracy}
+    evaluation_result = {"accuracy": accuracy}
+    return evaluation_result, model_outputs_for_saving
 
 
 def evaluate(args):
-    dataset = load_test_dataset(args.test_data)
+    print("Loading test dataset...")
+    dataset = load_test_dataset(args.test)
+    print("Generating model answers...")
     model_outputs = generate_model_answer(args.model, dataset)
-    eval_output = evaluate_model_answer(model_outputs, dataset)
+    print("Evaluating model answers...")
+    eval_output, model_outputs_for_saving = evaluate_model_answer(model_outputs, dataset)
+    print(f"Evaluation result: {eval_output}")
 
-    eval_result_dir = f"./eval/{args.model}/{args.test_data}"
+    eval_result_dir = os.path.join(args.model, "eval", args.test)
     os.makedirs(eval_result_dir, exist_ok=True)
+
     eval_result_path = os.path.join(eval_result_dir, "score.json")
-    json.dump(eval_output, open(eval_result_path, "w"))
+    with open(eval_result_path, "w") as f:
+        json.dump(eval_output, f)
+
+    output_path = os.path.join(eval_result_dir, "model_outputs.jsonl")
+    with open(output_path, "w") as f:
+        for model_output in model_outputs_for_saving:
+            json.dump(f"{model_output}\n", f)
+
+    print(f"Saved evaluation result to {eval_result_path} 😊")
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("--model", type=str, required=True, help="Model name or path.")
-    parser.add_argument("--test_data", type=str, default="MATH-500", help="Test dataset to evaluate on.")
-    evaluate(parser.parse_args())
+    parser.add_argument("--test", type=str, default="MATH-500", help="Datasets to evaluate on. comma-separated.")
+    args = parser.parse_args()
+
+    datasets = args.test.split(",")
+    for test_data in datasets:
+        args.test = test_data
+        evaluate(args)

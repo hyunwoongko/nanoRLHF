@@ -27,7 +27,7 @@ class ModelMerger:
             pipeline_parallel_size = config.model.pipeline_parallel_size
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            config.model.model_path,
+            config.model.model_name_or_path,
             torch_dtype=torch.bfloat16,
         )
         self.mpu = MPU(

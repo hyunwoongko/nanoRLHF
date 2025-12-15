@@ -1,3 +1,6 @@
+model_path="./checkpoints/math/sft"
+global_step=2109
+
 python3 -m nanorlhf.evaluation.math_eval \
-  --model Qwen/Qwen3-4B \
-  --test_data MATH-500
+  --model "$model_path/step_$global_step/merged" \
+  --test MATH-500
