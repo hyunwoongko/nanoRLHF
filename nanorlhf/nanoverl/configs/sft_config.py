@@ -22,6 +22,9 @@ class SFTConfig:
         optim_config = OptimConfig(**config_dict.get("optim", {}))
         training_config = TrainingConfig(**config_dict.get("training", {}))
 
+        if model_config.tokenizer_name_or_path is None:
+            model_config.tokenizer_name_or_path = model_config.model_name_or_path
+
         return cls(
             data=data_config,
             model=model_config,

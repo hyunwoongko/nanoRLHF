@@ -38,40 +38,62 @@ In this project, internal APIs from libraries such as Hugging Face Transformers 
 It is strongly recommended to run the code in an isolated environment such as a Conda virtual environment.
 
 ```bash
+# 1) create conda environment
 conda create -n nanorlhf python=3.10
 conda activate nanorlhf
 
+# 2) install PyTorch for your environment from https://pytorch.org/get-started/locally/
+# e.g. pip install torch --index-url https://download.pytorch.org/whl/cu126
+
+# 3) install nanoRLHF
 git clone https://github.com/hyunwoongko/nanoRLHF
 cd nanoRLHF
 pip install -e .
 ```
 
-## Preparing Dataset
-#### Supervised Fine-tuning
+## Let’s dive into RLHF training!
+#### 1) Prepare Supervised Fine-tuning Dataset
 
 In the examples included in this project, supervised fine-tuning is performed using [NuminaMath-CoT-Small-Hard-200k](https://huggingface.co/datasets/NotASI/NuminaMath-CoT-Small-Hard-200k). 
 From the original dataset, 180k samples are used as training data, and 1k samples are used as validation data.
-Running the following command will tokenize the dataset and save it to the specified path.
+Running the following command will tokenize the dataset and save it as zero-copy `.nano` format (similar with `.arrow` format)
 
 ```bash
 bash ./scripts/prepare_sft_data.sh 
 ```
 
-#### Reinforcement Learning
-```bash
-bash ./scripts/prepare_rl_data.sh 
-```
+#### 2) Supervised Fine-tuning
 
-## Training
-#### Supervised Fine-tuning
+Supervised fine-tuning is performed using [Qwen3-4B-base](https://huggingface.co/Qwen/Qwen3-4B-base) model
+with 3D parallelism (tensor model parallelism + pipeline model parallelism + ZeRO data parallelism stage 1). 
+The example uses configuration in `configs/train_sft.yaml`, and if you want to modify hyperparameters, please edit the configuration file.
+Running the following command will start supervised fine-tuning. 
+Moreover, you can monitor the training process using wandb if you have wandb account.
+
 ```bash
 bash ./scripts/train_sft.sh 
 ```
 
-#### Reinforcement Learning
+#### 3) Merge Parallelized Checkpoints
+
+After supervised fine-tuning is completed, the parallelized checkpoints are saved in the directory you specified (default is `./checkpoints`)
+To use the model for inference or further training, you need to merge the parallelized checkpoints into a single model checkpoint.
+The following script will merge the checkpoints and save them in `$YOUR_CHECKPOINT_PATH/merged` directory.
+
 ```bash
-bash ./scripts/train_rl.sh 
+bash ./scripts/merge_sft_model.sh 
 ```
+
+#### 4) Evaluate Supervised Fine-tuned Model
+After merging the supervised fine-tuned model, you can evaluate it using the following script.
+The evaluation is performed using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset (500 samples from MATH dataset)
+
+```
+bash ./scripts/eval_sft_model.sh 
+```
+
+#### 5) Preparing Reinforcement Learning Dataset
+⚠️ Currently work in progress
 
 ## License
 This project is licensed under the Apache 2.0 License.

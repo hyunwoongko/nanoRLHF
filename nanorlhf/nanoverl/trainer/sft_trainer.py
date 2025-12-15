@@ -15,8 +15,8 @@ from nanorlhf.nanoverl.worker.sft_worker import SFTWorker
 
 
 class SFTTrainer:
-    def __init__(self, config_path: str):
-        self.config = SFTConfig.from_yaml(config_path)
+    def __init__(self, config: str):
+        self.config = SFTConfig.from_yaml(config)
         self.train_dataloader = self.load_dataloader(self.config, split="train")
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)

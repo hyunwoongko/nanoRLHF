@@ -1,3 +1,8 @@
+"""
+python3 -m nanorlhf.nanoverl.worker.sft_worker \
+    --config ./configs/train_sft.yaml
+"""
+
 import torch
 import torch.distributed as dist
 from torch.optim import AdamW
@@ -13,7 +18,7 @@ from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 def initialize_model(config, rank):
     model = AutoModelForCausalLM.from_pretrained(
-        config.model.partial_pretrain,
+        config.model.model_name_or_path,
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
     )
@@ -30,23 +35,23 @@ def initialize_model(config, rank):
             # pipeline parallel engine controls grad checkpointing itself.
             model.gradient_checkpointing_enable()
 
-    total_world_size = (
+    global_world_size = (
         config.model.data_parallel_size * config.model.tensor_parallel_size * config.model.pipeline_parallel_size
     )
 
-    assert total_world_size <= 8, (
+    assert global_world_size <= 8, (
         "Currently don't support multi-node training. "
         "Please set data_parallel_size * tensor_parallel_size * pipeline_parallel_size <= 8."
     )
 
     mpu = None
-    if total_world_size > 1:
-        assert rank < total_world_size, "rank must be < dp*tp*pp"
+    if global_world_size > 1:
+        assert rank < global_world_size, "rank must be < dp*tp*pp"
         mpu = MPU(
             rank=rank,
             local_rank=rank,
-            world_size=total_world_size,
-            local_world_size=total_world_size,
+            world_size=global_world_size,
+            local_world_size=global_world_size,
             host=config.model.host,
             port=config.model.port,
             data_parallel_size=config.model.data_parallel_size,
@@ -86,7 +91,8 @@ class SFTWorker:
         self.config = config
         self.rank = rank
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model.partial_pretrain, trust_remote_code=True)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer_name_or_path, trust_remote_code=True)
+        # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
         self.model, self.mpu, self.optimizer = initialize_model(config, rank)
         self.model.train()
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)

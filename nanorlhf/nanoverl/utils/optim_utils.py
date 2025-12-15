@@ -40,6 +40,9 @@ def get_scheduler(config, optimizer, total_steps):
     if scheduler_name not in ("cosine", "linear"):
         raise ValueError(f"Unsupported lr_scheduler={scheduler_name}. Only 'cosine' and 'linear' are supported.")
 
+    base_lr = float(config.optim.lr)
+    min_lr = float(config.optim.min_lr) if config.optim.min_lr is not None else 0.0
+    min_lr_ratio = 0.0 if min_lr <= 0.0 else min(1.0, min_lr / base_lr)
     warmup_steps = int(total_steps * float(config.optim.lr_warmup_steps_ratio))
 
     def lr_lambda(step: int) -> float:
@@ -49,9 +52,10 @@ def get_scheduler(config, optimizer, total_steps):
         progress = float(step - warmup_steps) / max(1, total_steps - warmup_steps)
 
         if scheduler_name == "linear":
-            return max(0.0, 1.0 - progress)
+            raw = max(0.0, 1.0 - progress)
         else:
-            return 0.5 * (1.0 + math.cos(math.pi * progress))
+            raw = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * raw
 
     if isinstance(optimizer, ZeroOptimizer):
         return LambdaLR(optimizer.base, lr_lambda=lr_lambda)
