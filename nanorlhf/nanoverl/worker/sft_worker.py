@@ -24,6 +24,7 @@ def initialize_model(config, rank):
         weight_decay=float(config.optim.weight_decay),
         betas=(float(config.optim.beta1), float(config.optim.beta2)),
     )
+
     if config.model.gradient_checkpointing_enable:
         if config.model.pipeline_parallel_size == 1:
             # pipeline parallel engine controls grad checkpointing itself.
