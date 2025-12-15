@@ -120,8 +120,8 @@ class SFTWorker:
         sum_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
         num_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
 
-        num_micro_valid_token_per_batch = [(m["labels"][:, 1:] != -100).sum() for m in micro_batches]
-        num_total_valid_tokens = sum(num_micro_valid_token_per_batch).to(device).clamp_min(1)
+        num_micro_valid_tokens_per_batch = [(m["labels"][:, 1:] != -100).sum() for m in micro_batches]
+        num_total_valid_tokens = sum(num_micro_valid_tokens_per_batch).to(device).clamp_min(1)
 
         with torch.set_grad_enabled(train):
             for mico_idx, micro_input_or_output in micro_batch_iterator:
@@ -130,7 +130,7 @@ class SFTWorker:
                 else:
                     micro_loss = self.model(**micro_input_or_output).loss
 
-                num_micro_valid_tokens = num_micro_valid_token_per_batch[mico_idx].to(device).detach()
+                num_micro_valid_tokens = num_micro_valid_tokens_per_batch[mico_idx].to(device).detach()
                 sum_of_valid_losses += (micro_loss.detach() * num_micro_valid_tokens).float()
                 num_of_valid_losses += num_micro_valid_tokens.float()
 
