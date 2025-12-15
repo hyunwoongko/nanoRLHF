@@ -9,8 +9,6 @@ from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParalle
 from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
-from nanorlhf.nanovllm.core.model_runner import ModelRunner
-from nanorlhf.nanovllm.core.scheduler import Scheduler
 
 
 def initialize_model(config, rank, enable_gradient: bool = False):
@@ -88,22 +86,15 @@ def initialize_model(config, rank, enable_gradient: bool = False):
 
 
 @nanoray.actor
-class ActorRolloutRef:
-    def __init__(self, config, rank, total_steps: int, initialize_ref: bool = False, initialize_rollout: bool = False):
+class SFTWorker:
+    def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model.partial_pretrain, trust_remote_code=True)
-        self.actor, self.actor_mpu, self.optimizer = initialize_model(config, rank, enable_gradient=True)
-        self.actor.train()
+        self.model, self.mpu, self.optimizer = initialize_model(config, rank, enable_gradient=True)
+        self.model.train()
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)
-
-        if initialize_ref:
-            self.ref, self.ref_mpu, _ = initialize_model(config, rank, enable_gradient=False)
-
-        if initialize_rollout:
-            self.rollout_runner = ModelRunner()
-            self.rollout_scheduler = Scheduler(self.rollout_runner.get_config())
 
     def step(self, input_batch: dict, train: bool):
         batch = {}
@@ -111,21 +102,21 @@ class ActorRolloutRef:
             batch[k] = v.cuda(non_blocking=True) if torch.is_tensor(v) else v
 
         if train:
-            self.actor.train()
+            self.model.train()
             self.optimizer.zero_grad(set_to_none=True)
             micro_batch_size = self.config.data.train_micro_batch_size
         else:
-            self.actor.eval()
+            self.model.eval()
             micro_batch_size = self.config.data.valid_micro_batch_size
 
         batch_size = (batch["position_ids"] == 0).sum().item()
         num_micro_batches = batch_size // micro_batch_size
 
         if self.config.model.pipeline_parallel_size > 1:
-            pp_wrapper = self.actor.__nanotron_wrappers__[ParallelMode.PIPELINE]
+            pp_wrapper = self.model.__nanotron_wrappers__[ParallelMode.PIPELINE]
             pp_wrapper.micro_batch_size = micro_batch_size
             micro_batches = pp_wrapper._split_packed_batches(batch)
-            micro_batch_iterator = enumerate(self.actor(**batch))
+            micro_batch_iterator = enumerate(self.model(**batch))
         else:
             micro_batches = [split_packed_batch(batch, i, num_micro_batches) for i in range(num_micro_batches)]
             micro_batch_iterator = enumerate(micro_batches)
@@ -142,7 +133,7 @@ class ActorRolloutRef:
                 if self.config.model.pipeline_parallel_size > 1:
                     micro_loss = micro_input_or_output.loss
                 else:
-                    micro_loss = self.actor(**micro_input_or_output).loss
+                    micro_loss = self.model(**micro_input_or_output).loss
 
                 num_micro_valid_tokens = num_micro_valid_token_per_batch[mico_idx].to(device).detach()
                 sum_of_valid_losses += (micro_loss.detach() * num_micro_valid_tokens).float()
@@ -153,21 +144,21 @@ class ActorRolloutRef:
                     (micro_loss * contribution).backward()
 
             if train and self.optimizer is not None:
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.optim.clip_grad)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.optim.clip_grad)
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
 
         if self.config.model.data_parallel_size > 1:
-            dist.all_reduce(sum_of_valid_losses, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
-            dist.all_reduce(num_of_valid_losses, op=dist.ReduceOp.SUM, group=self.actor_mpu.get_group(ParallelMode.DATA))
+            dist.all_reduce(sum_of_valid_losses, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
+            dist.all_reduce(num_of_valid_losses, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
 
         final_loss = (sum_of_valid_losses / num_of_valid_losses.clamp_min(1.0)).item()
         lr = self.optimizer.param_groups[0]["lr"]
         return {"loss": float(final_loss), "lr": float(lr)}
 
     def save_parallelized(self, save_dir: str):
-        self.actor.save_parallelized(save_dir)
-        if self.actor_mpu is None or self.actor_mpu.get_global_rank() == 0:
+        self.model.save_parallelized(save_dir)
+        if self.mpu is None or self.mpu.get_global_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         return {"ok": True, "save_dir": save_dir}

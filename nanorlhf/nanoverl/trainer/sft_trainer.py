@@ -11,7 +11,7 @@ from nanorlhf.nanotron import MPU
 from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
 from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn, split_packed_batch
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
-from nanorlhf.nanoverl.worker.actor_rollout_ref import ActorRolloutRef
+from nanorlhf.nanoverl.worker.sft_worker import SFTWorker
 
 
 class SFTTrainer:
@@ -134,13 +134,8 @@ class SFTTrainer:
         object_refs = []
         for global_rank in range(self.global_world_size):
             node_id = self.node_ids[global_rank % len(self.node_ids)]
-            object_ref = ActorRolloutRef.options(pinned_node_id=node_id).remote(
-                config,
-                rank=global_rank,
-                total_steps=self.total_steps,
-                initialize_ref=False,
-                initialize_rollout=False,
-                blocking=False,
+            object_ref = SFTWorker.options(pinned_node_id=node_id).remote(
+                config, rank=global_rank, total_steps=self.total_steps, blocking=False
             )
             object_refs.append(object_ref)
         return nanoray.get(object_refs)
