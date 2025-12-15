@@ -1,14 +1,14 @@
 data:
-  train_batch_size: 32
-  valid_batch_size: 32
-  train_micro_batch_size: 8
+  train_batch_size: 128
+  valid_batch_size: 128
+  train_micro_batch_size: 32
   valid_micro_batch_size: 1
-  train_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/valid.nano
+  train_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/train.nano
   valid_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/valid.nano
   num_workers: 8
 
 model:
-  partial_pretrain: Qwen/Qwen3-0.6B
+  partial_pretrain: Qwen/Qwen3-4B
   tensor_parallel_size: 2
   pipeline_parallel_size: 2
   data_parallel_size: 2
@@ -30,7 +30,7 @@ optim:
 
 training:
   default_local_dir: ./checkpoints
-  project_name: project
+  project_name: math
   experiment_name: sft
   total_epochs: 1
   wandb: true
