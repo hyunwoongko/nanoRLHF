@@ -930,7 +930,7 @@ class MPU:
             set_mode(ParallelMode.DATA)
 
     @staticmethod
-    def get_rank_from_global_rank(
+    def get_local_ranks_from_global_rank(
         global_rank: int,
         data_parallel_size: int,
         tensor_parallel_size: int,

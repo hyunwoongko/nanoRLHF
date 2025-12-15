@@ -43,7 +43,7 @@ class SFTTrainer:
 
         self.data_parallel_ranks = []
         for rank in range(self.global_world_size):
-            dp_rank, _, _ = MPU.get_rank_from_global_rank(
+            dp_rank, _, _ = MPU.get_local_ranks_from_global_rank(
                 rank,
                 self.config.model.data_parallel_size,
                 self.config.model.tensor_parallel_size,
