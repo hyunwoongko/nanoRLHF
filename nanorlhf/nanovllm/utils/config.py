@@ -6,7 +6,7 @@ from nanorlhf.kernels.utils.vllm import KVCACHE_BLOCK_SIZE
 
 
 @dataclass
-class Config:
+class NanoVLLMConfig:
     # vllm options
     model: str
     max_num_batched_tokens: int = 65536

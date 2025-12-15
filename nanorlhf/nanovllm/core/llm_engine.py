@@ -8,14 +8,14 @@ from nanorlhf import nanoray
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.scheduler import Scheduler
 from nanorlhf.nanovllm.core.sequence import Sequence
-from nanorlhf.nanovllm.utils.config import Config
+from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
 class LLMEngine:
     def __init__(self, model, **kwargs):
-        config_fields = {field.name for field in fields(Config)}
+        config_fields = {field.name for field in fields(NanoVLLMConfig)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
-        config = Config(model, **config_kwargs)
+        config = NanoVLLMConfig(model, **config_kwargs)
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model)
         config.eos = self.tokenizer.eos_token_id
@@ -49,7 +49,7 @@ class LLMEngine:
 
         return node_ids
 
-    def create_model(self, config: Config):
+    def create_model(self, config: NanoVLLMConfig):
         object_refs = []
         for rank in range(config.tensor_parallel_size):
             node_id = self.node_ids[rank % len(self.node_ids)]

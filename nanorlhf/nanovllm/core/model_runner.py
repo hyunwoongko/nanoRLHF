@@ -7,12 +7,12 @@ from nanorlhf.kernels.utils.vllm import set_context, reset_context, get_context
 from nanorlhf.nanotron import TensorParallel, MPU
 from nanorlhf.nanovllm.core.sampler import Sampler
 from nanorlhf.nanovllm.core.sequence import Sequence
-from nanorlhf.nanovllm.utils.config import Config
+from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
 @nanoray.actor
 class ModelRunner:
-    def __init__(self, config: Config, rank: int):
+    def __init__(self, config: NanoVLLMConfig, rank: int):
         self.config = config
         self.block_size = config.kvcache_block_size
         self.device = torch.device("cuda")

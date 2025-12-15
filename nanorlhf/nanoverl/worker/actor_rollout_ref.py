@@ -9,6 +9,8 @@ from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParalle
 from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
+from nanorlhf.nanovllm.core.model_runner import ModelRunner
+from nanorlhf.nanovllm.core.scheduler import Scheduler
 
 
 def initialize_model(config, rank, enable_gradient: bool = False):
@@ -82,7 +84,7 @@ def initialize_model(config, rank, enable_gradient: bool = False):
         model.cuda()
 
     model = patch_kernel(model)
-    return model, optimizer, mpu
+    return model, mpu, optimizer
 
 
 @nanoray.actor
@@ -92,14 +94,16 @@ class ActorRolloutRef:
         self.rank = rank
 
         self.tokenizer = AutoTokenizer.from_pretrained(config.model.partial_pretrain, trust_remote_code=True)
-        self.actor, self.optimizer, self.actor_mpu = initialize_model(config, rank, enable_gradient=True)
+        self.actor, self.actor_mpu, self.optimizer = initialize_model(config, rank, enable_gradient=True)
         self.actor.train()
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)
 
         if initialize_ref:
-            raise NotImplementedError
+            self.ref, self.ref_mpu, _ = initialize_model(config, rank, enable_gradient=False)
+
         if initialize_rollout:
-            raise NotImplementedError
+            self.rollout_runner = ModelRunner()
+            self.rollout_scheduler = Scheduler(self.rollout_runner.get_config())
 
     def step(self, input_batch: dict, train: bool):
         batch = {}
