@@ -69,7 +69,7 @@ def initialize_model(config, rank):
             model,
             mpu=mpu,
             optimizer=optimizer,
-            zero_stage=config.model.zero_stage if enable_gradient else 0,
+            zero_stage=config.model.zero_stage,
             accum_steps=config.data.train_batch_size // config.data.train_micro_batch_size,
         )
         model.parallelize()
