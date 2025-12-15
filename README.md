@@ -69,6 +69,8 @@ If you want to modify hyperparameters, please edit `configs/train_sft.yaml` file
 Running the following command will start supervised fine-tuning. 
 Moreover, you can monitor the training process if you have wandb account.
 
+![sft_log](assets/sft_log.png)
+
 ```bash
 bash ./scripts/train_sft.sh 
 ```
@@ -86,6 +88,8 @@ bash ./scripts/merge_sft_model.sh
 #### 4) Evaluate Supervised Fine-tuned Model
 After merging the supervised fine-tuned model, you can evaluate it using the following script.
 The evaluation is performed using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset (500 samples from MATH dataset)
+
+![sft_eval](assets/sft_eval.png)
 
 ```
 bash ./scripts/eval_sft_model.sh 

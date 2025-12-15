@@ -83,7 +83,7 @@ def evaluate_model_answer(model_outputs, dataset):
         model_text = model_outputs[idx]["text"]
 
         if sample["answer"] is None:
-            gold_answer = parse(last_boxed_only_string(sample["solution"]))
+            gold_answer = parse(get_unnormalized_answer(sample["solution"]))
         else:
             if "boxed" not in sample["answer"]:
                 gold_answer = parse("\\boxed{" + str(sample["answer"]) + "}")
@@ -126,7 +126,8 @@ def evaluate(args):
     output_path = os.path.join(eval_result_dir, "model_outputs.jsonl")
     with open(output_path, "w") as f:
         for model_output in model_outputs_for_saving:
-            json.dump(f"{model_output}\n", f)
+            json.dump(model_output, f, ensure_ascii=False)
+            f.write("\n")
 
     print(f"Saved evaluation result to {eval_result_path} 😊")
 
