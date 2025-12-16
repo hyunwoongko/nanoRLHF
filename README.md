@@ -107,8 +107,7 @@ bash ./scripts/prepare_rl_data.sh
 
 #### 6) Reinforcement Learning with Verifiable Reward
 Reinforcement learning is performed using SFT model as the initial policy model with verifiable reward function.
-[Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse and verify the model's generated output.
-Moreover, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied to maximize training efficiency.
+To improve training efficiency, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied.
 If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.
 Running the following command will start supervised fine-tuning. 
 Moreover, you can monitor the training process if you have wandb account.
