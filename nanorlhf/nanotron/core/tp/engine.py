@@ -36,10 +36,15 @@ ATTRS_TO_UPDATE = [
 
 class TensorParallelWrapper(ParallelizationWrapper):
 
-    def __init__(self, model: nn.Module, mpu: MPU):
+    def __init__(self, model: nn.Module, mpu: MPU, mode: ParallelMode):
         super().__init__(model, mpu, parallelization_priority=1)
-        self.world_size = self.mpu.get_world_size(ParallelMode.TENSOR)
-        self.rank = self.mpu.get_local_rank(ParallelMode.TENSOR)
+        assert mode in [ParallelMode.TENSOR, ParallelMode.ROLLOUT_TENSOR], (
+            "TensorParallelWrapper only supports ParallelMode.TENSOR and ParallelMode.ROLLOUT_TENSOR, "
+            f"but got {mode}."
+        )
+        self.mode = mode
+        self.world_size = self.mpu.get_world_size(mode)
+        self.rank = self.mpu.get_local_rank(mode)
         self.device = torch.cuda.current_device()
 
     def _pad_tensor(self, module: nn.Module, name: str, dim: int):
@@ -119,7 +124,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
                     setattr(module, attr, updated_value)
 
     def _replicate_module(self, plan: ModuleParallelPlan):
-        tag_module(plan.module, ParallelMode.TENSOR, self.rank)
+        tag_module(plan.module, self.mode, self.rank)
 
     def _parallelize(self):
         self._pad_embedding_related_params()
@@ -127,7 +132,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
 
         # Parallelize embedding
         embedding_plan = self.mp_plan.embedding_plan
-        embedding_plan.module = VocabParallelEmbedding.parallelize(embedding_plan, self.mpu)
+        embedding_plan.module = VocabParallelEmbedding.parallelize(embedding_plan, self.mpu, self.mode)
 
         # Parallelize pre module list
         for plan in self.mp_plan.pre_module_list_plans:
@@ -136,9 +141,9 @@ class TensorParallelWrapper(ParallelizationWrapper):
         # Parallelize main module list
         for plan in self.mp_plan.main_module_list_plans:
             if plan.slicing_type == SlicingType.COLUMN:
-                plan.module = ColumnParallelLinear.parallelize(plan, self.mpu)
+                plan.module = ColumnParallelLinear.parallelize(plan, self.mpu, self.mode)
             elif plan.slicing_type == SlicingType.ROW:
-                plan.module = RowParallelLinear.parallelize(plan, self.mpu)
+                plan.module = RowParallelLinear.parallelize(plan, self.mpu, self.mode)
             else:
                 self._replicate_module(plan)
 
@@ -151,7 +156,10 @@ class TensorParallelWrapper(ParallelizationWrapper):
         if head_plan is not None and is_causal_lm(self.model):
             has_not_tied_head = self.mp_plan.tied_plan is None
             head_plan.module = ColumnParallelLinear.parallelize(
-                head_plan, self.mpu, scatter_tensor=has_not_tied_head
+                head_plan,
+                self.mpu,
+                scatter_tensor=has_not_tied_head,
+                mode=self.mode,
             )
 
     def _deparallelize(self):
@@ -159,21 +167,24 @@ class TensorParallelWrapper(ParallelizationWrapper):
 
         # Deparallelize embedding
         embedding_plan = self.mp_plan.embedding_plan
-        embedding_plan.module = VocabParallelEmbedding.deparallelize(embedding_plan, self.mpu)
+        embedding_plan.module = VocabParallelEmbedding.deparallelize(embedding_plan, self.mpu, self.mode)
 
         # Deparallelize main module list
         for plan in self.mp_plan.main_module_list_plans:
             if plan.slicing_type == SlicingType.COLUMN:
-                plan.module = ColumnParallelLinear.deparallelize(plan, self.mpu)
+                plan.module = ColumnParallelLinear.deparallelize(plan, self.mpu, self.mode)
             elif plan.slicing_type == SlicingType.ROW:
-                plan.module = RowParallelLinear.deparallelize(plan, self.mpu)
+                plan.module = RowParallelLinear.deparallelize(plan, self.mpu, self.mode)
 
         # Deparallelize head if needed
         head_plan = self.mp_plan.head_plan
         if head_plan is not None and is_causal_lm(self.model):
             has_not_tied_head = self.mp_plan.tied_plan is None
             head_plan.module = ColumnParallelLinear.deparallelize(
-                head_plan, self.mpu, gather_tensor=has_not_tied_head
+                head_plan,
+                self.mpu,
+                gather_tensor=has_not_tied_head,
+                mode=self.mode,
             )
 
     def _forward(self, *args, **kwargs):
@@ -184,7 +195,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
             is_causal_lm(self.model)
             and "labels" in _kwargs
             and _kwargs["labels"] is not None
-            and self.mpu.get_world_size(ParallelMode.PIPELINE) == 1
+            and self.mpu.get_world_size(ParallelMode.PIPELINE) <= 1
             # must generate snapshot from the first layer when using pp.
         )
 
@@ -213,6 +224,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
                 mpu=self.mpu,
                 logits=logits,
                 payload=payload,
+                tp_mode=self.mode,
             )
 
         return self.model_forward(**_kwargs)

@@ -12,19 +12,20 @@ from nanorlhf.nanotron.distributed.mpu import MPU
 from nanorlhf.nanotron.utils.wrapping import register_wrapper
 
 
-def TensorParallel(model: nn.Module, mpu: MPU) -> nn.Module:  # noqa
-    if mpu.get_world_size(ParallelMode.TENSOR) == 1:
+def TensorParallel(model: nn.Module, mpu: MPU, is_rollout: bool = False) -> nn.Module:  # noqa
+    tp_mode = ParallelMode.ROLLOUT_TENSOR if is_rollout else ParallelMode.TENSOR
+    if mpu.get_world_size(tp_mode) <= 1:
         return model
 
-    wrapper = TensorParallelWrapper(model, mpu)
-    register_wrapper(module=model, mode=ParallelMode.TENSOR, wrapper=wrapper)
+    wrapper = TensorParallelWrapper(model, mpu, tp_mode)
+    register_wrapper(module=model, mode=tp_mode, wrapper=wrapper)
     return model
 
 
-def PipelineParallel(
+def PipelineParallel(  # noqa
     model: nn.Module, mpu: MPU, micro_batch_size: int = 1, gradient_checkpointing_enable: bool = False
-) -> nn.Module:  # noqa
-    if mpu.get_world_size(ParallelMode.PIPELINE) == 1:
+) -> nn.Module:
+    if mpu.get_world_size(ParallelMode.PIPELINE) <= 1:
         return model
 
     wrapper = PipelineParallelWrapper(
@@ -44,7 +45,7 @@ def DataParallel(  # noqa
     zero_stage: int = 0,
     accum_steps: int = 1,
 ) -> Tuple[nn.Module, Optional[Union[torch.optim.Optimizer, ZeroOptimizer]]]:
-    if mpu.get_world_size(ParallelMode.DATA) == 1:
+    if mpu.get_world_size(ParallelMode.DATA) <= 1:
         return model, optimizer
 
     wrapper = DataParallelWrapper(

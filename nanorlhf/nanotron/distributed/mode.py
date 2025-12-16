@@ -6,7 +6,9 @@ class ParallelMode(Enum):
 
     GLOBAL = "global"
     DATA = "data"
-    MODEL = "model"
     TENSOR = "tensor"
     PIPELINE = "pipeline"
     TIED_EMBEDDING = "tied_embedding"
+
+    ROLLOUT_TENSOR = "rollout_tensor"
+    ROLLOUT_DATA = "rollout_data"

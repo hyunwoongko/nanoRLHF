@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from transformers import AutoModelForCausalLM
 
@@ -5,14 +7,13 @@ from nanorlhf import nanoray
 from nanorlhf.kernels import patch_kernel
 from nanorlhf.kernels.utils.vllm import set_context, reset_context, get_context
 from nanorlhf.nanotron import TensorParallel, MPU
-from nanorlhf.nanovllm.core.sampler import Sampler
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
 @nanoray.actor
 class ModelRunner:
-    def __init__(self, config: NanoVLLMConfig, rank: int):
+    def __init__(self, config: NanoVLLMConfig, rank: int, actor_config=None):
         self.config = config
         self.block_size = config.kvcache_block_size
         self.device = torch.device("cuda")
@@ -21,27 +22,45 @@ class ModelRunner:
         model = AutoModelForCausalLM.from_pretrained(
             config.model, torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16)
         )
-        if config.tensor_parallel_size > 1:
+
+        if actor_config is not None:
+            actor_data_parallel_size = actor_config.data_parallel_size
+            actor_tensor_parallel_size = actor_config.tensor_parallel_size
+            actor_pipeline_parallel_size = actor_config.pipeline_parallel_size
+            global_world_size = (config.tensor_parallel_size * config.data_parallel_size) + (
+                actor_config.data_parallel_size
+                * actor_config.tensor_parallel_size
+                * actor_config.pipeline_parallel_size
+            )
+        else:
+            actor_data_parallel_size = actor_tensor_parallel_size = actor_pipeline_parallel_size = 0
+            global_world_size = config.tensor_parallel_size * config.data_parallel_size
+
+        if global_world_size > 1:
             mpu = MPU(
                 rank=rank,
                 local_rank=rank,
-                world_size=config.tensor_parallel_size,
-                local_world_size=config.tensor_parallel_size,
-                host=config.host,
-                port=config.port,
-                data_parallel_size=1,
-                pipeline_parallel_size=1,
-                tensor_parallel_size=config.tensor_parallel_size,
-                backend=config.backend,
-                seed=config.seed,
+                world_size=global_world_size,
+                local_world_size=global_world_size,
+                data_parallel_size=actor_data_parallel_size,
+                pipeline_parallel_size=actor_pipeline_parallel_size,
+                tensor_parallel_size=actor_tensor_parallel_size,
+                rollout_tensor_parallel_size=config.tensor_parallel_size,
+                rollout_data_parallel_size=config.data_parallel_size,
+                host=config.host if actor_config is None else actor_config.host,
+                port=config.port if actor_config is None else actor_config.port,
+                backend=config.backend if actor_config is None else actor_config.backend,
+                seed=config.seed if actor_config is None else actor_config.seed,
             )
-            self.model = TensorParallel(model, mpu)
-            self.model.parallelize()
+            if config.tensor_parallel_size > 1:
+                self.model = TensorParallel(model, mpu, is_rollout=True)
+                self.model.parallelize()
+            else:
+                self.model = model.to(self.device)
         else:
             self.model = model.to(self.device)
 
         self.model = patch_kernel(self.model, use_paged_attention=True)
-        self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
 
@@ -243,7 +262,10 @@ class ModelRunner:
         else:
             logits_for_sampling = logits[:, -1, :]
 
-        next_tokens = self.sampler.sample(seqs, logits_for_sampling)
+        temperatures = [seq.temperature + 1e-12 for seq in seqs]
+        temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
+        logits_for_sampling = logits_for_sampling.float().div_(temperatures.unsqueeze(dim=1))
+        probs = torch.softmax(logits_for_sampling, dim=-1)
+        sample_tokens = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
         reset_context()
-        return next_tokens
-
+        return sample_tokens.tolist()

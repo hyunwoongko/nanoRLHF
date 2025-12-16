@@ -91,7 +91,7 @@ class SFTTrainer:
         base_port = 9200
         if self.global_world_size > 1:
             for rank in range(self.global_world_size):
-                nodes[f"node-{rank + 1}"] = nanoray.NodeConfig(
+                nodes[f"node-{rank}"] = nanoray.NodeConfig(
                     cpus=4.0,
                     gpus=1.0,
                     rpc=True,
@@ -99,13 +99,7 @@ class SFTTrainer:
                     port=base_port + rank,
                 )
         else:
-            nodes["node-1"] = nanoray.NodeConfig(
-                cpus=4.0,
-                gpus=1.0,
-                rpc=False,
-                host=config.model.host,
-                port=base_port,
-            )
+            nodes["node-0"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.model.host, port=base_port)
 
         session = nanoray.init(nodes, default_node_id="node-1")
         node_ids = list(session._workers.keys())

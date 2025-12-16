@@ -27,7 +27,7 @@ class Experience:
     reward_model: Optional[List[Dict[str, Any]]] = None
 
 
-def initialize_model(config, rank, role: str):
+def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     assert role in ["actor", "ref", "critic"], "role must be one of ['actor', 'ref', 'critic']"
 
     model = AutoModelForCausalLM.from_pretrained(
@@ -54,31 +54,33 @@ def initialize_model(config, rank, role: str):
         for p in model.parameters():
             p.requires_grad_(False)
 
-    global_world_size = (
+    actor_world_size = (
         config.actor.data_parallel_size * config.actor.tensor_parallel_size * config.actor.pipeline_parallel_size
     )
+    rollout_world_size = config.rollout.data_parallel_size * config.rollout.tensor_parallel_size
+    global_world_size = actor_world_size + rollout_world_size
 
-    assert global_world_size <= 8, (
-        "Currently don't support multi-node training. "
-        "Please set data_parallel_size * tensor_parallel_size * pipeline_parallel_size <= 8."
-    )
+    assert global_world_size <= torch.cuda.device_count()
 
-    mpu = None
     if global_world_size > 1:
-        assert rank < global_world_size, "rank must be < dp*tp*pp"
-        mpu = MPU(
-            rank=rank,
-            local_rank=rank,
-            world_size=global_world_size,
-            local_world_size=global_world_size,
-            host=config.actor.host,
-            port=config.actor.port,
-            data_parallel_size=config.actor.data_parallel_size,
-            pipeline_parallel_size=config.actor.pipeline_parallel_size,
-            tensor_parallel_size=config.actor.tensor_parallel_size,
-            backend=config.actor.backend,
-            seed=config.actor.seed,
-        )
+        assert rank < actor_world_size, "rank must be < dp*tp*pp"
+        if mpu is None:
+            mpu = MPU(
+                rank=rank,
+                local_rank=rank,
+                world_size=global_world_size,
+                local_world_size=global_world_size,
+                host=config.actor.host,
+                port=config.actor.port,
+                data_parallel_size=config.actor.data_parallel_size,
+                pipeline_parallel_size=config.actor.pipeline_parallel_size,
+                tensor_parallel_size=config.actor.tensor_parallel_size,
+                rollout_data_parallel_size=config.rollout.data_parallel_size,
+                rollout_tensor_parallel_size=config.rollout.tensor_parallel_size,
+                backend=config.actor.backend,
+                seed=config.actor.seed,
+            )
+
         model = TensorParallel(
             model,
             mpu=mpu,
@@ -101,7 +103,7 @@ def initialize_model(config, rank, role: str):
         model.cuda()
 
     model = patch_kernel(model)
-    return model, mpu, optimizer
+    return model, optimizer, mpu
 
 
 @nanoray.actor
@@ -111,12 +113,12 @@ class ActorCriticRefWorker:
         self.rank = rank
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)
 
-        self.actor, self.actor_mpu, self.actor_optimizer = initialize_model(config, rank, role="actor")
+        self.actor, self.actor_optimizer, self.mpu = initialize_model(config, rank, role="actor")
         self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
-        self.ref, self.ref_mpu, _ = initialize_model(config, rank, role="ref")
+        self.ref, _, _ = initialize_model(config, rank, mpu=self.mpu, role="ref")
 
         if config.algorithm.adv_estimator not in ["grpo", "gspo"]:
-            self.critic, self.critic_mpu, self.critic_optimizer = initialize_model(config, rank, role="critic")
+            self.critic, self.critic_optimizer, _ = initialize_model(config, rank, mpu=self.mpu, role="critic")
             self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_steps)
 
     @torch.inference_mode()

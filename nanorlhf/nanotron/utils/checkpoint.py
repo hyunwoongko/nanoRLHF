@@ -188,6 +188,21 @@ def _save_parallelized_without_merge(
         dist.barrier()
 
 
+def _raise_if_rollout_model(self):
+    found_rollout_group = False
+    if hasattr(self, "__nanotron_wrappers__"):
+        for parallel_mode, wrapper in self.__nanotron_wrappers__.items():
+            if parallel_mode in [ParallelMode.ROLLOUT_TENSOR, ParallelMode.ROLLOUT_DATA]:
+                found_rollout_group = True
+                break
+
+    if found_rollout_group:
+        raise RuntimeError(
+            "There's no reason to save/load a rollout model checkpoint to/from specific path."
+            "Just use the original model path or name. 😅"
+        )
+
+
 def save_parallelized(
     self,
     mpu: MPU,
@@ -202,6 +217,7 @@ def save_parallelized(
             raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
 
         os.makedirs(save_directory, exist_ok=True)
+        _raise_if_rollout_model(self)
 
         if merge_checkpoints:
             _save_parallelized_with_merge(
@@ -232,6 +248,7 @@ def from_parallelized(
     with torch.no_grad():
         if not os.path.isdir(load_directory):
             raise NotADirectoryError(f"directory named {load_directory} is not valid.")
+        _raise_if_rollout_model(self)
 
         tp_rank = mpu.get_local_rank(ParallelMode.TENSOR)
         pp_rank = mpu.get_local_rank(ParallelMode.PIPELINE)

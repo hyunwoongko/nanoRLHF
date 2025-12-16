@@ -479,6 +479,9 @@ class PipelineParallelWrapper(ParallelizationWrapper):
             mpu=self.mpu,
             logits=dict_output["logits"],
             payload=dict_output["payload"],
+            tp_mode=ParallelMode.TENSOR,
+            # Currently rollout doesn't support pipeline parallelism,
+            # so we assure there's no ParallMode.ROLLOUT_TENSOR is using in this context.
         )
 
         if hasattr(modeling_output, "loss") and modeling_output.loss is not None:

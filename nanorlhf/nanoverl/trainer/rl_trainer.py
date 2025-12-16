@@ -1,13 +1,18 @@
 from argparse import ArgumentParser
 from dataclasses import asdict
-from typing import Dict, Any
+from typing import List
 
 import wandb
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
+from nanorlhf import nanoray
 from nanorlhf.nanoverl.configs.rl_config import RLConfig
 from nanorlhf.nanoverl.dataset.rl_dataset import RLDataset
 from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_rl
+from nanorlhf.nanoverl.utils.rollout_utils import RolloutManager
+from nanorlhf.nanoverl.worker.actor_critic_ref_worker import ActorCriticRefWorker
+from nanorlhf.nanoverl.worker.rollout_worker import RolloutWorker
 
 
 class RLTrainer:
@@ -18,6 +23,9 @@ class RLTrainer:
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
         self.global_step = 0
 
+        self.node_ids = self.init_ray(self.config)
+        self.actors, rollouts = self.spawn_all_workers(self.config, self.node_ids, self.total_steps)
+        self.rollout_manager = RolloutManager(self.config, rollouts)
         self.maybe_init_logger()
 
     def maybe_init_logger(self):
@@ -30,9 +38,78 @@ class RLTrainer:
             config=asdict(self.config),
         )
 
-    def log(self, metrics: Dict[str, Any]):
-        if self.config.training.wandb:
-            wandb.log(metrics, step=self.global_step)
+    def init_ray(self, config):
+        nodes = {}
+        base_port = 9200
+        for rank in range(self.config.rollout.nproc_per_node):
+            nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
+                cpus=4.0,
+                gpus=1.0,
+                rpc=True,
+                host=config.actor.host,
+                port=base_port + rank,
+            )
+
+        for rank in range(self.config.actor.nproc_per_node):
+            rank = rank + self.config.rollout.nproc_per_node
+            nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
+                cpus=4.0,
+                gpus=1.0,
+                rpc=True,
+                host=config.actor.host,
+                port=base_port + rank,
+            )
+
+        session = nanoray.init(nodes, default_node_id=f"actor-global_rank=1")
+        node_ids = list(session._workers.keys())
+        if len(node_ids) < self.config.actor.nproc_per_node + self.config.rollout.nproc_per_node:
+            raise RuntimeError(
+                "`nanoray` was initialized with fewer nodes than `global_world_size`; "
+                "please provide at least one NodeConfig per global rank."
+            )
+
+        return node_ids
+
+    def spawn_all_workers(self, config, node_ids: List[str], total_steps: int):
+        actor_world_size = (
+            config.actor.data_parallel_size * config.actor.tensor_parallel_size * config.actor.pipeline_parallel_size
+        )
+        actor_refs = []
+        for actor_local_rank in range(actor_world_size):
+            node_id = node_ids[actor_local_rank % len(node_ids)]
+            actor_ref = ActorCriticRefWorker.options(pinned_node_id=node_id).remote(
+                config=config,
+                rank=actor_local_rank,
+                total_steps=total_steps,
+                blocking=False,
+            )
+            actor_refs.append(actor_ref)
+
+        rollout_refs = []
+        for rollout_dp_rank in range(config.rollout.data_parallel_size):
+            for rollout_tp_rank in range(config.rollout.tensor_parallel_size):
+                rollout_local_rank = rollout_dp_rank * config.rollout.tensor_parallel_size + rollout_tp_rank
+                global_rank = actor_world_size + rollout_local_rank
+                node_id = node_ids[global_rank % len(node_ids)]
+                rollout_ref = RolloutWorker.options(pinned_node_id=node_id).remote(
+                    config=config, rank=global_rank, blocking=False
+                )
+                rollout_refs.append(rollout_ref)
+
+        models = nanoray.get(actor_refs + rollout_refs)
+
+        rollouts: List[List[RolloutWorker]] = []
+        for rollout_dp_rank in range(config.rollout.data_parallel_size):
+            tensor_parallel_workers: List[RolloutWorker] = []
+            for rollout_tp_rank in range(config.rollout.tensor_parallel_size):
+                rollout_local_rank = rollout_dp_rank * config.rollout.tensor_parallel_size + rollout_tp_rank
+                global_rank = actor_world_size + rollout_local_rank
+                tensor_parallel_worker = models[global_rank]
+                tensor_parallel_workers.append(tensor_parallel_worker)
+            rollouts.append(tensor_parallel_workers)
+
+        actors = models[:actor_world_size]
+        return actors, rollouts
 
     def load_dataloader(self, config, split: str):
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
@@ -63,6 +140,18 @@ class RLTrainer:
             drop_last=drop_last,
             collate_fn=packed_collate_fn_for_rl,
         )
+
+    def fit(self):
+        for epoch in range(self.config.training.total_epochs):
+            pbar = tqdm(
+                self.train_dataloader,
+                desc=f"Epoch {epoch + 1}/{self.config.training.total_epochs}",
+                dynamic_ncols=True,
+            )
+            for batch in pbar:
+                self.global_step += 1
+                output = self.rollout_manager.rollout(batch)
+                print(output)
 
 
 if __name__ == '__main__':

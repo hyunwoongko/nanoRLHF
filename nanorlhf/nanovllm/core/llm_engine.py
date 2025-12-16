@@ -1,5 +1,6 @@
 from dataclasses import fields
 from time import perf_counter
+from typing import List
 
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -17,88 +18,124 @@ class LLMEngine:
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
         config = NanoVLLMConfig(model, **config_kwargs)
 
+        self.config = config
+        self.tensor_parallel_size = config.tensor_parallel_size
+        self.data_parallel_size = config.data_parallel_size
+        self.global_world_size = self.tensor_parallel_size * self.data_parallel_size
+
         self.tokenizer = AutoTokenizer.from_pretrained(config.model)
         config.eos = self.tokenizer.eos_token_id
 
         self.node_ids = self.init_ray(config)
         self.model_runners = self.create_model(config)
 
-        # `num_kvcache_blocks` is computed lazily in ModelRunner,
-        # so pass it to Scheduler after remote creation of ModelRunner.
-        model_runner_config = self.model_runners[0].get_config.remote(blocking=True)
-        self.scheduler = Scheduler(nanoray.get(model_runner_config))
+        model_runner_config = self.model_runners[0][0].get_config.remote(blocking=True)  # noqa
+        self.schedulers = [Scheduler(nanoray.get(model_runner_config)) for _ in range(self.data_parallel_size)]
+        self.round_robin_counter = 0
 
     def init_ray(self, config):
         nodes = {}
         base_port = 9200
-        if config.tensor_parallel_size > 1:
-            for rank in range(config.tensor_parallel_size):
-                nodes[f"node-{rank + 1}"] = nanoray.NodeConfig(
-                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=base_port + rank
+
+        if self.global_world_size > 1:
+            for global_rank in range(self.global_world_size):
+                nodes[f"node-{global_rank}"] = nanoray.NodeConfig(
+                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=base_port + global_rank
                 )
         else:
-            nodes["node-1"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=base_port)
+            nodes["node-0"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=base_port)
 
-        session = nanoray.init(nodes, default_node_id="node-1")
-        node_ids = list(session._workers.keys())
-        if len(node_ids) < config.tensor_parallel_size:
-            raise RuntimeError(
-                "`nanoray` was initialized with fewer nodes than `tensor_parallel_size`; "
-                "please provide at least one NodeConfig per tensor-parallel rank."
-            )
-
-        return node_ids
+        session = nanoray.init(nodes, default_node_id="node-0")
+        return list(session._workers.keys())
 
     def create_model(self, config: NanoVLLMConfig):
         object_refs = []
-        for rank in range(config.tensor_parallel_size):
-            node_id = self.node_ids[rank % len(self.node_ids)]
-            object_ref = ModelRunner.options(pinned_node_id=node_id).remote(config, rank=rank, blocking=False)
-            object_refs.append(object_ref)
-        return nanoray.get(object_refs)
+        for data_parallel_rank in range(self.data_parallel_size):
+            for tensor_parallel_rank in range(self.tensor_parallel_size):
+                global_rank = data_parallel_rank * self.tensor_parallel_size + tensor_parallel_rank
+                node_id = self.node_ids[global_rank % len(self.node_ids)]
+                object_ref = ModelRunner.options(pinned_node_id=node_id).remote(
+                    config, rank=global_rank, actor_config=None, blocking=False
+                )
+                object_refs.append(object_ref)
 
-    def run_model(self, seqs, is_prefill):
+        resolved = nanoray.get(object_refs)
+        runners: List[List[ModelRunner]] = []
+        for data_parallel_rank in range(self.data_parallel_size):
+            tensor_parallel_runners: List[ModelRunner] = []
+            for tensor_parallel_rank in range(self.tensor_parallel_size):
+                global_rank = data_parallel_rank * self.tensor_parallel_size + tensor_parallel_rank
+                tensor_parallel_runners.append(resolved[global_rank])
+            runners.append(tensor_parallel_runners)
+        return runners
+
+    def run_model(self, data_parallel_rank, sequences, is_prefill):
         object_refs = []
-        for runner in self.model_runners:
-            object_ref = runner.run.remote(seqs, is_prefill, blocking=False)
-            object_refs.append(object_ref)
-        return nanoray.get(object_refs)[0]
+        for tensor_parallel_rank in range(self.tensor_parallel_size):
+            runner = self.model_runners[data_parallel_rank][tensor_parallel_rank]
+            object_refs.append(runner.run.remote(sequences, is_prefill, blocking=False))
+        results = nanoray.get(object_refs)
+        tokens = results[0]
+        return tokens
 
     def add_request(self, prompt, sampling_params):
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
-        seq = Sequence(prompt, sampling_params)
-        self.scheduler.add(seq)
+
+        sequence = Sequence(prompt, sampling_params)
+        data_parallel_rank = self.round_robin_counter
+        self.round_robin_counter = (self.round_robin_counter + 1) % self.data_parallel_size
+        self.schedulers[data_parallel_rank].add(sequence)
 
     def step(self):
-        seqs, is_prefill = self.scheduler.schedule()
-        token_ids = self.run_model(seqs, is_prefill)
-        self.scheduler.postprocess(seqs, token_ids)
-        outputs = [(seq.seq_id, seq.completion_token_ids, seq.finish_reason) for seq in seqs if seq.is_finished]
-        num_tokens = sum(len(seq) for seq in seqs) if is_prefill else -len(seqs)
-        return outputs, num_tokens
+        all_outputs = []
+        total_num_tokens = 0
+
+        for data_parallel_rank in range(self.data_parallel_size):
+            scheduler = self.schedulers[data_parallel_rank]
+            if scheduler.is_finished():
+                continue
+
+            sequences, is_prefill = scheduler.schedule()
+            token_ids = self.run_model(data_parallel_rank, sequences, is_prefill)
+            scheduler.postprocess(sequences, token_ids)
+
+            outputs = [
+                (seq.seq_id, seq.completion_token_ids, seq.finish_reason) for seq in sequences if seq.is_finished
+            ]
+            all_outputs.extend(outputs)
+
+            num_tokens = sum(len(seq) for seq in sequences) if is_prefill else -len(sequences)
+            total_num_tokens += num_tokens
+
+        return all_outputs, total_num_tokens
 
     def is_finished(self):
-        return self.scheduler.is_finished()
+        return all(s.is_finished() for s in self.schedulers)
 
     def generate(self, prompts, sampling_params, use_tqdm=True):
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
+
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
-        for prompt, sp in zip(prompts, sampling_params):
-            self.add_request(prompt, sp)
+
+        for prompt, sampling_param in zip(prompts, sampling_params):
+            self.add_request(prompt, sampling_param)
 
         outputs = {}
         prefill_throughput = decode_throughput = 0.0
+
         while not self.is_finished():
             t = perf_counter()
             output, num_tokens = self.step()
+
             if use_tqdm:
+                dt = perf_counter() - t
                 if num_tokens > 0:
-                    prefill_throughput = num_tokens / (perf_counter() - t)
-                else:
-                    decode_throughput = -num_tokens / (perf_counter() - t)
+                    prefill_throughput = num_tokens / dt
+                elif num_tokens < 0:
+                    decode_throughput = -num_tokens / dt
 
                 pbar.set_postfix(
                     {"Prefill": f"{int(prefill_throughput)}tok/s", "Decode": f"{int(decode_throughput)}tok/s"}

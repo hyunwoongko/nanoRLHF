@@ -14,6 +14,7 @@ from transformers.modeling_outputs import (
 )
 from transformers.utils import ModelOutput
 
+from nanorlhf.nanotron.distributed.mode import ParallelMode
 from nanorlhf.nanotron.core.tp.loss import maybe_vocab_parallel_cross_entropy
 from nanorlhf.nanotron.distributed.mpu import MPU
 
@@ -66,6 +67,7 @@ def post_process_hf_model(
     mpu: MPU,
     logits: torch.Tensor,
     payload: Dict[str, Any],
+    tp_mode: ParallelMode = ParallelMode.TENSOR,
 ) -> ModelOutput:
     input_ids = payload["user_inputs"].get("input_ids", None)
     labels = payload["user_inputs"].get("labels", None)
@@ -87,7 +89,7 @@ def post_process_hf_model(
         labels = nn.functional.pad(labels, (0, 1), value=-100)
         shift_labels = labels[..., 1:].contiguous().view(-1).to(logits.device)
         shift_logits = logits.view(-1, logits.size(-1))
-        loss = maybe_vocab_parallel_cross_entropy(shift_logits, shift_labels, mpu)
+        loss = maybe_vocab_parallel_cross_entropy(shift_logits, shift_labels, mpu, tp_mode)
         return CausalLMOutputWithPast(
             loss=loss, logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values  # noqa
         )

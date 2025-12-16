@@ -14,15 +14,15 @@ class VocabParallelCrossEntropyFunction(torch.autograd.Function):
 
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32, device_type="cuda")
-    def forward(ctx: Any, vocab_parallel_logits: torch.Tensor, targets: torch.Tensor, mpu: MPU):
-        collectives = Collectives(mpu, mode=ParallelMode.TENSOR)
+    def forward(ctx: Any, vocab_parallel_logits: torch.Tensor, targets: torch.Tensor, mpu: MPU, mode: ParallelMode):
+        collectives = Collectives(mpu, mode=mode)
 
         logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
         logits_max = collectives.all_reduce(logits_max, op=dist.ReduceOp.MAX)
         normalized_logits = vocab_parallel_logits - logits_max.unsqueeze(-1)
 
         partition_vocab_size = normalized_logits.size(-1)
-        local_rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        local_rank = mpu.get_local_rank(mode)
         vocab_start_idx = local_rank * partition_vocab_size
         vocab_end_idx = vocab_start_idx + partition_vocab_size
 
@@ -62,18 +62,25 @@ class VocabParallelCrossEntropyFunction(torch.autograd.Function):
         grad_2d[arange_1d, masked_target_1d] -= 1.0 - target_mask.view(-1).float()
 
         grad_input.mul_(grad.unsqueeze(-1))
-        return grad_input, None, None
+        return grad_input, None, None, None
 
 
 class VocabParallelCrossEntropyLoss(_Loss):
-    def __init__(self, reduce_mean: bool = True, ignore_index: int = -100, mpu: Optional[MPU] = None):
+    def __init__(
+        self,
+        reduce_mean: bool = True,
+        ignore_index: int = -100,
+        mpu: Optional[MPU] = None,
+        mode: ParallelMode = ParallelMode.TENSOR,
+    ):
         super().__init__()
         self.reduce_mean = reduce_mean
         self.ignore_index = ignore_index
         self.mpu = mpu
+        self.mode = mode
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor):
-        loss = VocabParallelCrossEntropyFunction.apply(logits, targets, self.mpu)
+        loss = VocabParallelCrossEntropyFunction.apply(logits, targets, self.mpu, self.mode)
         valid_count = (targets != self.ignore_index).sum()
         loss[targets == self.ignore_index] = 0.0
         if self.reduce_mean:
@@ -84,9 +91,9 @@ class VocabParallelCrossEntropyLoss(_Loss):
         return loss
 
 
-def maybe_vocab_parallel_cross_entropy(logits: torch.Tensor, labels: torch.Tensor, mpu: MPU):
-    if mpu is not None and mpu.get_world_size(ParallelMode.TENSOR) > 1:
-        loss_fn = VocabParallelCrossEntropyLoss(mpu=mpu)
+def maybe_vocab_parallel_cross_entropy(logits: torch.Tensor, labels: torch.Tensor, mpu: MPU, mode: ParallelMode):
+    if mpu is not None and mpu.get_world_size(mode) > 1:
+        loss_fn = VocabParallelCrossEntropyLoss(mpu=mpu, mode=mode)
     else:
         loss_fn = torch.nn.CrossEntropyLoss()
     return loss_fn(logits, labels)

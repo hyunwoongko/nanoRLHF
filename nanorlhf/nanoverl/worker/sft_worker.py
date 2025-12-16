@@ -53,6 +53,8 @@ def initialize_model(config, rank):
             data_parallel_size=config.model.data_parallel_size,
             pipeline_parallel_size=config.model.pipeline_parallel_size,
             tensor_parallel_size=config.model.tensor_parallel_size,
+            rollout_data_parallel_size=0,
+            rollout_tensor_parallel_size=0,
             backend=config.model.backend,
             seed=config.model.seed,
         )

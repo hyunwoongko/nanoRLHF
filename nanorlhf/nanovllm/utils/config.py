@@ -19,6 +19,7 @@ class NanoVLLMConfig:
 
     # distributed options
     tensor_parallel_size: int = 1
+    data_parallel_size: int = 1
     host: str = "127.0.0.1"
     port: int = 23333
     backend: str = "nccl"

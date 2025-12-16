@@ -1,8 +1,8 @@
 data:
-  train_batch_size: 4
-  valid_batch_size: 2
-  train_micro_batch_size: 1
-  valid_micro_batch_size: 1
+  train_batch_size: 16
+  valid_batch_size: 16
+  train_micro_batch_size: 4
+  valid_micro_batch_size: 4
   train_data: ./data/DeepMath-40k/preprocessed/valid.nano
   valid_data: ./data/DeepMath-40k/preprocessed/valid.nano
   num_workers: 8
@@ -13,7 +13,7 @@ actor:
   tensor_parallel_size: 2
   pipeline_parallel_size: 1
   data_parallel_size: 2
-  zero_stage: 1
+  zero_stage: 2
   host: 127.0.0.1
   port: 23333
   backend: nccl
@@ -23,13 +23,15 @@ actor:
 
 rollout:
   model_name_or_path: "./checkpoints/math/sft/step_2109/merged"
-  max_num_batched_tokens: 16384
+  max_num_batched_tokens: 65536
   max_num_seqs: 1024
   max_model_len: 2048
   n: 4
-  gpu_memory_utilization: 0.2
+  gpu_memory_utilization: 0.9
   kvcache_block_size: 256
   nproc_per_node: 4
+  tensor_parallel_size: 2
+  data_parallel_size: 2
 
 reward:
   name: compute_score

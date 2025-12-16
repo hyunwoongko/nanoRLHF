@@ -42,6 +42,8 @@ class RolloutConfig:
     gpu_memory_utilization: float = 0.4
     kvcache_block_size: int = 256
     nproc_per_node: int = 1
+    tensor_parallel_size: int = 1
+    data_parallel_size: int = 1
 
 
 @dataclass

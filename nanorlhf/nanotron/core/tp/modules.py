@@ -19,23 +19,24 @@ from nanorlhf.nanotron.utils.wrapping import tag_module
 
 class ParallelizableModuleMixin:
     @classmethod
-    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         raise NotImplementedError
 
     @classmethod
-    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         raise NotImplementedError
 
     @classmethod
-    def convert_to_parallel_module(cls, plan: ModuleParallelPlan, mpu: MPU, **kwargs):
+    def convert_to_parallel_module(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, **kwargs):
         module = plan.module
         original_module_class = module.__class__
         module.__class__ = cls
         module.original_module_class = original_module_class
 
         module.mpu = mpu
-        module.world_size = mpu.get_world_size(ParallelMode.TENSOR)
-        module.rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        module.mode = mode
+        module.world_size = mpu.get_world_size(mode)
+        module.rank = mpu.get_local_rank(mode)
 
         for key, val in kwargs.items():
             setattr(module, key, val)
@@ -50,6 +51,9 @@ class ParallelizableModuleMixin:
         del module.mpu
         del module.world_size
         del module.rank
+
+        if hasattr(module, "mode"):
+            del module.mode
 
         for key, val in kwargs.items():
             if val is None:
@@ -82,14 +86,16 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
         self,
         num_embeddings: int,
         embedding_dim: int,
+        mode: ParallelMode,
         dtype: Optional[torch.dtype] = None,
         mpu: Optional[MPU] = None,
     ):
         self.mpu = mpu
-        self.world_size = mpu.get_world_size(ParallelMode.TENSOR)
-        self.rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        self.mode = mode
+        self.world_size = mpu.get_world_size(mode)
+        self.rank = mpu.get_local_rank(mode)
         self.vocab_start_idx, self.vocab_end_idx = VocabUtility.vocab_range_from_global_vocab_size(
-            num_embeddings, mpu.get_local_rank(ParallelMode.TENSOR), self.world_size
+            num_embeddings, self.rank, self.world_size
         )
         super().__init__(
             num_embeddings=num_embeddings // self.world_size,
@@ -98,14 +104,13 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
         )
 
     @classmethod
-    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         module = plan.module
-        rank = mpu.get_local_rank(ParallelMode.TENSOR)
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        rank = mpu.get_local_rank(mode)
+        world_size = mpu.get_world_size(mode)
 
         assert module.num_embeddings % world_size == 0, (
-            f"Num embeddings ({module.num_embeddings}) must be divisible by "
-            f"the world size ({world_size})."
+            f"Num embeddings ({module.num_embeddings}) must be divisible by " f"the world size ({world_size})."
         )
 
         vocab_start_idx, vocab_end_idx = VocabUtility.vocab_range_from_global_vocab_size(
@@ -115,7 +120,7 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
         with torch.no_grad():
             chunked_weight = module.weight.chunk(world_size, dim=0)
             module.weight.data = chunked_weight[rank].contiguous()
-            tag_module(module, ParallelMode.TENSOR, rank)
+            tag_module(module, mode, rank)
 
         return cls.convert_to_parallel_module(
             plan=plan,
@@ -123,16 +128,17 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
             vocab_start_idx=vocab_start_idx,
             vocab_end_idx=vocab_end_idx,
             num_embeddings=module.weight.size(0),
+            mode=mode,
         )
 
     @classmethod
-    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         module = plan.module
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        world_size = mpu.get_world_size(mode)
 
         with torch.no_grad():
             tensor_list = [torch.zeros_like(module.weight.data) for _ in range(world_size)]
-            dist.all_gather(tensor_list, module.weight.data.contiguous(), mpu.get_group(ParallelMode.TENSOR))
+            dist.all_gather(tensor_list, module.weight.data.contiguous(), mpu.get_group(mode))
             weight = torch.cat(tensor_list, dim=0)
             module.weight.data = weight[: module.original_num_embeddings, :].contiguous()
 
@@ -172,7 +178,7 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
         if self.world_size > 1:
             output_parallel[input_mask, :] = 0.0
 
-        return tp_all_reduce(output_parallel, self.mpu)
+        return tp_all_reduce(output_parallel, self.mpu, self.mode)
 
 
 class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
@@ -180,19 +186,19 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         self,
         in_features: int,
         out_features: int,
+        mode: ParallelMode,
         bias: bool = True,
         dtype: Optional[torch.dtype] = None,
         gather_output: bool = False,
         mpu: Optional[MPU] = None,
     ):
         self.mpu = mpu
-        self.world_size = mpu.get_world_size(ParallelMode.TENSOR)
-        self.rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        self.world_size = mpu.get_world_size(mode)
+        self.rank = mpu.get_local_rank(mode)
         self.gather_output = gather_output
 
         assert out_features % self.world_size == 0, (
-            f"Out features ({out_features}) must be divisible by "
-            f"the world size ({self.world_size})."
+            f"Out features ({out_features}) must be divisible by " f"the world size ({self.world_size})."
         )
 
         super().__init__(
@@ -207,16 +213,16 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         return hasattr(module, "bias") and module.bias is not None and module.bias.dim() >= 1
 
     @classmethod
-    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, tensor_type: str):
+    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
         attention_type = plan.attention_type
-        rank = mpu.get_local_rank(ParallelMode.TENSOR)
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        rank = mpu.get_local_rank(mode)
+        world_size = mpu.get_world_size(mode)
 
         if attention_type is not None and attention_type.value > 1:
             num_fused = attention_type.value
             scattered = tensor.chunk(num_fused * world_size, dim=0)
-            scattered = [scattered[i * world_size: (i + 1) * world_size] for i in range(num_fused)]
+            scattered = [scattered[i * world_size : (i + 1) * world_size] for i in range(num_fused)]
             scattered = list(map(lambda t: torch.cat([*t], dim=0), zip(*scattered)))
         else:
             scattered = tensor.chunk(world_size, dim=0)
@@ -225,38 +231,38 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         return tensor
 
     @classmethod
-    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, tensor_type: str):
+    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        world_size = mpu.get_world_size(mode)
         attention_type = plan.attention_type
         num_fused = attention_type.value if attention_type is not None else 1
 
         final_outputs = []
         for t in tensor.chunk(num_fused, dim=0):
             gather_outputs = [torch.zeros_like(t) for _ in range(world_size)]
-            dist.all_gather(gather_outputs, t.contiguous(), mpu.get_group(ParallelMode.TENSOR))
+            dist.all_gather(gather_outputs, t.contiguous(), mpu.get_group(mode))
             final_outputs.append(torch.cat(gather_outputs, dim=0))
 
         tensor.data = torch.cat(final_outputs, dim=0).contiguous()
         return tensor
 
     @classmethod
-    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, scatter_tensor: bool = True):
+    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, scatter_tensor: bool = True):
         module = plan.module
 
         if not hasattr(module, "weight") or module.weight is None or module.weight.dim() != 2:
             return module
 
-        rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        rank = mpu.get_local_rank(mode)
         with torch.no_grad():
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
 
             if scatter_tensor is True:
-                module.weight = cls._scatter_tensor(plan, mpu, "weight")
+                module.weight = cls._scatter_tensor(plan, mpu, mode, "weight")
                 if cls._has_bias(module):
-                    module.bias = cls._scatter_tensor(plan, mpu, "bias")
-                tag_module(module, ParallelMode.TENSOR, rank)
+                    module.bias = cls._scatter_tensor(plan, mpu, mode, "bias")
+                tag_module(module, mode, rank)
 
         return cls.convert_to_parallel_module(
             plan=plan,
@@ -264,16 +270,17 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
             in_features=module.weight.size()[1],
             out_features=module.weight.size()[0],
             gather_output=False,
+            mode=mode,
         )
 
     @classmethod
-    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, gather_tensor: bool = True):
+    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, gather_tensor: bool = True):
         module = plan.module
         with torch.no_grad():
             if gather_tensor is True:
-                module.weight = cls._gather_tensor(plan, mpu, "weight")
+                module.weight = cls._gather_tensor(plan, mpu, mode, "weight")
                 if cls._has_bias(module):
-                    module.bias = cls._gather_tensor(plan, mpu, "bias")
+                    module.bias = cls._gather_tensor(plan, mpu, mode, "bias")
 
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
@@ -289,7 +296,7 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         return f"in_features={self.in_features}, out_features={self.out_features}"
 
     def forward(self, input: torch.Tensor):
-        input = tp_broadcast(input, self.mpu)
+        input = tp_broadcast(input, self.mpu, self.mode)
         outputs = F.linear(input, self.weight, bias=self.bias)
 
         if hasattr(self, "original_out_features"):
@@ -305,7 +312,7 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
                 outputs[..., valid_local:].fill_(torch.finfo(outputs.dtype).min)
 
         if self.gather_output:
-            outputs = tp_all_gather(outputs, dim=-1, mpu=self.mpu)
+            outputs = tp_all_gather(outputs, dim=-1, mpu=self.mpu, mode=self.mode)
 
         if not outputs.is_contiguous():
             outputs = outputs.contiguous()
@@ -318,19 +325,19 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         self,
         in_features: int,
         out_features: int,
+        mode: ParallelMode,
         bias: bool = True,
         dtype: Optional[torch.dtype] = None,
         parallel_input: bool = True,
         mpu: Optional[MPU] = None,
     ):
         self.mpu = mpu
-        self.world_size = mpu.get_world_size(ParallelMode.TENSOR)
-        self.rank = mpu.get_local_rank(ParallelMode.TENSOR)
+        self.world_size = mpu.get_world_size(mode)
+        self.rank = mpu.get_local_rank(mode)
         self.parallel_input = parallel_input
 
         assert in_features % self.world_size == 0, (
-            f"In features ({in_features}) must be divisible by "
-            f"the world size ({self.world_size})."
+            f"In features ({in_features}) must be divisible by " f"the world size ({self.world_size})."
         )
 
         super().__init__(
@@ -341,27 +348,27 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         )
 
     @classmethod
-    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, tensor_type: str):
+    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
-        rank = mpu.get_local_rank(ParallelMode.TENSOR)
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        rank = mpu.get_local_rank(mode)
+        world_size = mpu.get_world_size(mode)
 
         chunked = tensor.chunk(world_size, dim=1)
         tensor.data = chunked[rank].contiguous()
         return tensor
 
     @classmethod
-    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, tensor_type: str):
+    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
-        world_size = mpu.get_world_size(ParallelMode.TENSOR)
+        world_size = mpu.get_world_size(mode)
 
         gather_outputs = [torch.zeros_like(tensor) for _ in range(world_size)]
-        dist.all_gather(gather_outputs, tensor.contiguous(), mpu.get_group(ParallelMode.TENSOR))
+        dist.all_gather(gather_outputs, tensor.contiguous(), mpu.get_group(mode))
         tensor.data = torch.cat(gather_outputs, dim=1).contiguous()
         return tensor
 
     @classmethod
-    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def parallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         module = plan.module
 
         if not hasattr(module, "weight") or module.weight is None or module.weight.dim() != 2:
@@ -370,7 +377,7 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         with torch.no_grad():
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
-            module.weight = cls._scatter_tensor(plan, mpu, "weight")
+            module.weight = cls._scatter_tensor(plan, mpu, mode, "weight")
 
         return cls.convert_to_parallel_module(
             plan=plan,
@@ -378,13 +385,14 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
             in_features=module.weight.size()[1],
             out_features=module.weight.size()[0],
             parallel_input=True,
+            mode=mode,
         )
 
     @classmethod
-    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU):
+    def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         module = plan.module
         with torch.no_grad():
-            module.weight = cls._gather_tensor(plan, mpu, "weight")
+            module.weight = cls._gather_tensor(plan, mpu, mode, "weight")
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
 
@@ -400,10 +408,10 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
 
     def forward(self, input: torch.Tensor):
         if not self.parallel_input:
-            input = tp_scatter(input, dim=-1, mpu=self.mpu)
+            input = tp_scatter(input, dim=-1, mpu=self.mpu, mode=self.mode)
 
         outputs = F.linear(input, self.weight, bias=None)
-        outputs = tp_all_reduce(outputs, self.mpu)
+        outputs = tp_all_reduce(outputs, self.mpu, self.mode)
 
         if self.bias is not None:
             outputs = outputs + self.bias

@@ -10,7 +10,7 @@ if __name__ == '__main__':
     ]
 
     engine = LLM("Qwen/Qwen3-4B-base")
-    params = SamplingParams(max_tokens=32, temperature=0.8, top_p=0.7)
+    params = SamplingParams(max_tokens=32, temperature=0.8)
     outputs = engine.generate(prompts, sampling_params=params)
 
     print("-" * 50)

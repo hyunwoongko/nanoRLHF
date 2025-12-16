@@ -16,8 +16,8 @@ prompts = list(datasets.load_dataset("google-research-datasets/poem_sentiment", 
 warm_ups = ["This is a warm-up prompt.", "This is also a warm-up prompt."]
 
 
-def nano_generation(model_name, max_new_tokens, temperature, top_p):
-    params = SamplingParams(max_tokens=max_new_tokens, temperature=temperature, top_p=top_p)
+def nano_generation(model_name, max_new_tokens, temperature):
+    params = SamplingParams(max_tokens=max_new_tokens, temperature=temperature)
     engine = LLM(model_name)
     engine.generate(warm_ups, sampling_params=params)
 
@@ -30,7 +30,7 @@ def nano_generation(model_name, max_new_tokens, temperature, top_p):
     return outputs_decoded, elapsed
 
 
-def hf_generation(model_name, max_new_tokens, temperature, top_p):
+def hf_generation(model_name, max_new_tokens, temperature):
     hf_config = AutoConfig.from_pretrained(model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(
@@ -46,7 +46,7 @@ def hf_generation(model_name, max_new_tokens, temperature, top_p):
 
     warm_ups_tokenized = tokenizer(warm_ups, return_tensors="pt", padding=True).to(model.device)
     model.generate(
-        **warm_ups_tokenized, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature, top_p=top_p
+        **warm_ups_tokenized, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature
     )
 
     max_batch_size = 8
@@ -56,7 +56,7 @@ def hf_generation(model_name, max_new_tokens, temperature, top_p):
         batch_prompts = prompts[i : i + max_batch_size]
         prompts_tokenized = tokenizer(batch_prompts, return_tensors="pt", padding=True).to(model.device)
         outputs = model.generate(
-            **prompts_tokenized, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature, top_p=top_p
+            **prompts_tokenized, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature
         )
         outputs_decoded = tokenizer.batch_decode(outputs[:, prompts_tokenized['input_ids'].shape[1] :])
         batched_outputs_decoded.extend(outputs_decoded)
@@ -69,10 +69,9 @@ def hf_generation(model_name, max_new_tokens, temperature, top_p):
 if __name__ == "__main__":
     max_new_tokens = 32
     temperature = 0.7
-    top_p = 0.9
 
-    nano_outputs, nano_time = nano_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature, top_p)
-    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature, top_p)
+    nano_outputs, nano_time = nano_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature)
+    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature)
 
     print(f"HuggingFace generation time: {hf_time:.2f} seconds")
     print(f"NanoVLLM generation time: {nano_time:.2f} seconds")

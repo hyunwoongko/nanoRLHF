@@ -8,7 +8,6 @@ import torch.distributed as dist
 
 from nanorlhf.nanotron.distributed.initializers import (
     DataParallelGroupInitializer,
-    ModelParallelGroupInitializer,
     TensorParallelGroupInitializer,
     PipelineParallelGroupInitializer,
     TiedEmbeddingGroupInitializer,
@@ -115,6 +114,8 @@ class MPU:
         data_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         tensor_parallel_size: int = 1,
+        rollout_data_parallel_size: int = 0,
+        rollout_tensor_parallel_size: int = 0,
         backend: str = "nccl",
         seed: int = 42,
     ):
@@ -125,6 +126,8 @@ class MPU:
             data_parallel_size (int): data parallel size
             pipeline_parallel_size (int): pipeline parallel size
             tensor_parallel_size (int): tensor parallel size
+            rollout_data_parallel_size (int): rollout data parallel size
+            rollout_tensor_parallel_size (int): rollout tensor parallel size
             backend (str): distributed backend
             seed (int): random seed value
 
@@ -135,8 +138,6 @@ class MPU:
             >>> # Initialize from torch.distributed.launch
             >>> mpu = MPU.from_torch(
             ...     data_parallel_size=1,
-            ...     sequence_parallel_size=1,
-            ...     expert_parallel_size=1,
             ...     pipeline_parallel_size=1,
             ...     tensor_parallel_size=1,
             ... )
@@ -158,6 +159,8 @@ class MPU:
             data_parallel_size=data_parallel_size,
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
+            rollout_data_parallel_size=rollout_data_parallel_size,
+            rollout_tensor_parallel_size=rollout_tensor_parallel_size,
             backend=backend,
             seed=seed,
         )
@@ -170,6 +173,8 @@ class MPU:
         data_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         tensor_parallel_size: int = 1,
+        rollout_data_parallel_size: int = 0,
+        rollout_tensor_parallel_size: int = 0,
         backend: str = "nccl",
         seed: int = 42,
         local_rank: Optional[int] = None,
@@ -183,6 +188,8 @@ class MPU:
             data_parallel_size (int): data parallel size
             pipeline_parallel_size (int): pipeline parallel size
             tensor_parallel_size (int): tensor parallel size
+            rollout_data_parallel_size (int): rollout data parallel size
+            rollout_tensor_parallel_size (int): rollout tensor parallel size
             backend (str): distributed backend
             seed (int): random seed value
             local_rank (Optional[int]): local rank
@@ -196,8 +203,6 @@ class MPU:
             ...     host="MY_HOST",
             ...     port=1234,
             ...     data_parallel_size=1,
-            ...     sequence_parallel_size=1,
-            ...     expert_parallel_size=1,
             ...     pipeline_parallel_size=1,
             ...     tensor_parallel_size=1,
             ... )
@@ -216,6 +221,8 @@ class MPU:
             data_parallel_size=data_parallel_size,
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
+            rollout_data_parallel_size=rollout_data_parallel_size,
+            rollout_tensor_parallel_size=rollout_tensor_parallel_size,
             backend=backend,
             seed=seed,
         )
@@ -228,6 +235,8 @@ class MPU:
         data_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         tensor_parallel_size: int = 1,
+        rollout_data_parallel_size: int = 0,
+        rollout_tensor_parallel_size: int = 0,
         backend: str = "nccl",
         seed: int = 42,
     ):
@@ -240,6 +249,8 @@ class MPU:
             data_parallel_size (int): data parallel size
             pipeline_parallel_size (int): pipeline parallel size
             tensor_parallel_size (int): tensor parallel size
+            rollout_data_parallel_size (int): rollout data parallel size
+            rollout_tensor_parallel_size (int): rollout tensor parallel size
             backend (str): distributed backend
             seed (int): random seed value
 
@@ -252,8 +263,6 @@ class MPU:
             ...     host="MY_HOST",
             ...     port=1234,
             ...     data_parallel_size=1,
-            ...     sequence_parallel_size=1,
-            ...     expert_parallel_size=1,
             ...     pipeline_parallel_size=1,
             ...     tensor_parallel_size=1,
             ... )
@@ -273,6 +282,8 @@ class MPU:
             data_parallel_size=data_parallel_size,
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
+            rollout_data_parallel_size=rollout_data_parallel_size,
+            rollout_tensor_parallel_size=rollout_tensor_parallel_size,
             backend=backend,
             seed=seed,
         )
@@ -288,15 +299,20 @@ class MPU:
         data_parallel_size: int,
         pipeline_parallel_size: int,
         tensor_parallel_size: int,
+        rollout_data_parallel_size: int,
+        rollout_tensor_parallel_size: int,
         backend: str,
         seed: int,
     ):
-        assert world_size == data_parallel_size * pipeline_parallel_size * tensor_parallel_size, (
-            f"Expected the world size `{world_size}` to "
-            f"data parallel size ({data_parallel_size}) * "
-            f"pipeline parallel size ({pipeline_parallel_size}) * "
-            f"tensor parallel size ({tensor_parallel_size}), "
-            f"but got `{data_parallel_size * pipeline_parallel_size * tensor_parallel_size}`."
+        self.actor_world_size = data_parallel_size * pipeline_parallel_size * tensor_parallel_size
+        self.rollout_world_size = rollout_data_parallel_size * rollout_tensor_parallel_size
+        assert world_size == self.actor_world_size + self.rollout_world_size, (
+            "world_size must be equal to actor_world_size + rollout_world_size. "
+            "actor_world_size = data_parallel_size * pipeline_parallel_size * tensor_parallel_size = "
+            f"{self.actor_world_size}, "
+            "rollout_world_size = rollout_data_parallel_size * rollout_tensor_parallel_size = "
+            f"{self.rollout_world_size}, "
+            f"but got world_size = {world_size}."
         )
 
         self._global_ranks = {}
@@ -310,18 +326,24 @@ class MPU:
         self.data_parallel_size = data_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
         self.tensor_parallel_size = tensor_parallel_size
-
+        self.rollout_data_parallel_size = rollout_data_parallel_size
+        self.rollout_tensor_parallel_size = rollout_tensor_parallel_size
         self.local_world_size = local_world_size
+
+        for mode in ParallelMode:
+            self.add_world_size(mode, 0)
+            self.add_local_rank(mode, 0)
+            self.add_group(mode, None)
+            self.add_cpu_group(mode, None)
+            self.add_ranks_in_group(mode, [])
+
         self.init_global_dist(rank, world_size, backend, host, port)
 
         if torch.cuda.is_available():
             self.set_device(local_rank)
 
         self.init_parallel_groups()
-
-        if not dist.is_initialized():
-            self.set_seed(seed)
-
+        self.set_seed(seed)
         self.seed = seed
         self.make_ranks_to_devices()
 
@@ -412,7 +434,6 @@ class MPU:
             {
                 ParallelMode.GLOBAL: 0,
                 ParallelMode.DATA: 0,
-                ParallelMode.MODEL: 0,
                 ParallelMode.TENSOR: 0,
                 ParallelMode.PIPELINE: 0,
             }
@@ -462,7 +483,6 @@ class MPU:
                 {
                     ParallelMode.GLOBAL: 0,
                     ParallelMode.DATA: 0,
-                    ParallelMode.MODEL: 0,
                     ParallelMode.TENSOR: 0,
                     ParallelMode.PIPELINE: 0,
                 }
@@ -568,7 +588,7 @@ class MPU:
         self._check_parallel_mode(mode)
         return self._groups.get(mode, None)
 
-    def add_group(self, mode: ParallelMode, group: torch.distributed.ProcessGroup):
+    def add_group(self, mode: ParallelMode, group: Optional[torch.distributed.ProcessGroup]):
         """
         Add the process group for the given parallel mode.
 
@@ -602,7 +622,7 @@ class MPU:
         self._check_parallel_mode(mode)
         return self._cpu_groups.get(mode, None)
 
-    def add_cpu_group(self, mode: ParallelMode, group: torch.distributed.ProcessGroup):
+    def add_cpu_group(self, mode: ParallelMode, group: Optional[torch.distributed.ProcessGroup]):
         """
         Add the CPU process group for the given parallel mode.
 
@@ -660,15 +680,17 @@ class MPU:
         ordered_modes = [
             ParallelMode.GLOBAL,
             ParallelMode.DATA,
-            ParallelMode.MODEL,
             ParallelMode.TENSOR,
             ParallelMode.PIPELINE,
             ParallelMode.TIED_EMBEDDING,
+            ParallelMode.ROLLOUT_DATA,
+            ParallelMode.ROLLOUT_TENSOR,
         ]
 
         vals = []
         for mode in ordered_modes:
-            vals.append(self._local_ranks.get(mode, 0))
+            local_rank = self._local_ranks.get(mode, 0)
+            vals.append(local_rank)
         rank_tensor = torch.tensor(vals, dtype=torch.long, device="cuda")
 
         world = self.get_world_size(ParallelMode.GLOBAL)
@@ -699,13 +721,11 @@ class MPU:
                 (
                     (<ParallelMode.GLOBAL: 'global'>, 0),
                     (<ParallelMode.DATA: 'data'>, 0),
-                    (<ParallelMode.MODEL: 'model'>, 0),
                     (<ParallelMode.TENSOR: 'tensor'>, 0),
                 ): 0,
                 (
                     (<ParallelMode.GLOBAL: 'global'>, 1),
                     (<ParallelMode.DATA: 'data'>, 0),
-                    (<ParallelMode.MODEL: 'model'>, 1),
                     (<ParallelMode.TENSOR: 'tensor'>, 1),
                 ): 1,
                 ...
@@ -716,10 +736,11 @@ class MPU:
         ordered_modes = [
             ParallelMode.GLOBAL,
             ParallelMode.DATA,
-            ParallelMode.MODEL,
             ParallelMode.TENSOR,
             ParallelMode.PIPELINE,
             ParallelMode.TIED_EMBEDDING,
+            ParallelMode.ROLLOUT_DATA,
+            ParallelMode.ROLLOUT_TENSOR,
         ]
 
         key = []
@@ -803,24 +824,44 @@ class MPU:
         rank = self.get_global_rank()
         world_size = self.get_world_size(ParallelMode.GLOBAL)
 
-        initializer_param = {
+        actor_initializer_params = {
             "rank": rank,
             "world_size": world_size,
             "data_parallel_size": self.data_parallel_size,
             "pipeline_parallel_size": self.pipeline_parallel_size,
             "tensor_parallel_size": self.tensor_parallel_size,
+            "group_world_size": self.actor_world_size,
+            "group_rank_offset": 0,
+        }
+        rollout_initializer_param = {
+            "rank": rank,
+            "world_size": world_size,
+            "data_parallel_size": self.rollout_data_parallel_size,
+            "pipeline_parallel_size": 1,
+            "tensor_parallel_size": self.rollout_tensor_parallel_size,
+            "group_world_size": self.rollout_world_size,
+            "group_rank_offset": self.actor_world_size,
         }
 
-        initializer_results = [
-            DataParallelGroupInitializer(**initializer_param).init_dist_group(),
-            ModelParallelGroupInitializer(**initializer_param).init_dist_group(),
-            TensorParallelGroupInitializer(**initializer_param).init_dist_group(),
-            PipelineParallelGroupInitializer(**initializer_param).init_dist_group(),
-            TiedEmbeddingGroupInitializer(**initializer_param).init_dist_group(),
-        ]
+        initializer_results = []
+        if self.actor_world_size != 0:
+            initializer_results.append(DataParallelGroupInitializer(**actor_initializer_params).init_dist_group())
+            initializer_results.append(TensorParallelGroupInitializer(**actor_initializer_params).init_dist_group())
+            initializer_results.append(PipelineParallelGroupInitializer(**actor_initializer_params).init_dist_group())
+            initializer_results.append(TiedEmbeddingGroupInitializer(**actor_initializer_params).init_dist_group())
+
+        if self.rollout_world_size != 0:
+            initializer_results.append(
+                DataParallelGroupInitializer(**rollout_initializer_param).init_dist_group(ParallelMode.ROLLOUT_DATA)
+            )
+            initializer_results.append(
+                TensorParallelGroupInitializer(**rollout_initializer_param).init_dist_group(ParallelMode.ROLLOUT_TENSOR)
+            )
 
         for initializer_result in initializer_results:
-            if isinstance(initializer_result, list):
+            if initializer_result is None:
+                continue
+            elif isinstance(initializer_result, list):
                 for res in initializer_result:
                     self._register_dist(**res)
             else:
@@ -897,25 +938,34 @@ class MPU:
         np.random.seed(seed)
         torch.manual_seed(seed)
 
-        if torch.cuda.is_available():
-            # create random seed for different parallel modes
-            # data parallel seed are kept the same
-            parallel_seed = seed
-            add_seed(ParallelMode.DATA, parallel_seed)
+        if not torch.cuda.is_available():
+            return
 
-            # model parallel seeds are different across ranks
+        # actor slice seeds
+        if self.is_initialized(ParallelMode.DATA):
+            add_seed(ParallelMode.DATA, seed)
+        if self.is_initialized(ParallelMode.TENSOR):
             pipeline_offset = self._local_ranks.get(ParallelMode.PIPELINE, 0)
+            tp_rank = self.get_local_rank(ParallelMode.TENSOR)
+            tp_rank_with_offset = tp_rank + pipeline_offset * 1024
+            add_seed(ParallelMode.TENSOR, seed + tp_rank_with_offset)
 
-            # add seed for data parallel and tensor parallel only
-            if self.is_initialized(ParallelMode.TENSOR):
-                tp_rank = self.get_local_rank(ParallelMode.TENSOR)
+        # rollout slice seeds
+        if self.is_initialized(ParallelMode.ROLLOUT_DATA) or self.is_initialized(ParallelMode.ROLLOUT_TENSOR):
+            rollout_local = self.get_global_rank() - self.actor_world_size
+            if 0 <= rollout_local < self.rollout_world_size:
+                rollout_tp = self.rollout_tensor_parallel_size
+                replica_id = rollout_local // rollout_tp
+                tp_rank = rollout_local % rollout_tp
+                add_seed(ParallelMode.ROLLOUT_DATA, seed + replica_id * 4096)
+                add_seed(ParallelMode.ROLLOUT_TENSOR, seed + replica_id * 4096 + tp_rank)
 
-                # 100 is only to increase the diff in seeds between pipeline stages
-                tp_rank_with_offset = tp_rank + pipeline_offset * 1024
-                tp_seed = seed + tp_rank_with_offset
-                add_seed(ParallelMode.TENSOR, tp_seed)
-
+        if self.is_initialized(ParallelMode.DATA):
             set_mode(ParallelMode.DATA)
+        elif self.is_initialized(ParallelMode.ROLLOUT_DATA):
+            set_mode(ParallelMode.ROLLOUT_DATA)
+        else:
+            set_mode(ParallelMode.GLOBAL)
 
     @staticmethod
     def get_local_ranks_from_global_rank(
@@ -923,24 +973,20 @@ class MPU:
         data_parallel_size: int,
         tensor_parallel_size: int,
         pipeline_parallel_size: int,
+        global_rank_offset: int = 0,
     ) -> Tuple[int, int, int]:
-        """
-        Get the (data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank)
-        from the given global rank. This is useful when needs local ranks without
-        distributed initialization.
-
-        Args:
-            global_rank (int): The global rank.
-            data_parallel_size (int): The data parallel size.
-            tensor_parallel_size (int): The tensor parallel size.
-            pipeline_parallel_size (int): The pipeline parallel size.
-
-        Returns:
-            Tuple[int, int, int]: The (data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank).
-        """
+        local_rank_in_slice = global_rank - global_rank_offset
         model_parallel_size = tensor_parallel_size * pipeline_parallel_size
-        data_parallel_rank = global_rank // model_parallel_size
-        model_parallel_rank = global_rank % model_parallel_size
+        world_size_in_slice = data_parallel_size * model_parallel_size
+
+        if not (0 <= local_rank_in_slice < world_size_in_slice):
+            raise ValueError(
+                f"global_rank={global_rank} is out of slice range. "
+                f"offset={global_rank_offset}, slice_world_size={world_size_in_slice}."
+            )
+
+        data_parallel_rank = local_rank_in_slice // model_parallel_size
+        model_parallel_rank = local_rank_in_slice % model_parallel_size
         tensor_parallel_rank = model_parallel_rank % tensor_parallel_size
         pipeline_parallel_rank = model_parallel_rank // tensor_parallel_size
         return data_parallel_rank, tensor_parallel_rank, pipeline_parallel_rank

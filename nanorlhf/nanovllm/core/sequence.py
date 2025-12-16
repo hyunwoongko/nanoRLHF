@@ -42,7 +42,6 @@ class Sequence:
         self.temperature = sampling_params.temperature
         self.max_tokens = sampling_params.max_tokens
         self.ignore_eos = sampling_params.ignore_eos
-        self.top_p = sampling_params.top_p
         self.finish_reason = FinishReason.NOT_FINISHED
 
     def __len__(self):
@@ -95,7 +94,6 @@ class Sequence:
             self.num_cached_tokens,
             self.block_table,
             self.temperature,
-            self.top_p,
             self.token_ids if self.num_completion_tokens == 0 else self.last_token,
         )
 
@@ -106,7 +104,6 @@ class Sequence:
             self.num_cached_tokens,
             self.block_table,
             self.temperature,
-            self.top_p,
         ) = state[:-1]
 
         if self.num_completion_tokens == 0:
