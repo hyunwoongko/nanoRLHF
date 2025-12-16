@@ -41,17 +41,8 @@ class RLTrainer:
     def init_ray(self, config):
         nodes = {}
         base_port = 9200
-        for rank in range(self.config.rollout.nproc_per_node):
-            nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
-                cpus=4.0,
-                gpus=1.0,
-                rpc=True,
-                host=config.actor.host,
-                port=base_port + rank,
-            )
 
         for rank in range(self.config.actor.nproc_per_node):
-            rank = rank + self.config.rollout.nproc_per_node
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
                 cpus=4.0,
                 gpus=1.0,
@@ -60,7 +51,17 @@ class RLTrainer:
                 port=base_port + rank,
             )
 
-        session = nanoray.init(nodes, default_node_id=f"actor-global_rank=1")
+        for rank in range(self.config.rollout.nproc_per_node):
+            rank = rank + self.config.actor.nproc_per_node
+            nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
+                cpus=4.0,
+                gpus=1.0,
+                rpc=True,
+                host=config.actor.host,
+                port=base_port + rank,
+            )
+
+        session = nanoray.init(nodes, default_node_id=f"actor-global_rank=0")
         node_ids = list(session._workers.keys())
         if len(node_ids) < self.config.actor.nproc_per_node + self.config.rollout.nproc_per_node:
             raise RuntimeError(
@@ -158,3 +159,4 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("--config", type=str, required=True, help="Path to the RL config yaml file.")
     trainer = RLTrainer(parser.parse_args().config)
+    trainer.fit()

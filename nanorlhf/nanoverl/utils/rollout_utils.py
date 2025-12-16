@@ -23,12 +23,9 @@ class RolloutManager:
     def create_schedulers(self):
         schedulers = []
         for data_parallel_rank in range(self.data_parallel_size):
-            for tensor_parallel_rank in range(self.tensor_parallel_size):
-                worker = self.workers[data_parallel_rank][tensor_parallel_rank]
-                scheduler = Scheduler(
-                    nanoray.get(worker.get_rollout_config.remote(blocking=True))
-                )
-                schedulers.append(scheduler)
+            worker = self.workers[data_parallel_rank][0]
+            scheduler = Scheduler(nanoray.get(worker.get_rollout_config.remote(blocking=True)))
+            schedulers.append(scheduler)
         return schedulers
 
     def rollout(self, batches):
@@ -75,10 +72,10 @@ class RolloutManager:
         scheduler = self.schedulers[data_parallel_rank]
         sequences = []
         for prompt in unpacked_prompts:
-            sequence = Sequence(
-                token_ids=prompt["input_ids"][0].tolist(),
-                sampling_params=self.sampling_params,
-            )
+            token_ids = prompt["input_ids"][0].tolist()
+            if len(token_ids) == 0:
+                raise ValueError(f"Got empty prompt after unpack_sequences()\ntoken_ids: {token_ids}")
+            sequence = Sequence(token_ids, sampling_params=self.sampling_params)
             scheduler.add(sequence)
             sequences.append(sequence)
         return sequences
@@ -97,6 +94,7 @@ class RolloutManager:
                     object_ref = runner.run.remote(sequences, is_prefill, blocking=False)
                     object_refs.append(object_ref)
                 token_ids = nanoray.get(object_refs)[0]
+                print(f"[R{data_parallel_rank}]: {token_ids}")
                 scheduler.postprocess(sequences, token_ids)
 
     def repack_outputs(self, data_parallel_unpacked_batches, data_parallel_outputs):

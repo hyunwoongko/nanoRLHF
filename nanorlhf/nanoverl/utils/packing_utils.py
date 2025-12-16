@@ -110,11 +110,13 @@ def split_packed_batch(
 
 def unpack_sequences(input_ids, position_ids, reward_model_list):
     assert input_ids.size(0) == 1
-    starts = (position_ids == 0).nonzero(as_tuple=False).flatten().tolist()
+    starts = (position_ids[0] == 0).nonzero(as_tuple=False).flatten().tolist()
     ends = starts[1:] + [input_ids.numel()]
     unpacked_sequences = []
 
     for i, (s, e) in enumerate(zip(starts, ends)):
+        if e <= s:
+            continue
         reward_model = reward_model_list[i] if reward_model_list is not None else None
         unpacked_input_ids = input_ids[:, s:e]
         unpacked_position_ids = position_ids[:, s:e]
