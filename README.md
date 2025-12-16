@@ -105,7 +105,7 @@ Running the following command will tokenize the dataset and save it as zero-copy
 bash ./scripts/prepare_rl_data.sh 
 ```
 
-#### 6) Reinforcement Learning with Verifiable Reward
+#### 6) Reinforcement Learning
 Reinforcement learning is performed using SFT model as the initial policy model with verifiable reward function.
 To improve training efficiency, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied.
 If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.
