@@ -11,9 +11,10 @@ from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 @nanoray.actor
 class RolloutWorker:
-    def __init__(self, config, rank):
+    def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
+        self.total_steps = total_steps
 
         rollout_config = NanoVLLMConfig(
             model=config.rollout.model_name_or_path,
@@ -29,7 +30,7 @@ class RolloutWorker:
             seed=config.actor.seed,
         )
         self.rollout_runner = ModelRunner.cls(rollout_config, rank)
-        self.rollout_scheduler = Scheduler(self.rollout.get_config())
+        self.rollout_scheduler = Scheduler(self.rollout_runner.get_config())
         self.rollout_sampling_params = SamplingParams(
             temperature=0.0,
             top_p=1.0,
