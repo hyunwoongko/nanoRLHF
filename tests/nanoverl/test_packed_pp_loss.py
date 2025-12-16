@@ -63,7 +63,7 @@ def count_valid_loss_tokens(loss_mask: torch.Tensor) -> torch.Tensor:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B-base")
     parser.add_argument("--pp", type=int, default=4)
     parser.add_argument("--micro_batch_size", type=int, default=1)
     parser.add_argument("--num_seqs", type=int, default=16)

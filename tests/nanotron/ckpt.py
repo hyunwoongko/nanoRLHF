@@ -224,7 +224,7 @@ def run_test(args):
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-0.6B-base")
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
     parser.add_argument("--dp", type=int, default=1)

@@ -11,7 +11,7 @@ set_seed(42)
 
 print("Loading models...")
 model = AutoModelForCausalLM.from_pretrained(
-    "Qwen/Qwen3-0.6B",
+    "Qwen/Qwen3-0.6B-base",
     attn_implementation="eager",
     torch_dtype=torch.bfloat16,
 )
