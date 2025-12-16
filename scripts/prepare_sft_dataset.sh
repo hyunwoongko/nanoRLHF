@@ -15,7 +15,7 @@ train5="${data_path}/train-0005-of-0005.jsonl"
 valid="${data_path}/valid.jsonl"
 
 # Arguments for dataset preprocessing
-tokenizer_name_or_path="Qwen/Qwen3-4B"
+tokenizer_name_or_path="Qwen/Qwen3-0.6B"
 max_length=8192
 training_type="sft"
 messages_key="messages"

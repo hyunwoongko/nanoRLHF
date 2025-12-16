@@ -70,8 +70,8 @@ if __name__ == "__main__":
     max_new_tokens = 32
     temperature = 0.7
 
-    nano_outputs, nano_time = nano_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature)
-    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-4B-base", max_new_tokens, temperature)
+    nano_outputs, nano_time = nano_generation("Qwen/Qwen3-0.6B-base", max_new_tokens, temperature)
+    hf_outputs, hf_time = hf_generation("Qwen/Qwen3-0.6B-base", max_new_tokens, temperature)
 
     print(f"HuggingFace generation time: {hf_time:.2f} seconds")
     print(f"NanoVLLM generation time: {nano_time:.2f} seconds")

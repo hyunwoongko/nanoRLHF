@@ -9,7 +9,7 @@ if __name__ == '__main__':
         "User: What are the benefits of using renewable energy?\nAssistant:",
     ]
 
-    engine = LLM("Qwen/Qwen3-4B-base")
+    engine = LLM("Qwen/Qwen3-0.6B-base")
     params = SamplingParams(max_tokens=32, temperature=0.8)
     outputs = engine.generate(prompts, sampling_params=params)
 

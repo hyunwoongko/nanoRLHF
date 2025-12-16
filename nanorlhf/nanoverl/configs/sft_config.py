@@ -18,8 +18,8 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    model_name_or_path: str = "Qwen/Qwen3-4B-base"
-    tokenizer_name_or_path: str = "Qwen/Qwen3-4B"
+    model_name_or_path: str = "Qwen/Qwen3-0.6B-base"
+    tokenizer_name_or_path: str = "Qwen/Qwen3-0.6B"
     tensor_parallel_size: int = 1
     pipeline_parallel_size: int = 1
     data_parallel_size: int = 1

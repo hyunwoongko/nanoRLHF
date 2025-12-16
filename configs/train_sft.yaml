@@ -8,8 +8,8 @@ data:
   num_workers: 8
 
 model:
-  model_name_or_path: Qwen/Qwen3-4B-base
-  tokenizer_name_or_path: Qwen/Qwen3-4B
+  model_name_or_path: Qwen/Qwen3-0.6B-base
+  tokenizer_name_or_path: Qwen/Qwen3-0.6B
   tensor_parallel_size: 2
   pipeline_parallel_size: 2
   data_parallel_size: 2

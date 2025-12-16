@@ -10,7 +10,7 @@ train="${data_path}/train.jsonl"
 valid="${data_path}/valid.jsonl"
 
 # Arguments for dataset preprocessing
-tokenizer_name_or_path="Qwen/Qwen3-4B"
+tokenizer_name_or_path="Qwen/Qwen3-0.6B"
 max_length=8192
 training_type="rl"
 prompt_key="question"

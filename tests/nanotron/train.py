@@ -173,7 +173,7 @@ def save_losses_json(losses: List[float], label: str, out_dir: str = "."):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--model-name", type=str, default="Qwen/Qwen3-0.6B-base")
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--lr", type=float, default=5e-8)
