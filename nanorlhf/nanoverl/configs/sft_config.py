@@ -1,8 +1,58 @@
 from dataclasses import dataclass, field, asdict
+from typing import Optional
 
+import torch
 import yaml
 
-from nanorlhf.nanoverl.configs.base import DataConfig, ModelConfig, OptimConfig, TrainingConfig
+
+@dataclass
+class DataConfig:
+    train_batch_size: int = 256
+    valid_batch_size: int = 200
+    train_micro_batch_size: int = 64
+    valid_micro_batch_size: int = 50
+    train_data: Optional[str] = None
+    valid_data: Optional[str] = None
+    num_workers: int = 8
+
+
+@dataclass
+class ModelConfig:
+    model_name_or_path: str = "Qwen/Qwen3-4B-base"
+    tokenizer_name_or_path: str = "Qwen/Qwen3-4B"
+    tensor_parallel_size: int = 1
+    pipeline_parallel_size: int = 1
+    data_parallel_size: int = 1
+    zero_stage: int = 0
+    host: str = "127.0.0.1"
+    port: int = 23333
+    backend: str = "nccl"
+    seed: int = 42
+    gradient_checkpointing_enable: bool = True
+
+
+@dataclass
+class OptimConfig:
+    lr: float = 5e-6
+    min_lr: float = 5e-7
+    lr_warmup_steps_ratio: float = 0.1
+    lr_scheduler: str = "cosine"
+    beta1: float = 0.9
+    beta2: float = 0.95
+    clip_grad: float = 1.0
+    weight_decay: float = 1e-3
+
+
+@dataclass
+class TrainingConfig:
+    default_local_dir: str = "./checkpoints"
+    project_name: str = "project"
+    experiment_name: str = "experiment"
+    total_epochs: int = 3
+    wandb: bool = True
+    seed: int = 42
+    save_freq: int = 300
+    test_freq: int = 300
 
 
 @dataclass
@@ -11,6 +61,30 @@ class SFTConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+
+    def __post_init__(self):
+        global_world_size = (
+            self.model.data_parallel_size * self.model.tensor_parallel_size * self.model.pipeline_parallel_size
+        )
+        assert global_world_size <= torch.cuda.device_count(), (
+            "Currently nanoRLHF doesn't support multi-node training. "
+            f"Please set data_parallel_size * tensor_parallel_size * pipeline_parallel_size <= "
+            f"{torch.cuda.device_count()}, but got {global_world_size}."
+        )
+
+        if self.data.train_batch_size % self.data.train_micro_batch_size != 0:
+            raise ValueError(
+                "`train_batch_size` must be divisible by `train_micro_batch_size`. "
+                f"Got train_batch_size={self.data.train_batch_size} and "
+                f"train_micro_batch_size={self.data.train_micro_batch_size}."
+            )
+
+        if self.data.valid_batch_size % self.data.valid_micro_batch_size != 0:
+            raise ValueError(
+                "`valid_batch_size` must be divisible by `valid_micro_batch_size`. "
+                f"Got valid_batch_size={self.data.valid_batch_size} and "
+                f"valid_micro_batch_size={self.data.valid_micro_batch_size}."
+            )
 
     @classmethod
     def from_yaml(cls, file_path: str) -> "SFTConfig":

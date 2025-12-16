@@ -9,7 +9,7 @@ from tqdm import tqdm
 from nanorlhf import nanoray
 from nanorlhf.nanotron import MPU
 from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
-from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn, split_packed_batch
+from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_sft, split_packed_batch
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 from nanorlhf.nanoverl.worker.sft_worker import SFTWorker
 
@@ -21,19 +21,6 @@ class SFTTrainer:
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
         self.global_step = 0
-
-        if self.config.data.train_batch_size % self.config.data.train_micro_batch_size != 0:
-            raise ValueError(
-                "`train_batch_size` must be divisible by `train_micro_batch_size`. "
-                f"Got train_batch_size={self.config.data.train_batch_size} and "
-                f"train_micro_batch_size={self.config.data.train_micro_batch_size}."
-            )
-        if self.config.data.valid_batch_size % self.config.data.valid_micro_batch_size != 0:
-            raise ValueError(
-                "`valid_batch_size` must be divisible by `valid_micro_batch_size`. "
-                f"Got valid_batch_size={self.config.data.valid_batch_size} and "
-                f"valid_micro_batch_size={self.config.data.valid_micro_batch_size}."
-            )
 
         self.global_world_size = (
             self.config.model.data_parallel_size
@@ -96,7 +83,7 @@ class SFTTrainer:
             num_workers=config.data.num_workers,
             pin_memory=True,
             drop_last=drop_last,
-            collate_fn=packed_collate_fn,
+            collate_fn=packed_collate_fn_for_sft,
         )
 
     def init_ray(self, config):

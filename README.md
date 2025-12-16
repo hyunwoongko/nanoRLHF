@@ -88,6 +88,7 @@ bash ./scripts/merge_sft_model.sh
 #### 4) Evaluate Supervised Fine-tuned Model
 After merging the supervised fine-tuned model, you can evaluate it using the following script.
 The evaluation is performed using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset (500 samples from MATH dataset)
+and [Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse and verify the model's generated output.
 
 ![sft_eval](assets/sft_eval.png)
 
@@ -96,7 +97,25 @@ bash ./scripts/eval_sft_model.sh
 ```
 
 #### 5) Preparing Reinforcement Learning Dataset
-⚠️ Currently work in progress
+Reinforcement learning is performed using [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) dataset.
+About 40k samples with difficulty level 6 or higher are sampled for training and 1k samples are used for validation.
+Running the following command will tokenize the dataset and save it as zero-copy `.nano` format.
+
+```bash
+bash ./scripts/prepare_rl_data.sh 
+```
+
+#### 6) Reinforcement Learning with Verifiable Reward
+Reinforcement learning is performed using SFT model as the initial policy model with verifiable reward function.
+[Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse and verify the model's generated output.
+Moreover, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied to maximize training efficiency.
+If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.
+Running the following command will start supervised fine-tuning. 
+Moreover, you can monitor the training process if you have wandb account.
+
+```bash
+bash ./scripts/train_rl.sh 
+```
 
 ## License
 This project is licensed under the Apache 2.0 License.

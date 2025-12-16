@@ -246,3 +246,4 @@ class ModelRunner:
         next_tokens = self.sampler.sample(seqs, logits_for_sampling)
         reset_context()
         return next_tokens
+

@@ -3,7 +3,7 @@ from typing import Dict, Any, Optional
 import torch
 
 
-def packed_collate_fn(batch):
+def packed_collate_fn_for_sft(batch):
     input_ids = []
     loss_mask = []
     position_ids = []
@@ -32,6 +32,29 @@ def packed_collate_fn(batch):
         "position_ids": position_ids,
         "cu_seq_lens_q": torch.tensor(cu_seq_lens, dtype=torch.long),
         "cu_seq_lens_k": torch.tensor(cu_seq_lens, dtype=torch.long),
+    }
+
+
+def packed_collate_fn_for_rl(batch):
+    input_ids = []
+    position_ids = []
+    cu_seq_lens = [0]
+
+    for sample in batch:
+        length = len(sample["input_ids"])
+        input_ids.extend(sample["input_ids"])
+        position_ids.extend(range(length))
+        cu_seq_lens.append(cu_seq_lens[-1] + length)
+
+    input_ids = torch.tensor([input_ids], dtype=torch.long)
+    position_ids = torch.tensor([position_ids], dtype=torch.long)
+
+    return {
+        "input_ids": input_ids,
+        "position_ids": position_ids,
+        "cu_seq_lens_q": torch.tensor(cu_seq_lens, dtype=torch.long),
+        "cu_seq_lens_k": torch.tensor(cu_seq_lens, dtype=torch.long),
+        "reward_model": [sample["reward_model"] for sample in batch],
     }
 
 
@@ -71,7 +94,7 @@ def split_packed_batch(
             continue
 
         if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
-            local_cu_seq_lens = v[seq_start: seq_end + 1].clone()
+            local_cu_seq_lens = v[seq_start : seq_end + 1].clone()
             local_cu_seq_lens = local_cu_seq_lens - local_cu_seq_lens[0]
             local_batch[k] = local_cu_seq_lens
             continue
@@ -83,3 +106,50 @@ def split_packed_batch(
         local_batch[k] = v
 
     return local_batch
+
+
+def unpack_sequences(input_ids, position_ids, reward_model_list):
+    assert input_ids.size(0) == 1
+    starts = (position_ids == 0).nonzero(as_tuple=False).flatten().tolist()
+    ends = starts[1:] + [input_ids.numel()]
+    unpacked_sequences = []
+
+    for i, (s, e) in enumerate(zip(starts, ends)):
+        reward_model = reward_model_list[i] if reward_model_list is not None else None
+        unpacked_input_ids = input_ids[:, s:e]
+        unpacked_position_ids = position_ids[:, s:e]
+        unpacked_sequences.append(
+            {
+                "input_ids": unpacked_input_ids,
+                "position_ids": unpacked_position_ids,
+                "reward_model": reward_model,
+            }
+        )
+
+    return unpacked_sequences
+
+
+def repack_sequences(unpacked_sequences):
+    packed_input_ids = []
+    packed_position_ids = []
+    packed_loss_mask = []
+    packed_reward_model = []
+
+    for unpacked_sequence in unpacked_sequences:
+        packed_input_ids.append(unpacked_sequence["input_ids"])
+        packed_position_ids.append(unpacked_sequence["position_ids"])
+        if "reward_model" in unpacked_sequence:
+            packed_reward_model.append(unpacked_sequence["reward_model"])
+        if "loss_mask" in unpacked_sequence:
+            packed_loss_mask.append(unpacked_sequence["loss_mask"])
+
+    packed_input_ids = torch.cat(packed_input_ids, dim=-1)
+    packed_position_ids = torch.cat(packed_position_ids, dim=-1)
+    output_dict = {"input_ids": packed_input_ids, "position_ids": packed_position_ids}
+
+    if len(packed_loss_mask) != 0:
+        output_dict["loss_mask"] = torch.cat(packed_loss_mask, dim=-1)
+    if len(packed_reward_model) != 0:
+        output_dict["reward_model"] = packed_reward_model
+
+    return output_dict

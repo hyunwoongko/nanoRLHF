@@ -142,7 +142,7 @@ class ActorMethod:
 
     ref: ActorRef
     method_name: str
-    _opts: ActorOptions = ActorOptions()
+    opts: ActorOptions = ActorOptions()
 
     def options(
         self,
@@ -168,8 +168,8 @@ class ActorMethod:
         return ActorMethod(
             self.ref,
             self.method_name,
-            _opts=replace(
-                self._opts,
+            opts=replace(
+                self.opts,
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 resources=(resources or {}),
@@ -192,7 +192,7 @@ class ActorMethod:
                 so the scheduler only considers that node as a valid candidate.
         """
         sess = get_session()
-        o = self._opts
+        o = self.opts
         task = Task(
             fn={
                 "kind": "actor_call",
@@ -220,8 +220,8 @@ class ActorClass:
     """
 
     def __init__(self, cls: type):
-        self._cls = cls
-        self._opts = ActorOptions()
+        self.cls = cls
+        self.opts = ActorOptions()
 
     def options(
         self,
@@ -249,9 +249,9 @@ class ActorClass:
         Returns:
             ActorClass: A new proxy with updated options.
         """
-        out = ActorClass(self._cls)
-        out._opts = replace(
-            self._opts,
+        out = ActorClass(self.cls)
+        out.opts = replace(
+            self.opts,
             num_cpus=num_cpus,
             num_gpus=num_gpus,
             resources=(resources or {}),
@@ -271,12 +271,12 @@ class ActorClass:
             ObjectRef: Reference to the created actor ref.
         """
         sess = get_session()
-        o = self._opts
+        o = self.opts
 
         task = Task(
             fn={
                 "kind": "actor_create",
-                "cls": self._cls,
+                "cls": self.cls,
                 "args": args,
                 "kwargs": kwargs,
             },

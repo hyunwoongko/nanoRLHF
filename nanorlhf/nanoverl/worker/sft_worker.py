@@ -22,6 +22,7 @@ def initialize_model(config, rank):
         trust_remote_code=True,
         torch_dtype=torch.bfloat16,
     )
+    model.train()
 
     optimizer = AdamW(
         get_optimizer_param_groups(model, float(config.optim.weight_decay)),
@@ -37,11 +38,6 @@ def initialize_model(config, rank):
 
     global_world_size = (
         config.model.data_parallel_size * config.model.tensor_parallel_size * config.model.pipeline_parallel_size
-    )
-
-    assert global_world_size <= 8, (
-        "Currently don't support multi-node training. "
-        "Please set data_parallel_size * tensor_parallel_size * pipeline_parallel_size <= 8."
     )
 
     mpu = None
@@ -91,10 +87,10 @@ class SFTWorker:
         self.config = config
         self.rank = rank
 
-        self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer_name_or_path, trust_remote_code=True)
         # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model.tokenizer_name_or_path, trust_remote_code=True)
+
         self.model, self.mpu, self.optimizer = initialize_model(config, rank)
-        self.model.train()
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)
 
     def step(self, input_batch: dict, train: bool):

@@ -1,0 +1,1 @@
+python3 -m nanorlhf.nanoverl.trainer.rl_trainer --config ./configs/train_rl.yaml

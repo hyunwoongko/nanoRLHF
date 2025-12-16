@@ -291,10 +291,7 @@ class MPU:
         backend: str,
         seed: int,
     ):
-        assert (
-            world_size
-            == data_parallel_size * pipeline_parallel_size * tensor_parallel_size
-        ), (
+        assert world_size == data_parallel_size * pipeline_parallel_size * tensor_parallel_size, (
             f"Expected the world size `{world_size}` to "
             f"data parallel size ({data_parallel_size}) * "
             f"pipeline parallel size ({pipeline_parallel_size}) * "
@@ -316,12 +313,15 @@ class MPU:
 
         self.local_world_size = local_world_size
         self.init_global_dist(rank, world_size, backend, host, port)
-        self.init_parallel_groups()
 
         if torch.cuda.is_available():
             self.set_device(local_rank)
 
-        self.set_seed(seed)
+        self.init_parallel_groups()
+
+        if not dist.is_initialized():
+            self.set_seed(seed)
+
         self.seed = seed
         self.make_ranks_to_devices()
 
@@ -329,9 +329,7 @@ class MPU:
     @staticmethod
     def _check_parallel_mode(mode: ParallelMode) -> None:
         if not isinstance(mode, ParallelMode):
-            raise ValueError(
-                f"Invalid parallel mode: {mode}. Expected one of {[m.value for m in ParallelMode]}."
-            )
+            raise ValueError(f"Invalid parallel mode: {mode}. Expected one of {[m.value for m in ParallelMode]}.")
 
     # world sizes
     def get_world_size(self, mode: ParallelMode) -> int:
@@ -753,9 +751,6 @@ class MPU:
             host (str): The master node's hostname or IP address.
             port (int): The master node's port.
 
-        Returns:
-            None
-
         Examples:
             >>> mpu = ...
             >>> mpu.init_global_dist(
@@ -766,20 +761,13 @@ class MPU:
             ...     port=12345,
             ... )
         """
-        init_method = f"tcp://{host}:{port}"
-        dist.init_process_group(
-            rank=rank, world_size=world_size, backend=backend, init_method=init_method
-        )
+        if not dist.is_initialized():
+            init_method = f"tcp://{host}:{port}"
+            dist.init_process_group(rank=rank, world_size=world_size, backend=backend, init_method=init_method)
 
         ranks = list(range(world_size))
-        cpu_group = (
-            dist.new_group(ranks, backend="gloo")
-            if dist.get_backend() != "gloo"
-            else None
-        )
-        self._register_dist(
-            rank, world_size, None, cpu_group, ranks, ParallelMode.GLOBAL
-        )
+        cpu_group = dist.new_group(ranks, backend="gloo") if dist.get_backend() != "gloo" else None
+        self._register_dist(rank, world_size, None, cpu_group, ranks, ParallelMode.GLOBAL)
         self.add_global_rank(ParallelMode.GLOBAL, rank)
 
     def _register_dist(
