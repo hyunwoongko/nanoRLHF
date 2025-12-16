@@ -153,7 +153,7 @@ if __name__ == '__main__':
     # mode argument
     parser.add_argument("--mode", type=str, required=True, choices=['train', 'ckpt', 'test'])
     # model and hyperparameter arguments
-    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B")
+    parser.add_argument("--model_name", type=str, default="Qwen/Qwen3-0.6B-base")
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--micro_batch_size", type=int, default=2)
