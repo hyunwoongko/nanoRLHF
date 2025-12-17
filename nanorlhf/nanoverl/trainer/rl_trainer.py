@@ -7,9 +7,10 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
+from nanorlhf.nanotron import MPU
 from nanorlhf.nanoverl.configs.rl_config import RLConfig
 from nanorlhf.nanoverl.dataset.rl_dataset import RLDataset
-from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_rl
+from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_rl, split_packed_batch
 from nanorlhf.nanoverl.utils.rollout_utils import RolloutManager
 from nanorlhf.nanoverl.worker.actor_critic_ref_worker import ActorCriticRefWorker
 from nanorlhf.nanoverl.worker.rollout_worker import RolloutWorker
@@ -22,6 +23,23 @@ class RLTrainer:
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
         self.global_step = 0
+        self.actor_world_size = (
+            self.config.actor.data_parallel_size
+            * self.config.actor.tensor_parallel_size
+            * self.config.actor.pipeline_parallel_size
+        )
+        self.rollout_world_size = self.config.rollout.data_parallel_size * self.config.rollout.tensor_parallel_size
+        self.global_world_size = self.actor_world_size + self.rollout_world_size
+
+        self.actor_data_parallel_ranks = []
+        for actor_local_rank in range(self.actor_world_size):
+            dp_rank, _, _ = MPU.get_local_ranks_from_global_rank(
+                actor_local_rank,
+                self.config.actor.data_parallel_size,
+                self.config.actor.tensor_parallel_size,
+                self.config.actor.pipeline_parallel_size,
+            )
+            self.actor_data_parallel_ranks.append(dp_rank)
 
         self.node_ids = self.init_ray(self.config)
         self.actors, rollouts = self.spawn_all_workers(self.config, self.node_ids, self.total_steps)
@@ -42,7 +60,7 @@ class RLTrainer:
         nodes = {}
         base_port = 9200
 
-        for rank in range(self.config.actor.nproc_per_node):
+        for rank in range(self.actor_world_size):
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
                 cpus=4.0,
                 gpus=1.0,
@@ -51,8 +69,8 @@ class RLTrainer:
                 port=base_port + rank,
             )
 
-        for rank in range(self.config.rollout.nproc_per_node):
-            rank = rank + self.config.actor.nproc_per_node
+        for rank in range(self.rollout_world_size):
+            rank = rank + self.actor_world_size
             nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
                 cpus=4.0,
                 gpus=1.0,
@@ -63,7 +81,7 @@ class RLTrainer:
 
         session = nanoray.init(nodes, default_node_id=f"actor-global_rank=0")
         node_ids = list(session._workers.keys())
-        if len(node_ids) < self.config.actor.nproc_per_node + self.config.rollout.nproc_per_node:
+        if len(node_ids) < self.global_world_size:
             raise RuntimeError(
                 "`nanoray` was initialized with fewer nodes than `global_world_size`; "
                 "please provide at least one NodeConfig per global rank."
@@ -142,6 +160,22 @@ class RLTrainer:
             collate_fn=packed_collate_fn_for_rl,
         )
 
+    def make_experience(self, rollout_outputs):
+        per_data_parallel_batches = []
+        for data_parallel_rank in range(self.config.actor.data_parallel_size):
+            data_parallel_batch = split_packed_batch(
+                rollout_outputs, chunk_idx=data_parallel_rank, num_chunks=self.config.actor.data_parallel_size
+            )
+            per_data_parallel_batches.append(data_parallel_batch)
+
+        object_refs = []
+        for actor_local_rank in range(self.actor_world_size):
+            data_parallel_rank = self.actor_data_parallel_ranks[actor_local_rank]
+            rollout_outputs = per_data_parallel_batches[data_parallel_rank]
+            object_ref = self.actors[actor_local_rank].make_experience.remote(rollout_outputs, blocking=False)
+            object_refs.append(object_ref)
+        return nanoray.get(object_refs)[0]
+
     def fit(self):
         for epoch in range(self.config.training.total_epochs):
             pbar = tqdm(
@@ -151,8 +185,9 @@ class RLTrainer:
             )
             for batch in pbar:
                 self.global_step += 1
-                output = self.rollout_manager.rollout(batch)
-                print(output)
+                rollout_outputs = self.rollout_manager.rollout(batch)
+                experience_info = self.make_experience(rollout_outputs)
+                print(experience_info)
 
 
 if __name__ == '__main__':

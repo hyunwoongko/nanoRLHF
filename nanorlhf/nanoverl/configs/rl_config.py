@@ -29,7 +29,6 @@ class ModelConfig:
     backend: str = "nccl"
     seed: int = 42
     gradient_checkpointing_enable: bool = True
-    nproc_per_node: int = 1
 
 
 @dataclass
@@ -41,9 +40,9 @@ class RolloutConfig:
     n: int = 4
     gpu_memory_utilization: float = 0.4
     kvcache_block_size: int = 256
-    nproc_per_node: int = 1
     tensor_parallel_size: int = 1
     data_parallel_size: int = 1
+    enforce_eager: bool = False
 
 
 @dataclass
@@ -99,40 +98,25 @@ class RLConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
 
     def __post_init__(self):
-        if self.actor.nproc_per_node + self.rollout.nproc_per_node > torch.cuda.device_count():
+        actor_world_size = (
+            self.actor.data_parallel_size * self.actor.tensor_parallel_size * self.actor.pipeline_parallel_size
+        )
+        rollout_world_size = self.rollout.data_parallel_size * self.rollout.tensor_parallel_size
+
+        if actor_world_size + rollout_world_size > torch.cuda.device_count():
             raise ValueError(
                 f"Currently nanoRLHF doesn't support multi-node training. "
                 f"The sum of actor.nproc_per_node and rollout.nproc_per_node "
                 f"must be less than or equal to the number of GPUs on a single node ({torch.cuda.device_count()}). "
             )
 
-        actor_world_size = (
-            self.actor.data_parallel_size * self.actor.tensor_parallel_size * self.actor.pipeline_parallel_size
-        )
-        if actor_world_size > self.actor.nproc_per_node:
-            raise ValueError(
-                "Currently nanoRLHF doesn't support multi-node training. "
-                f"Please set actor.data_parallel_size * actor.tensor_parallel_size * "
-                f"actor.pipeline_parallel_size <= self.actor.nproc_per_node={self.actor.nproc_per_node}, "
-                f"but got {actor_world_size}."
-            )
-
-        min_rollout_world_size = self.actor.tensor_parallel_size
-        if (
-            min_rollout_world_size > self.rollout.nproc_per_node
-            or self.rollout.nproc_per_node % min_rollout_world_size != 0
-        ):
+        if self.rollout.tensor_parallel_size != self.actor.tensor_parallel_size:
             raise ValueError(
                 "Actor and Rollout must use the same tensor model parallel size to reduce "
                 "parameter synchronization overhead. "
-                "nanoRLHF fixes rollout tensor parallel size to actor.tensor_parallel_size.\n\n"
-                f"Therefore, rollout.nproc_per_node must satisfy:\n"
-                f"  - rollout.nproc_per_node >= actor.tensor_parallel_size ({self.actor.tensor_parallel_size})\n"
-                f"  - rollout.nproc_per_node % actor.tensor_parallel_size == 0\n\n"
-                "This is required to form an integer number of rollout replicas, where:\n"
-                "  num_rollout_replicas = rollout.nproc_per_node // actor.tensor_parallel_size\n\n"
-                f"But got rollout.nproc_per_node={self.rollout.nproc_per_node}, "
-                f"actor.tensor_parallel_size={self.actor.tensor_parallel_size}."
+                f"Therefore, rollout.tensor_parallel_size must equal actor.tensor_parallel_size "
+                f"({self.actor.tensor_parallel_size}).\n\n"
+                f"But got rollout.tensor_parallel_size={self.rollout.tensor_parallel_size}."
             )
 
         if self.algorithm.adv_estimator not in ["gae", "grpo", "gspo"]:

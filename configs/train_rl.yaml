@@ -1,6 +1,6 @@
 data:
-  train_batch_size: 16
-  valid_batch_size: 16
+  train_batch_size: 8
+  valid_batch_size: 8
   train_micro_batch_size: 4
   valid_micro_batch_size: 4
   train_data: ./data/DeepMath-40k/preprocessed/valid.nano
@@ -19,7 +19,6 @@ actor:
   backend: nccl
   seed: 42
   gradient_checkpointing_enable: true
-  nproc_per_node: 4
 
 rollout:
   model_name_or_path: "./checkpoints/math/sft/step_2109/merged"
@@ -29,7 +28,6 @@ rollout:
   n: 4
   gpu_memory_utilization: 0.9
   kvcache_block_size: 256
-  nproc_per_node: 4
   tensor_parallel_size: 2
   data_parallel_size: 2
 

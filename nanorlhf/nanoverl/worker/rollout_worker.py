@@ -27,6 +27,7 @@ class RolloutWorker:
             port=config.actor.port,
             backend=config.actor.backend,
             seed=config.actor.seed,
+            enforce_eager=config.rollout.enforce_eager,
         )
         self.runner = ModelRunner.cls(rollout_config, rank, actor_config=config.actor)
 

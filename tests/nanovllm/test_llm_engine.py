@@ -49,7 +49,7 @@ def hf_generation(model_name, max_new_tokens, temperature):
         **warm_ups_tokenized, max_new_tokens=max_new_tokens, do_sample=True, temperature=temperature
     )
 
-    max_batch_size = 8
+    max_batch_size = 32
     batched_outputs_decoded = []
     start = time.perf_counter()
     for i in tqdm(range(0, len(prompts), max_batch_size), desc="HF Generating"):
@@ -72,6 +72,12 @@ if __name__ == "__main__":
 
     nano_outputs, nano_time = nano_generation("Qwen/Qwen3-0.6B-base", max_new_tokens, temperature)
     hf_outputs, hf_time = hf_generation("Qwen/Qwen3-0.6B-base", max_new_tokens, temperature)
+
+    for i in range(10):
+        print(f"Prompt {i+1}: {repr(prompts[i])}")
+        print(f"HuggingFace Output: {repr(hf_outputs[i])}")
+        print(f"NanoVLLM Output: {repr(nano_outputs[i])}")
+        print("-" * 50)
 
     print(f"HuggingFace generation time: {hf_time:.2f} seconds")
     print(f"NanoVLLM generation time: {nano_time:.2f} seconds")

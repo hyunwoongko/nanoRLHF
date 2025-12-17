@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 from transformers import AutoConfig
 
-from nanorlhf.kernels.utils.vllm import KVCACHE_BLOCK_SIZE
+from nanorlhf.kernels.flash_attn_decode.ops import KVCACHE_BLOCK_SIZE
 
 
 @dataclass
@@ -16,6 +16,7 @@ class NanoVLLMConfig:
     eos: int = -1
     kvcache_block_size: int = KVCACHE_BLOCK_SIZE
     num_kvcache_blocks: int = -1
+    enforce_eager: bool = False
 
     # distributed options
     tensor_parallel_size: int = 1

@@ -2,10 +2,16 @@ import torch
 import triton
 
 from nanorlhf.kernels.flash_attn_decode.reduce_k import flash_attn_decode_kernel_reduce_k
-from nanorlhf.kernels.flash_attn_decode.split_k import flash_attn_decode_kernel_split_k
+from nanorlhf.kernels.flash_attn_decode.split_k import (
+    flash_attn_decode_kernel_split_k_paged,
+    flash_attn_decode_kernel_split_k,
+)
 
 
-def _get_split_k(batch_size, n_group_q, heads_per_group_q, seqlen_kc):
+KVCACHE_BLOCK_SIZE = 256
+
+
+def get_split_k(batch_size, n_group_q, heads_per_group_q, seqlen_kc):
     # https://github.com/Dao-AILab/flash-attention/blob/672381f72c927a4b4a92f30755dc5829c3d0eaa3/flash_attn/flash_attn_triton_amd/fwd_decode.py
     bh = max(batch_size * heads_per_group_q, 1)
     split_k = max(seqlen_kc, 1024) // bh
@@ -14,8 +20,7 @@ def _get_split_k(batch_size, n_group_q, heads_per_group_q, seqlen_kc):
         split_k = split_k // 2
     while batch_size * heads_per_group_q * n_group_q * split_k >= 1024:
         split_k = split_k // 2
-    split_k = min(split_k, 512)
-    split_k = max(split_k, 1)
+    split_k = min(max(split_k, 1), 512)
     return split_k
 
 
@@ -47,7 +52,7 @@ def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, bl
         split_k = 1
     elif split_k is None:
         # automatically determine split_k if not provided.
-        split_k = _get_split_k(bsz, num_heads, 1, seq_len_k)
+        split_k = get_split_k(bsz, num_heads, 1, seq_len_k)
 
     block_n_per_split = (seq_len_k + split_k - 1) // split_k
     seq_len_q_ceil = triton.cdiv(seq_len_q, block_size_q) * block_size_q
@@ -136,4 +141,116 @@ def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, bl
         causal=causal,
     )
     o = o.view(bsz, num_heads, seq_len_q, dim)
+    return o
+
+
+def flash_attn_decode_paged(
+    q_bh,
+    k_slots,
+    v_slots,
+    block_tables,
+    context_lens,
+    num_heads,
+    kv_heads,
+    causal=True,
+    softmax_scale=None,
+    block_size_k=64,
+    kv_block_size=KVCACHE_BLOCK_SIZE,
+):
+    assert q_bh.ndim == 3
+    bh, seqlen_q, dim = q_bh.shape
+    assert seqlen_q == 1, "Only support decoding one token at a time"
+    block_size_q = 16  # for decoding, we only need the smallest block size for q
+    split_k = 1  # do not split k when using cuda graph.
+
+    if softmax_scale is None:
+        softmax_scale = 1.0 / (dim**0.5)
+
+    max_num_blocks = block_tables.shape[1]
+    seq_len_k_fixed = max_num_blocks * kv_block_size
+    block_n_per_split = (seq_len_k_fixed + split_k - 1) // split_k
+    seqlen_q_ceil = triton.cdiv(seqlen_q, block_size_q) * block_size_q
+
+    ez_dot_v = torch.empty((bh, split_k, seqlen_q_ceil, dim), device=q_bh.device, dtype=torch.float32)
+    max_q = torch.empty((bh, split_k, seqlen_q_ceil), device=q_bh.device, dtype=torch.float32)
+    ez_sum = torch.empty_like(max_q)
+    o = torch.empty_like(q_bh)
+
+    stride_q_bh, stride_q_seq, stride_q_dim = q_bh.stride()
+    stride_cache_slot, stride_cache_head, stride_cache_dim = k_slots.stride()
+    stride_bt_b, stride_bt_blk = block_tables.stride()
+    stride_cl_b = context_lens.stride()[0]
+
+    stride_ez_dot_v_bh, stride_ez_dot_v_split, stride_ez_dot_v_seq, stride_ez_dot_v_dim = ez_dot_v.stride()
+    stride_max_q_bh, stride_max_q_split, stride_max_q_seq = max_q.stride()
+    stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq = ez_sum.stride()
+    stride_o_out_bh, stride_o_out_seq, stride_o_out_dim = o.stride()
+
+    grid_split = (triton.cdiv(seqlen_q, block_size_q), bh, split_k)
+    flash_attn_decode_kernel_split_k_paged[grid_split](
+        q_bh,
+        k_slots,
+        v_slots,
+        block_tables,
+        context_lens,
+        ez_dot_v,
+        max_q,
+        ez_sum,
+        seqlen_q,
+        stride_q_bh,
+        stride_q_seq,
+        stride_q_dim,
+        stride_cache_slot,
+        stride_cache_head,
+        stride_cache_dim,
+        stride_bt_b,
+        stride_bt_blk,
+        stride_cl_b,
+        stride_ez_dot_v_bh,
+        stride_ez_dot_v_split,
+        stride_ez_dot_v_seq,
+        stride_ez_dot_v_dim,
+        stride_max_q_bh,
+        stride_max_q_split,
+        stride_max_q_seq,
+        stride_ez_sum_bh,
+        stride_ez_sum_split,
+        stride_ez_sum_seq,
+        softmax_scale,
+        block_n_per_split,
+        kv_block_size=kv_block_size,
+        kv_heads=kv_heads,
+        num_heads=num_heads,
+        causal=causal,
+        dim=dim,
+        block_size_q=block_size_q,
+        block_size_k=block_size_k,
+        max_num_blocks=max_num_blocks,
+    )
+
+    grid_reduce = (bh, triton.cdiv(seqlen_q, block_size_q))
+    flash_attn_decode_kernel_reduce_k[grid_reduce](
+        ez_dot_v,
+        max_q,
+        ez_sum,
+        o,
+        seqlen_q,
+        stride_ez_dot_v_bh,
+        stride_ez_dot_v_split,
+        stride_ez_dot_v_seq,
+        stride_ez_dot_v_dim,
+        stride_max_q_bh,
+        stride_max_q_split,
+        stride_max_q_seq,
+        stride_ez_sum_bh,
+        stride_ez_sum_split,
+        stride_ez_sum_seq,
+        stride_o_out_bh,
+        stride_o_out_seq,
+        stride_o_out_dim,
+        dim=dim,
+        block_size_q=block_size_q,
+        split_k=split_k,
+        causal=causal,
+    )
     return o

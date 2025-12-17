@@ -1,4 +1,5 @@
 import torch
+from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch, unpack_sequences, repack_sequences
@@ -17,6 +18,7 @@ class RolloutManager:
         self.data_parallel_size = int(config.rollout.data_parallel_size)
         self.global_world_size = self.tensor_parallel_size * self.data_parallel_size
 
+        self.tokenizer = AutoTokenizer.from_pretrained(config.rollout.model_name_or_path)
         self.schedulers = self.create_schedulers()
         self.sampling_params = SamplingParams(temperature=0.0, max_tokens=config.rollout.max_model_len)
 
@@ -34,18 +36,18 @@ class RolloutManager:
 
         # data parallel batches -> data parallel unpacked batches
         data_parallel_unpacked_batches = []
-        for data_parallel_batch in data_parallel_batches:
-            unpacked_batch = unpack_sequences(
-                input_ids=data_parallel_batch["input_ids"],
-                position_ids=data_parallel_batch["position_ids"],
-                reward_model_list=data_parallel_batch["reward_model"],
+        for data_parallel_batch_per_rank in data_parallel_batches:
+            unpacked_batch_per_rank = unpack_sequences(
+                input_ids=data_parallel_batch_per_rank["input_ids"],
+                position_ids=data_parallel_batch_per_rank["position_ids"],
+                reward_model_list=data_parallel_batch_per_rank["reward_model"],
             )
-            data_parallel_unpacked_batches.append(unpacked_batch)
+            data_parallel_unpacked_batches.append(unpacked_batch_per_rank)
 
         # data parallel unpacked batches -> add requests
         data_parallel_outputs = []
-        for data_parallel_rank, unpacked_batch in enumerate(data_parallel_unpacked_batches):
-            output_batch = self.add_request(data_parallel_rank, unpacked_batch)
+        for data_parallel_rank, unpacked_batch_per_rank in enumerate(data_parallel_unpacked_batches):
+            output_batch = self.add_request(data_parallel_rank, unpacked_batch_per_rank)
             data_parallel_outputs.append(output_batch)
 
         # run model until all sequences are finished
@@ -94,14 +96,12 @@ class RolloutManager:
                     object_ref = runner.run.remote(sequences, is_prefill, blocking=False)
                     object_refs.append(object_ref)
                 token_ids = nanoray.get(object_refs)[0]
-                print(f"[R{data_parallel_rank}]: {token_ids}")
                 scheduler.postprocess(sequences, token_ids)
 
     def repack_outputs(self, data_parallel_unpacked_batches, data_parallel_outputs):
-        total_tokens_all, response_tokens_all = [], []
-
-        for unpacked_batch, outputs in zip(data_parallel_unpacked_batches, data_parallel_outputs):
-            for prompt, output in zip(unpacked_batch, outputs):
+        total_tokens_all = []
+        for unpacked_batch_per_rank, outputs_per_rank in zip(data_parallel_unpacked_batches, data_parallel_outputs):
+            for prompt, output in zip(unpacked_batch_per_rank, outputs_per_rank):
                 response_ids = torch.tensor(output.completion_token_ids, dtype=torch.long).unsqueeze(0)
                 response_position_ids = torch.arange(response_ids.numel(), dtype=torch.long).unsqueeze(0)
                 response_tokens = {
@@ -109,8 +109,6 @@ class RolloutManager:
                     "position_ids": response_position_ids,
                     "loss_mask": torch.ones_like(response_ids),
                 }
-                response_tokens_all.append(response_tokens)
-
                 prompt_tokens = {
                     "input_ids": prompt["input_ids"],
                     "position_ids": prompt["position_ids"],
@@ -119,4 +117,5 @@ class RolloutManager:
                 }
                 total_tokens = repack_sequences([prompt_tokens, response_tokens])
                 total_tokens_all.append(total_tokens)
-        return total_tokens_all, response_tokens_all
+
+        return repack_sequences(total_tokens_all)

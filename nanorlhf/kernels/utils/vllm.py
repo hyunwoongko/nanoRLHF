@@ -5,8 +5,8 @@ import torch
 from transformers.modeling_flash_attention_utils import fa_peft_integration_check, logger
 
 from nanorlhf.kernels import flash_attn_varlen_func
-from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode
-from nanorlhf.kernels.kvcache.load import load_kv_from_cache_prefill, load_kv_from_cache_decode
+from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode_paged
+from nanorlhf.kernels.kvcache.load import load_kv_from_cache_prefill
 from nanorlhf.kernels.kvcache.store import store_kv_to_cache_kernel
 from nanorlhf.kernels.utils.huggingface import _maybe_repeat_kv, _get_target_dtype
 
@@ -23,7 +23,6 @@ class Context:
     max_seqlen_k: Optional[int] = None
 
 
-KVCACHE_BLOCK_SIZE = 256
 GLOBAL_CONTEXT = Context()
 
 
@@ -154,26 +153,35 @@ def compute_decode(
     scaling,
     is_causal,
 ):
-    assert seqlen_q == 1, f"decode expects seqlen_q=1, got {seqlen_q}"
-    assert context.block_tables is not None, "Decode requires block_tables in context."
-    assert context.context_lens is not None, "Decode requires context_lens in context."
+    assert seqlen_q == 1
+    assert context.block_tables is not None
+    assert context.context_lens is not None
+
     q_bh = query_states.permute(0, 2, 1, 3).reshape(bsz * num_heads, seqlen_q, dim).contiguous()
 
-    k_bh, v_bh = load_kv_from_cache_decode(
-        context=context,
-        key_cache=key_cache,
-        value_cache=value_cache,
+    num_blocks, block_size, kv_heads, dim_cache = key_cache.shape
+    assert dim_cache == dim
+
+    num_slots = num_blocks * block_size
+    k_slots = key_cache.view(num_slots, kv_heads, dim)
+    v_slots = value_cache.view(num_slots, kv_heads, dim)
+
+    block_tables = context.block_tables.to(device=key_cache.device, dtype=torch.int32)
+    context_lens = context.context_lens.to(device=key_cache.device, dtype=torch.int32)
+
+    out_bh = flash_attn_decode_paged(
+        q_bh=q_bh,
+        k_slots=k_slots,
+        v_slots=v_slots,
+        block_tables=block_tables,
+        context_lens=context_lens,
         num_heads=num_heads,
-        dim=dim,
-    )
-    out = flash_attn_decode(
-        q_bh,
-        k_bh,
-        v_bh,
-        softmax_scale=scaling,
+        kv_heads=kv_heads,
         causal=is_causal,
+        softmax_scale=scaling,
+        kv_block_size=block_size,
     )
-    out = out.view(bsz, num_heads, seqlen_q, dim)
+    out = out_bh.view(bsz, num_heads, seqlen_q, dim)
     return out, None
 
 

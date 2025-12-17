@@ -2,7 +2,7 @@ from copy import copy
 from enum import Enum, auto
 from itertools import count
 
-from nanorlhf.kernels.utils.vllm import KVCACHE_BLOCK_SIZE
+from nanorlhf.kernels.flash_attn_decode.ops import KVCACHE_BLOCK_SIZE
 from nanorlhf.nanovllm.utils.sampling_params import SamplingParams
 
 
@@ -68,7 +68,7 @@ class Sequence:
 
     @property
     def completion_token_ids(self):
-        return self.token_ids[self.num_prompt_tokens:]
+        return self.token_ids[self.num_prompt_tokens :]
 
     @property
     def num_blocks(self):

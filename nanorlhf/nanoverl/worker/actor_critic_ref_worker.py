@@ -2,13 +2,16 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 
 import torch
+from torch._C._distributed_c10d import ReduceOp
 from torch.optim import AdamW
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModelForTokenClassification
 
 from nanorlhf import nanoray
 from nanorlhf.kernels import patch_kernel
-from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel
+from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel, ParallelMode
+from nanorlhf.nanotron.distributed.collectives import Collectives
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
+from torch.nn import functional as F
 
 
 @dataclass
@@ -30,13 +33,28 @@ class Experience:
 def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     assert role in ["actor", "ref", "critic"], "role must be one of ['actor', 'ref', 'critic']"
 
-    model = AutoModelForCausalLM.from_pretrained(
-        config.actor.model_name_or_path,
-        trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
-    )
+    if role == "critic":
+        model = AutoModelForTokenClassification.from_pretrained(
+            config.actor.model_name_or_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+            num_labels=1,
+        )
+        # turn off dropout
+        model.dropout = torch.nn.Identity()
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            config.actor.model_name_or_path,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
+        )
 
-    if role in ["actor", "critic"]:
+    if role == "ref":
+        optimizer = None
+        model.eval()
+        for p in model.parameters():
+            p.requires_grad_(False)
+    else:
         optimizer = AdamW(
             get_optimizer_param_groups(model, float(config.optim.weight_decay)),
             lr=float(config.optim.lr),
@@ -48,11 +66,6 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
             if config.actor.pipeline_parallel_size == 1:
                 # pipeline parallel engine controls grad checkpointing itself.
                 model.gradient_checkpointing_enable()
-    else:
-        optimizer = None
-        model.eval()
-        for p in model.parameters():
-            p.requires_grad_(False)
 
     actor_world_size = (
         config.actor.data_parallel_size * config.actor.tensor_parallel_size * config.actor.pipeline_parallel_size
@@ -60,7 +73,7 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     rollout_world_size = config.rollout.data_parallel_size * config.rollout.tensor_parallel_size
     global_world_size = actor_world_size + rollout_world_size
 
-    assert global_world_size <= torch.cuda.device_count()
+    assert global_world_size <= torch.cuda.device_count(), "Currently nanoRLHF doesn't support multi-node training"
 
     if global_world_size > 1:
         assert rank < actor_world_size, "rank must be < dp*tp*pp"
@@ -95,7 +108,7 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
             model,
             mpu=mpu,
             optimizer=optimizer,
-            zero_stage=config.actor.zero_stage if role in ["actor", "critic"] else 0,
+            zero_stage=0 if role == "ref" else config.actor.zero_stage,
             accum_steps=config.data.train_batch_size // config.data.train_micro_batch_size,
         )
         model.parallelize()
@@ -111,7 +124,7 @@ class ActorCriticRefWorker:
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
-        self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)
+        self.experience_buffer = []
 
         self.actor, self.actor_optimizer, self.mpu = initialize_model(config, rank, role="actor")
         self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
@@ -122,6 +135,124 @@ class ActorCriticRefWorker:
             self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_steps)
 
     @torch.inference_mode()
-    def compute_logprobs(self, model, input_ids, position_ids):
-        # TODO
-        pass
+    def compute_token_logprobs(self, model, input_ids: torch.Tensor, position_ids: torch.Tensor):
+        assert input_ids.dtype == torch.long
+        assert input_ids.dim() == 2
+        batch_size, sequence_length = input_ids.shape
+        if sequence_length <= 1:
+            return torch.zeros((batch_size, sequence_length), device=input_ids.device, dtype=torch.float32)
+
+        out = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
+        logits = out.logits
+        logits = logits[:, :-1, :]
+        targets = input_ids[:, 1:]
+
+        vocab_global = model.config.vocab_size
+        if int(targets.max().item()) >= int(vocab_global) or int(targets.min().item()) < 0:
+            raise ValueError(
+                f"Found token id outside global vocab: "
+                f"min={int(targets.min().item())}, max={int(targets.max().item())}, vocab_size={int(vocab_global)}"
+            )
+
+        tensor_parallel_size = self.mpu.get_world_size(ParallelMode.TENSOR)
+        tensor_parallel_rank = self.mpu.get_local_rank(ParallelMode.TENSOR)
+        collectives = Collectives(self.mpu, mode=ParallelMode.TENSOR)
+
+        if tensor_parallel_size <= 1:
+            logprobs = F.log_softmax(logits.float(), dim=-1)
+            token_logprobs = logprobs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+            full = torch.zeros((batch_size, sequence_length), device=input_ids.device, dtype=torch.float32)
+            full[:, 1:] = token_logprobs
+            full = full.masked_fill(position_ids == 0, 0.0)
+            return full
+
+        local_vocab_size = logits.size(-1)
+        vocab_start_idx = tensor_parallel_rank * local_vocab_size
+        vocab_end_idx = vocab_start_idx + local_vocab_size
+
+        max_local_logits = logits.float().amax(dim=-1)
+        max_global_logits = max_local_logits.clone()
+        collectives.all_reduce(max_global_logits, op=ReduceOp.MAX)
+
+        exp_local = torch.exp(logits.float() - max_global_logits.unsqueeze(-1))
+        local_sumexp = exp_local.sum(dim=-1)
+        global_sumexp = local_sumexp.clone()
+        collectives.all_reduce(global_sumexp, op=ReduceOp.SUM)
+
+        local_shard_condition = (targets >= vocab_start_idx) & (targets < vocab_end_idx)
+        local_vocab_idx = torch.where(local_shard_condition, targets - vocab_start_idx, torch.zeros_like(targets))
+        local_selected = logits.float().gather(-1, local_vocab_idx.unsqueeze(-1)).squeeze(-1)
+        local_selected = local_selected * local_shard_condition.float()
+
+        log_denom = torch.log(global_sumexp + 1e-12) + max_global_logits
+        global_selected = local_selected.clone()
+        collectives.all_reduce(global_selected, op=ReduceOp.SUM)
+        token_logprobs = global_selected - log_denom
+
+        full = torch.zeros((batch_size, sequence_length), device=input_ids.device, dtype=torch.float32)
+        full[:, 1:] = token_logprobs
+        full = full.masked_fill(position_ids == 0, 0.0)
+        return full
+
+    def compute_values(self, input_ids, position_ids, shift_for_actions=True):
+        outputs = self.critic(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
+        raw_values = outputs.logits.squeeze(-1).float()
+
+        # alignment to match token_logprobs convention
+        if shift_for_actions:
+            values = torch.zeros_like(raw_values)
+            if raw_values.size(1) > 1:
+                values[:, 1:] = raw_values[:, :-1]
+        else:
+            values = raw_values
+
+        # position_id==0 should not contribute / should be stable.
+        if position_ids is not None:
+            values = values.masked_fill(position_ids == 0, 0.0)
+
+        return values
+
+    def make_experience(self, input_batch):
+        input_ids = input_batch["input_ids"].to(torch.cuda.current_device())
+        position_ids = input_batch["position_ids"].to(torch.cuda.current_device())
+        loss_mask = input_batch["loss_mask"].to(torch.cuda.current_device())
+
+        actor_lobprobs_old = self.compute_token_logprobs(self.actor, input_ids, position_ids)
+        ref_logprobs = self.compute_token_logprobs(self.ref, input_ids, position_ids)
+
+        values_old = None
+        if self.config.algorithm.adv_estimator not in ["grpo", "gspo"]:
+            values_old = self.compute_values(input_ids, position_ids, shift_for_actions=True)
+
+        experience = Experience(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            loss_mask=loss_mask,
+            actor_logprobs_old=actor_lobprobs_old,
+            ref_logprobs=ref_logprobs,
+            values_old=values_old,
+            reward_model=input_batch["reward_model"],
+        )
+        self.experience_buffer.append(experience)
+        experience_id = len(self.experience_buffer) - 1
+
+        response_mask = loss_mask.bool()
+        num_response_tokens = int(response_mask.sum().item())
+        num_total_tokens = int(loss_mask.numel())
+        num_sequences = int((position_ids == 0).sum().item())
+
+        if num_response_tokens > 0:
+            approx_kl = float((actor_lobprobs_old - ref_logprobs)[response_mask].mean().item())
+            mean_logprobs = float(actor_lobprobs_old[response_mask].mean().item())
+        else:
+            approx_kl = 0.0
+            mean_logprobs = 0.0
+
+        return {
+            "experience_id": experience_id,
+            "num_total_tokens": num_total_tokens,
+            "num_response_tokens": num_response_tokens,
+            "num_sequences": num_sequences,
+            "approx_kl": approx_kl,
+            "mean_logprobs": mean_logprobs,
+        }

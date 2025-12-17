@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Dict, List
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -15,9 +15,17 @@ from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 class ModelRunner:
     def __init__(self, config: NanoVLLMConfig, rank: int, actor_config=None):
         self.config = config
-        self.block_size = config.kvcache_block_size
+        self.rank = rank
+        self.block_size = int(config.kvcache_block_size)
         self.device = torch.device("cuda")
         self.kv_cache = None
+
+        self.max_graph_batch_size = min(int(config.max_num_seqs), 512)
+        self.graph_batch_size_list = self.make_graph_batch_size_list(self.max_graph_batch_size)
+        self.tensor_parallel_size = int(config.tensor_parallel_size)
+        self.is_first_tensor_parallel_rank = (self.tensor_parallel_size <= 1) or (
+            (rank % self.tensor_parallel_size) == 0
+        )
 
         model = AutoModelForCausalLM.from_pretrained(
             config.model, torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16)
@@ -60,13 +68,35 @@ class ModelRunner:
         else:
             self.model = model.to(self.device)
 
+        # paged attention kernel patch
         self.model = patch_kernel(self.model, use_paged_attention=True)
         self.warmup_model()
         self.allocate_kv_cache()
 
+        # CUDA graph capture
+        self.max_num_blocks = (int(config.max_model_len) + self.block_size - 1) // self.block_size
+        self.graphs = {}
+        self.graph_pool = None
+        self.graph_vars = {}
+        if not self.config.enforce_eager:
+            self.capture_decode_cudagraphs()
+
+    def make_graph_batch_size_list(self, max_batch_size: int) -> List[int]:
+        batch_sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+        output = [b for b in batch_sizes if b <= max_batch_size]
+        if not output:
+            return [1]
+        if output[-1] != max_batch_size:
+            output.append(max_batch_size)
+        return output
+
+    def select_batch_size_bucket(self, batch_size: int) -> int:
+        for batch_size_cap in self.graph_batch_size_list:
+            if batch_size <= batch_size_cap:
+                return batch_size_cap
+        return self.graph_batch_size_list[-1]
+
     def get_config(self):
-        # This is necessary to pass `config` to Scheduler.
-        # https://discuss.ray.io/t/how-can-i-get-attribute-of-a-actor/7153
         return self.config
 
     def warmup_model(self):
@@ -105,14 +135,7 @@ class ModelRunner:
 
         dtype = getattr(hf_config, "torch_dtype", torch.float16)
         itemsize = torch.tensor([], dtype=dtype).dtype.itemsize
-        block_bytes = (
-            2  # key, value
-            * hf_config.num_hidden_layers
-            * config.kvcache_block_size
-            * num_kv_heads
-            * head_dim
-            * itemsize
-        )
+        block_bytes = 2 * hf_config.num_hidden_layers * config.kvcache_block_size * num_kv_heads * head_dim * itemsize
 
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0, "Not enough GPU memory for KV cache."
@@ -139,7 +162,6 @@ class ModelRunner:
     def prepare_block_tables(self, seqs):
         if any(len(seq.block_table) == 0 for seq in seqs):
             return None
-
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
@@ -172,10 +194,7 @@ class ModelRunner:
                 assert len(seq.block_table) > 0, "block_tables is not None but seq.block_table is empty"
                 for pos in range(prefix, length):
                     block_idx = pos // self.block_size
-                    assert block_idx < len(seq.block_table), (
-                        f"block_table too short: block_idx={block_idx}, len(block_table)={len(seq.block_table)}, "
-                        f"pos={pos}, length={length}, block_size={self.block_size}"
-                    )
+                    assert block_idx < len(seq.block_table)
                     page_id = seq.block_table[block_idx]
                     offset = pos % self.block_size
                     slot_mapping.append(page_id * self.block_size + offset)
@@ -222,6 +241,7 @@ class ModelRunner:
         slot_mapping, context_lens = [], []
 
         for seq in seqs:
+            assert len(seq.block_table) > 0, "decode requires allocated block_table"
             length = len(seq)
             input_ids.append(seq.last_token)
             position_ids.append(length - 1)
@@ -238,34 +258,163 @@ class ModelRunner:
         set_context(False, slot_mapping, context_lens, block_tables)
         return input_ids, position_ids, attention_mask
 
-    @torch.inference_mode()
-    def run(self, seqs, is_prefill):
-        if is_prefill:
-            input_ids, position_ids, attention_mask = self.prepare_prefill(seqs)
-        else:
-            input_ids, position_ids, attention_mask = self.prepare_decode(seqs)
-            input_ids = input_ids.unsqueeze(1)
-            position_ids = position_ids.unsqueeze(1)
-            attention_mask = attention_mask.unsqueeze(1)
-
-        logits = self.model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            use_cache=False,
-        ).logits
-
-        if is_prefill:
-            context = get_context()
-            last_pos = context.cu_seqlens_q[1:].to(logits.device, dtype=torch.int64) - 1
-            logits_for_sampling = logits[0, last_pos, :]
-        else:
-            logits_for_sampling = logits[:, -1, :]
-
+    def sample(self, logits_for_sampling, seqs):
+        if all(seq.temperature <= 0.0 for seq in seqs):
+            return logits_for_sampling.argmax(dim=-1)
         temperatures = [seq.temperature + 1e-12 for seq in seqs]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
-        logits_for_sampling = logits_for_sampling.float().div_(temperatures.unsqueeze(dim=1))
-        probs = torch.softmax(logits_for_sampling, dim=-1)
-        sample_tokens = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
+        logits = logits_for_sampling.float().div_(temperatures.unsqueeze(dim=1))
+        probs = torch.softmax(logits, dim=-1)
+        return probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
+
+    @torch.inference_mode()
+    def capture_decode_cudagraphs(self):
+        hf_config = self.config.hf_config
+        vocab_size = int(getattr(hf_config, "vocab_size"))
+        torch.cuda.synchronize()
+
+        for batch_size_cap in reversed(self.graph_batch_size_list):
+            input_ids = torch.zeros((batch_size_cap, 1), device=self.device, dtype=torch.int64)
+            position_ids = torch.zeros((batch_size_cap, 1), device=self.device, dtype=torch.int64)
+            attention_mask = torch.ones((batch_size_cap, 1), device=self.device, dtype=torch.int64)
+
+            slot_mapping = torch.zeros((batch_size_cap,), device=self.device, dtype=torch.int32)
+            context_lens = torch.ones((batch_size_cap,), device=self.device, dtype=torch.int32)
+            block_tables = torch.full((batch_size_cap, self.max_num_blocks), -1, device=self.device, dtype=torch.int32)
+
+            last_logits = torch.empty(
+                (batch_size_cap, vocab_size // self.tensor_parallel_size),
+                device=self.device,
+                dtype=getattr(hf_config, "torch_dtype", torch.float16),
+            )
+
+            # warm up with eager mode
+            set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+            _ = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                use_cache=False,
+            ).logits
+            reset_context()
+            torch.cuda.synchronize()
+
+            graph = torch.cuda.CUDAGraph()
+            set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
+            with torch.cuda.graph(graph, pool=self.graph_pool):
+                logits = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=False,
+                ).logits
+                last_logits.copy_(logits[:, -1, :])
+            reset_context()
+
+            if self.graph_pool is None:
+                self.graph_pool = graph.pool()
+
+            self.graphs[batch_size_cap] = graph
+            self.graph_vars[batch_size_cap] = {
+                "input_ids": input_ids,
+                "position_ids": position_ids,
+                "attention_mask": attention_mask,
+                "slot_mapping": slot_mapping,
+                "context_lens": context_lens,
+                "block_tables": block_tables,
+                "last_logits_out": last_logits,
+            }
+            torch.cuda.synchronize()
+
+    def fill_decode_graph_vars(self, seqs: List[Sequence], bs_cap: int):
+        vars = self.graph_vars[bs_cap]
+        batch_size = len(seqs)
+
+        input_ids = vars["input_ids"]
+        position_ids = vars["position_ids"]
+        slot_mapping = vars["slot_mapping"]
+        context_lens = vars["context_lens"]
+        block_tables = vars["block_tables"]
+
+        block_tables.fill_(-1)
+        slot_mapping.fill_(-1)
+        context_lens.zero_()
+        input_ids.zero_()
+        position_ids.zero_()
+
+        for i, seq in enumerate(seqs):
+            assert len(seq.block_table) > 0, "decode requires allocated block_table"
+            length = len(seq)
+
+            input_ids[i, 0] = int(seq.last_token)
+            position_ids[i, 0] = int(length - 1)
+            context_lens[i] = int(length)
+            offset_in_block = (length - 1) % self.block_size
+            slot_mapping[i] = int(seq.block_table[-1] * self.block_size + offset_in_block)
+            block_table = seq.block_table
+            num_blocks = min(len(block_table), self.max_num_blocks)
+            if num_blocks > 0:
+                for j in range(num_blocks):
+                    block_tables[i, j] = int(block_table[j])
+
+        set_context(
+            False,
+            slot_mapping=slot_mapping,
+            context_lens=context_lens,
+            block_tables=block_tables,
+        )
+
+        return batch_size
+
+    @torch.inference_mode()
+    def run_decode_with_graph(self, seqs: List[Sequence]) -> torch.Tensor:
+        batch_size = len(seqs)
+        batch_size_cap = self.select_batch_size_bucket(batch_size)
+        actual_batch_size = self.fill_decode_graph_vars(seqs, batch_size_cap)
+
+        graph = self.graphs[batch_size_cap]
+        graph.replay()
+
+        output = self.graph_vars[batch_size_cap]["last_logits_out"][:actual_batch_size]
         reset_context()
-        return sample_tokens.tolist()
+        return output
+
+    @torch.inference_mode()
+    def run(self, seqs, is_prefill):
+        try:
+            if is_prefill:
+                # prefill
+                input_ids, position_ids, attention_mask = self.prepare_prefill(seqs)
+                logits = self.model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=False,
+                ).logits
+                last_pos = get_context().cu_seqlens_q[1:].to(logits.device, dtype=torch.int64) - 1
+                logits_for_sampling = logits[0, last_pos, :]
+            else:
+                # decode
+                if len(seqs) <= self.max_graph_batch_size and not self.config.enforce_eager:
+                    # CUDA graph decode
+                    logits_for_sampling = self.run_decode_with_graph(seqs)
+                else:
+                    # fallback eager decode
+                    input_ids, position_ids, attention_mask = self.prepare_decode(seqs)
+                    input_ids = input_ids.unsqueeze(1)
+                    position_ids = position_ids.unsqueeze(1)
+                    attention_mask = attention_mask.unsqueeze(1)
+                    logits = self.model(
+                        input_ids=input_ids,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        use_cache=False,
+                    ).logits
+                    logits_for_sampling = logits[:, -1, :]
+
+            if self.is_first_tensor_parallel_rank:
+                return self.sample(logits_for_sampling, seqs).tolist()
+            return []
+
+        finally:
+            reset_context()

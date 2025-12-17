@@ -3,6 +3,130 @@ import triton.language as tl
 
 
 @triton.jit
+def flash_attn_decode_kernel_split_k_paged(
+    q_ptr, k_cache_ptr, v_cache_ptr,
+    block_tables_ptr, context_lens_ptr,
+    ez_dot_v_ptr, max_q_ptr, ez_sum_ptr,
+    seq_len_q,
+    stride_q_bh, stride_q_seq, stride_q_dim,
+    stride_cache_slot, stride_cache_head, stride_cache_dim,
+    stride_bt_b, stride_bt_blk, stride_cl_b,
+    stride_ez_dot_v_bh, stride_ez_dot_v_split, stride_ez_dot_v_seq, stride_ez_dot_v_dim,
+    stride_max_q_bh, stride_max_q_split, stride_max_q_seq,
+    stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq,
+    softmax_scale,
+    block_n_per_split,
+    kv_block_size: tl.constexpr,
+    kv_heads: tl.constexpr,
+    num_heads: tl.constexpr,
+    causal: tl.constexpr,
+    dim: tl.constexpr,
+    block_size_q: tl.constexpr,
+    block_size_k: tl.constexpr,
+    max_num_blocks: tl.constexpr,
+):
+    pid_q_block = tl.program_id(0)
+    pid_bh = tl.program_id(1)
+    pid_split = tl.program_id(2)
+
+    q_start = pid_q_block * block_size_q
+    if q_start >= seq_len_q:
+        return
+
+    b = pid_bh // num_heads
+    h = pid_bh - b * num_heads
+
+    group_size = num_heads // kv_heads
+    kv_h = h // group_size
+    ctx_len = tl.load(context_lens_ptr + b * stride_cl_b).to(tl.int32)
+
+    offs_q = q_start + tl.arange(0, block_size_q)
+    offs_k = tl.arange(0, block_size_k)
+    q_mask = offs_q < seq_len_q
+
+    q_bh = q_ptr + pid_bh * stride_q_bh
+    q_block_ptr = tl.make_block_ptr(
+        base=q_bh,
+        shape=(seq_len_q, dim),
+        offsets=(q_start, 0),
+        block_shape=(block_size_q, dim),
+        strides=(stride_q_seq, stride_q_dim),
+        order=(1, 0),
+    )
+    q = tl.load(q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+
+    seq_len_k_fixed = max_num_blocks * kv_block_size
+    k_low = pid_split * block_n_per_split
+    k_high = tl.minimum((pid_split + 1) * block_n_per_split, seq_len_k_fixed)
+
+    max_q = tl.full((block_size_q,), -float("inf"), dtype=tl.float32)
+    ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
+    ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
+
+    for kv_start in range(k_low, k_high, block_size_k):
+        kv_idx = kv_start + offs_k
+        kv_mask = (kv_idx < k_high) & (kv_idx < ctx_len)
+
+        block_idx = kv_idx // kv_block_size
+        block_off = kv_idx - block_idx * kv_block_size
+
+        bt_base = block_tables_ptr + b * stride_bt_b
+        page_id = tl.load(bt_base + block_idx * stride_bt_blk, mask=kv_mask, other=-1).to(tl.int32)
+
+        kv_mask = kv_mask & (page_id >= 0)
+        slot = page_id * kv_block_size + block_off
+        d = tl.arange(0, dim)
+
+        k_ptrs = (
+            k_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        )
+        v_ptrs = (
+            v_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        )
+
+        k_tile = tl.load(k_ptrs, mask=kv_mask[:, None], other=0.0)
+        v_tile = tl.load(v_ptrs, mask=kv_mask[:, None], other=0.0)
+        scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
+
+        base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
+        if causal:
+            offset = seq_len_k_fixed - seq_len_q
+            q_pos = offset + offs_q[:, None]
+            kv_pos = kv_idx[None, :]
+            scores = tl.where(base_mask | (kv_pos > q_pos), -float("inf"), scores)
+        else:
+            scores = tl.where(base_mask, -float("inf"), scores)
+
+        current_max_q = tl.max(scores, axis=1)
+        new_max_q = tl.maximum(max_q, current_max_q)
+        rescale = tl.exp(max_q - new_max_q)
+
+        current_ez = tl.exp(scores - new_max_q[:, None])
+        ez_sum = ez_sum * rescale + tl.sum(current_ez, axis=1)
+        ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v_tile.dtype), v_tile, out_dtype=tl.float32)
+        max_q = new_max_q
+
+    ez_dot_v_offset = ez_dot_v_ptr + pid_bh * stride_ez_dot_v_bh + pid_split * stride_ez_dot_v_split
+    ez_dot_v_block_ptr = tl.make_block_ptr(
+        base=ez_dot_v_offset,
+        shape=(seq_len_q, dim),
+        offsets=(q_start, 0),
+        block_shape=(block_size_q, dim),
+        strides=(stride_ez_dot_v_seq, stride_ez_dot_v_dim),
+        order=(1, 0),
+    )
+    tl.store(ez_dot_v_block_ptr, ez_dot_v)
+
+    max_q_block_ptr = max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
+    ez_sum_block_ptr = (
+        ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+    )
+    tl.store(max_q_block_ptr, max_q, mask=q_mask)
+    tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
+
+
+# deprecated, kept for reference.
+@triton.jit
 def flash_attn_decode_kernel_split_k(
     q_ptr, k_ptr, v_ptr, ez_dot_v_ptr,
     max_q_ptr, ez_sum_ptr,
@@ -142,3 +266,4 @@ def flash_attn_decode_kernel_split_k(
     )
     tl.store(max_q_block_ptr, max_q, mask=q_mask)
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
+
