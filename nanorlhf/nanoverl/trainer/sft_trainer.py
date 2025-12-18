@@ -1,60 +1,33 @@
 from argparse import ArgumentParser
-from dataclasses import asdict
-from typing import Dict, Any
 
-import wandb
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
-from nanorlhf.nanotron import MPU
-from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
-from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_sft, split_packed_batch
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
-from nanorlhf.nanoverl.worker.sft_worker import SFTWorker
+from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
+from nanorlhf.nanoverl.trainer.base_trainer import BaseTrainer
+from nanorlhf.nanoverl.trainer.worker.sft_worker import SFTWorker
+from nanorlhf.nanoverl.trainer.worker_group.sft_worker_group import SFTWorkerGroup
+from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_sft
 
 
-class SFTTrainer:
+class SFTTrainer(BaseTrainer):
     def __init__(self, config: str):
-        self.config = SFTConfig.from_yaml(config)
+        super().__init__(config=SFTConfig.from_yaml(config))
         self.train_dataloader = self.load_dataloader(self.config, split="train")
         self.valid_dataloader = self.load_dataloader(self.config, split="valid")
         self.total_steps = self.config.training.total_epochs * len(self.train_dataloader)
-        self.global_step = 0
 
         self.global_world_size = (
             self.config.model.data_parallel_size
             * self.config.model.tensor_parallel_size
             * self.config.model.pipeline_parallel_size
         )
-
-        self.data_parallel_ranks = []
-        for global_rank in range(self.global_world_size):
-            dp_rank, _, _ = MPU.get_local_ranks_from_global_rank(
-                global_rank,
-                self.config.model.data_parallel_size,
-                self.config.model.tensor_parallel_size,
-                self.config.model.pipeline_parallel_size,
-            )
-            self.data_parallel_ranks.append(dp_rank)
-
         self.node_ids = self.init_ray(self.config)
-        self.models = self.create_model(self.config)
-        self.maybe_init_logger()
 
-    def maybe_init_logger(self):
-        if not self.config.training.wandb:
-            return
-
-        wandb.init(
-            project=self.config.training.project_name,
-            name=self.config.training.experiment_name,
-            config=asdict(self.config),
-        )
-
-    def log(self, metrics: Dict[str, Any]):
-        if self.config.training.wandb:
-            wandb.log(metrics, step=self.global_step)
+        sft_workers = self.spawn_workers(self.config)
+        self.sft_worker_group = SFTWorkerGroup(self.config, sft_workers)
 
     def load_dataloader(self, config, split: str):
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
@@ -101,7 +74,7 @@ class SFTTrainer:
         else:
             nodes["node-0"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.model.host, port=base_port)
 
-        session = nanoray.init(nodes, default_node_id="node-1")
+        session = nanoray.init(nodes, default_node_id="node-0")
         node_ids = list(session._workers.keys())
         if len(node_ids) < self.global_world_size:
             raise RuntimeError(
@@ -111,7 +84,7 @@ class SFTTrainer:
 
         return node_ids
 
-    def create_model(self, config):
+    def spawn_workers(self, config):
         object_refs = []
         for global_rank in range(self.global_world_size):
             node_id = self.node_ids[global_rank % len(self.node_ids)]
@@ -120,39 +93,6 @@ class SFTTrainer:
             )
             object_refs.append(object_ref)
         return nanoray.get(object_refs)
-
-    def step(self, input_batch, train: bool):
-        per_data_parallel_batches = []
-        for data_parallel_rank in range(self.config.model.data_parallel_size):
-            data_parallel_batch = split_packed_batch(
-                input_batch, chunk_idx=data_parallel_rank, num_chunks=self.config.model.data_parallel_size
-            )
-            per_data_parallel_batches.append(data_parallel_batch)
-
-        object_refs = []
-        for global_rank in range(self.global_world_size):
-            data_parallel_rank = self.data_parallel_ranks[global_rank]
-            input_batch = per_data_parallel_batches[data_parallel_rank]
-            object_ref = self.models[global_rank].step.remote(input_batch, train, blocking=False)
-            object_refs.append(object_ref)
-        return nanoray.get(object_refs)[0]
-
-    def save_parallelized(self):
-        experiment_dir = (
-            f"{self.config.training.default_local_dir}"
-            f"/{self.config.training.project_name}"
-            f"/{self.config.training.experiment_name}"
-        )
-        save_dir = f"{experiment_dir}/step_{self.global_step}"
-        object_refs = []
-        for model in self.models:
-            object_ref = model.save_parallelized.remote(save_dir, blocking=False)
-            object_refs.append(object_ref)
-        nanoray.get(object_refs)
-
-        with open(f"{experiment_dir}/latest_checkpointed_iteration.txt", "w") as f:
-            f.write(str(self.global_step))
-        print(f"\n[SAVE] Saved checkpoint at step {self.global_step} to {save_dir}")
 
     def fit(self):
         for epoch in range(self.config.training.total_epochs):
@@ -164,7 +104,7 @@ class SFTTrainer:
             for batch in pbar:
                 self.global_step += 1
 
-                output = self.step(batch, train=True)
+                output = self.sft_worker_group.step(batch, train=True)
                 train_loss, lr = output["loss"], output["lr"]
                 pbar.set_postfix(loss=f"{train_loss:.6f}", lr=f"{lr:.6e}", global_step=self.global_step)
                 self.log(
@@ -179,7 +119,7 @@ class SFTTrainer:
                 if self.global_step % self.config.training.test_freq == 0:
                     valid_losses = []
                     for valid_batch in tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True):
-                        valid_output = self.step(valid_batch, train=False)
+                        valid_output = self.sft_worker_group.step(valid_batch, train=False)
                         valid_losses.append(valid_output["loss"])
                     mean_valid_loss = sum(valid_losses) / max(len(valid_losses), 1)
                     self.log(
@@ -193,10 +133,10 @@ class SFTTrainer:
 
                 if self.global_step % self.config.training.save_freq == 0:
                     # Periodic save during training
-                    self.save_parallelized()
+                    self.sft_worker_group.save_parallelized(self.global_step)
 
         # Final save after training
-        self.save_parallelized()
+        self.sft_worker_group.save_parallelized(self.global_step)
 
 
 if __name__ == '__main__':

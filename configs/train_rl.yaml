@@ -3,8 +3,8 @@ data:
   valid_batch_size: 8
   train_micro_batch_size: 4
   valid_micro_batch_size: 4
-  train_data: ./data/DeepMath-40k/preprocessed/valid.nano
-  valid_data: ./data/DeepMath-40k/preprocessed/valid.nano
+  train_data: ./data/DeepMath-72k/preprocessed/valid.nano
+  valid_data: ./data/DeepMath-72k/preprocessed/valid.nano
   num_workers: 8
 
 actor:

@@ -7,51 +7,13 @@ python3 -m nanorlhf.evaluation.math_eval \
 import json
 import os
 from argparse import ArgumentParser
-from typing import Optional
 
 from math_verify import parse, verify
 from transformers import AutoTokenizer
 
+from nanorlhf.evaluation.eval_utils import get_unnormalized_answer
 from nanorlhf.nanosets import load_dataset
 from nanorlhf.nanovllm import LLM, SamplingParams
-
-
-def last_boxed_only_string(string: str) -> Optional[str]:
-    idx = string.rfind("\\boxed")
-    if "\\boxed " in string:
-        return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
-    if idx < 0:
-        idx = string.rfind("\\fbox")
-        if idx < 0:
-            return None
-
-    i = idx
-    right_brace_idx = None
-    num_left_braces_open = 0
-    while i < len(string):
-        if string[i] == "{":
-            num_left_braces_open += 1
-        if string[i] == "}":
-            num_left_braces_open -= 1
-            if num_left_braces_open == 0:
-                right_brace_idx = i
-                break
-        i += 1
-
-    if right_brace_idx is None:
-        retval = None
-    else:
-        retval = string[idx : right_brace_idx + 1]
-
-    return retval
-
-
-def get_unnormalized_answer(text: str) -> str:
-    answer = last_boxed_only_string(text)
-    if answer:
-        return answer
-    else:
-        return "[invalidanswer]"
 
 
 def load_test_dataset(test):

@@ -114,12 +114,12 @@ def unpack_sequences(input_ids, position_ids, reward_model_list):
     ends = starts[1:] + [input_ids.numel()]
     unpacked_sequences = []
 
-    for i, (s, e) in enumerate(zip(starts, ends)):
-        if e <= s:
+    for i, (start, end) in enumerate(zip(starts, ends)):
+        if end <= start:
             continue
         reward_model = reward_model_list[i] if reward_model_list is not None else None
-        unpacked_input_ids = input_ids[:, s:e]
-        unpacked_position_ids = position_ids[:, s:e]
+        unpacked_input_ids = input_ids[:, start:end]
+        unpacked_position_ids = position_ids[:, start:end]
         unpacked_sequences.append(
             {
                 "input_ids": unpacked_input_ids,

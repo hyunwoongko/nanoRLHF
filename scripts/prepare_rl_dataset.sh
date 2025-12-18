@@ -1,6 +1,6 @@
 #!/bin/bash
 
-data_path="./data/DeepMath-40k"
+data_path="./data/DeepMath-72k"
 
 # Train dataset has 40k rows and it sampled from training dataset.
 # I sampled only data with difficulty level 6 or higher.
@@ -13,8 +13,8 @@ valid="${data_path}/valid.jsonl"
 tokenizer_name_or_path="Qwen/Qwen3-0.6B"
 max_length=8192
 training_type="rl"
-prompt_key="question"
-answer_key="final_answer"
+prompt_key="problem"
+answer_key="answer"
 batch_size=256
 seed=1234
 num_workers=32

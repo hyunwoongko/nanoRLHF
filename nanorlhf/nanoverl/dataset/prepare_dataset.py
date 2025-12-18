@@ -24,8 +24,8 @@ def prepare_dataset(
     mp_chunksize: int = 512,
     messages_key: str = "messages",
     tools_key: str = "tools",
-    prompt_key: str = "question",
-    answer_key: str = "final_answer",
+    prompt_key: str = "problem",
+    answer_key: str = "answer",
     reward_type: str = "math_rlvr",
 ):
     assert training_type in ["sft", "rl"], f"Unsupported training type: {training_type}"
@@ -200,8 +200,8 @@ if __name__ == '__main__':
     parser.add_argument('--messages_key', type=str, default='messages', help='Key for messages in the sft data.')
     parser.add_argument('--tools_key', type=str, default='tools', help='Key for tools in the sft data.')
     # RL only
-    parser.add_argument('--prompt_key', type=str, default='question', help='Key for prompt in the rl data.')
-    parser.add_argument('--answer_key', type=str, default='final_answer', help='Key for answer in the rl data.')
+    parser.add_argument('--prompt_key', type=str, default='problem', help='Key for prompt in the rl data.')
+    parser.add_argument('--answer_key', type=str, default='answer', help='Key for answer in the rl data.')
     parser.add_argument('--reward_type', type=str, default='math_rlvr', help='Type of reward for rl data.')
     args = parser.parse_args()
 

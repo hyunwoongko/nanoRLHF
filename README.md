@@ -98,7 +98,8 @@ bash ./scripts/eval_sft_model.sh
 
 #### 5) Preparing Reinforcement Learning Dataset
 Reinforcement learning is performed using [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) dataset.
-About 40k samples with difficulty level 6 or higher are sampled for training and 1k samples are used for validation.
+About 72k samples with difficulty level 5 or higher are sampled for training and 1k samples are used for validation.
+I also removed samples that have 'yes' or 'no' as the answer to ensure the reward model can provide meaningful feedback.
 Running the following command will tokenize the dataset and save it as zero-copy `.nano` format.
 
 ```bash

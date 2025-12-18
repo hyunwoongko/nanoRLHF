@@ -14,6 +14,7 @@ class DataConfig:
     train_data: Optional[str] = None
     valid_data: Optional[str] = None
     num_workers: int = 8
+    experience_staleness: int = 1
 
 
 @dataclass
@@ -47,7 +48,7 @@ class RolloutConfig:
 
 @dataclass
 class RewardConfig:
-    path: str = None
+    path: str = "nanorlhf.nanoverl.reward.custom_reward_fn"
     name: str = "compute_score"
 
 
