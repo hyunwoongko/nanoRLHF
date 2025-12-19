@@ -152,7 +152,9 @@ class RLTrainer(BaseTrainer):
                 experience_info = self.actor_critic_ref_worker_group.make_experience(
                     total_tokens_repacked, reward_scores
                 )
-                print(experience_info)
+                train_step_output = self.actor_critic_ref_worker_group.step()
+                print(train_step_output)
+                print(f"reward: {sum(reward_scores) / len(reward_scores):.4f}")
 
 
 if __name__ == '__main__':

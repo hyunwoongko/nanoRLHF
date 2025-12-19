@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from transformers import AutoConfig
+from transformers import AutoConfig, AutoTokenizer
 
 from nanorlhf.kernels.flash_attn_decode.ops import KVCACHE_BLOCK_SIZE
 
@@ -30,6 +30,10 @@ class NanoVLLMConfig:
         assert self.kvcache_block_size % 256 == 0
         assert 1 <= self.tensor_parallel_size <= 8
         self.hf_config = AutoConfig.from_pretrained(self.model)
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(self.model)
+            self.eos = tokenizer.eos_token_id
+        except Exception:
+            print("[NanoVLLM] Failed to load tokenizer to get `eos_token_id`. You may need to set it manually.")
         self.max_model_len = min(self.max_model_len, self.hf_config.max_position_embeddings)
         assert self.max_num_batched_tokens >= self.max_model_len
-

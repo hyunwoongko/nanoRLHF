@@ -52,3 +52,15 @@ class ActorCriticRefWorkerGroup:
             )
             object_refs.append(object_ref)
         return nanoray.get(object_refs)[0]
+
+    def step(self):
+        object_refs = []
+        for actor_local_rank in range(self.actor_world_size):
+            object_ref = self.workers[actor_local_rank].step.remote(blocking=False)
+            object_refs.append(object_ref)
+        outputs = nanoray.get(object_refs)
+
+        if all(out.get("skipped", False) for out in outputs):
+            return {"skipped": True}
+
+        return outputs[0]

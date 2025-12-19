@@ -99,6 +99,10 @@ def split_packed_batch(
             local_batch[k] = local_cu_seq_lens
             continue
 
+        if v.dim() == 1 and v.numel() == total_tokens:
+            local_batch[k] = v[tok_start:tok_end].contiguous()
+            continue
+
         if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
             local_batch[k] = v[:, tok_start:tok_end].contiguous()
             continue

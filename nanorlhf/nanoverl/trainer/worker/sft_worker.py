@@ -109,7 +109,7 @@ class SFTWorker:
             micro_batch_size = self.config.data.valid_micro_batch_size
 
         batch_size = (batch["position_ids"] == 0).sum().item()
-        num_micro_batches = batch_size // micro_batch_size
+        num_of_micro_batches = batch_size // micro_batch_size
 
         if self.config.model.pipeline_parallel_size > 1:
             pp_wrapper = self.model.__nanotron_wrappers__[ParallelMode.PIPELINE]
@@ -117,15 +117,15 @@ class SFTWorker:
             micro_batches = pp_wrapper._split_packed_batches(batch)
             micro_batch_iterator = enumerate(self.model(**batch))
         else:
-            micro_batches = [split_packed_batch(batch, i, num_micro_batches) for i in range(num_micro_batches)]
+            micro_batches = [split_packed_batch(batch, i, num_of_micro_batches) for i in range(num_of_micro_batches)]
             micro_batch_iterator = enumerate(micro_batches)
 
         device = batch["input_ids"].device
         sum_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
         num_of_valid_losses = torch.zeros((), device=device, dtype=torch.float32)
 
-        num_micro_valid_tokens_per_batch = [(m["labels"][:, 1:] != -100).sum() for m in micro_batches]
-        num_total_valid_tokens = sum(num_micro_valid_tokens_per_batch).to(device).clamp_min(1)
+        num_of_micro_valid_tokens_per_batch = [(m["labels"][:, 1:] != -100).sum() for m in micro_batches]
+        num_of_total_valid_tokens = sum(num_of_micro_valid_tokens_per_batch).to(device).clamp_min(1)
 
         with torch.set_grad_enabled(train):
             for mico_idx, micro_input_or_output in micro_batch_iterator:
@@ -134,12 +134,12 @@ class SFTWorker:
                 else:
                     micro_loss = self.model(**micro_input_or_output).loss
 
-                num_micro_valid_tokens = num_micro_valid_tokens_per_batch[mico_idx].to(device).detach()
-                sum_of_valid_losses += (micro_loss.detach() * num_micro_valid_tokens).float()
-                num_of_valid_losses += num_micro_valid_tokens.float()
+                num_of_micro_valid_tokens = num_of_micro_valid_tokens_per_batch[mico_idx].to(device).detach()
+                sum_of_valid_losses += (micro_loss.detach() * num_of_micro_valid_tokens).float()
+                num_of_valid_losses += num_of_micro_valid_tokens.float()
 
                 if train:
-                    contribution = num_micro_valid_tokens / num_total_valid_tokens
+                    contribution = num_of_micro_valid_tokens / num_of_total_valid_tokens
                     (micro_loss * contribution).backward()
 
             if train and self.optimizer is not None:

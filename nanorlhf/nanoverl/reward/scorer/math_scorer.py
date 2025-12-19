@@ -10,4 +10,11 @@ def compute_score(prediction, reference):
         gold_answer = parse(reference)
 
     model_answer = parse(get_unnormalized_answer(prediction))
-    return float(verify(gold_answer, model_answer))
+    reward = float(verify(gold_answer, model_answer))
+
+    print("Prediction:", prediction)
+    print("Reference:", reference)
+    print("Reward:", reward)
+    print("-" * 50)
+    return reward
+

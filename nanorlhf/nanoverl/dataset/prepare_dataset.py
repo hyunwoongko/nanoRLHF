@@ -54,23 +54,32 @@ def prepare_dataset(
                     line = json.loads(line)
                     raw_dataset.append(line)
 
-    # 5) load tokenizer
+    # 5) Load formatting prompt if provided
+    if args.formatting_prompt is not None:
+        formatting_prompt = json.load(open(args.formatting_prompt, "r"))["prompt"]
+    else:
+        formatting_prompt = None
+
+    # 6) load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_name_or_path)
 
-    # 6) preprocess dataset
+    # 7) preprocess dataset
     set_seed(seed)
     random.shuffle(raw_dataset)
 
     with multiprocessing.Pool(num_workers) as pool:
-        # 7) tokenize dataset
+        # 8) tokenize dataset
         if training_type == "sft":
             fn = partial(
                 preprocess_sft,
                 tokenizer=tokenizer,
                 messages_key=messages_key,
                 tools_key=tools_key,
+                enable_thinking_key=args.enable_thinking_key,
+                allow_thinking=args.allow_thinking,
                 generation_prompt=extract_generation_prompt(tokenizer),
                 max_length=max_length,
+                formatting_prompt=formatting_prompt,
             )
             output_dataset = []
             for input_ids, loss_mask in tqdm(
@@ -88,7 +97,10 @@ def prepare_dataset(
                 tokenizer=tokenizer,
                 prompt_key=prompt_key,
                 answer_key=answer_key,
+                enable_thinking_key=args.enable_thinking_key,
+                allow_thinking=args.allow_thinking,
                 max_length=max_length,
+                formatting_prompt=formatting_prompt,
             )
             output_dataset = []
             for input_ids, answer in tqdm(
@@ -103,7 +115,7 @@ def prepare_dataset(
                     }
                     output_dataset.append(rows)
 
-        # 8) save dataset as nano format
+        # 9) save dataset as nano format
         print("Converting tokenized dataset to zero-copy nano format...")
         nano_dataset = Dataset.from_list(output_dataset, batch_size=batch_size)
         nano_dataset.save_to_disk(output_path)
@@ -120,21 +132,44 @@ def extract_generation_prompt(tokenizer):
     return token2[len(token1) :]
 
 
-def preprocess_sft(sample, tokenizer, messages_key, tools_key, generation_prompt, max_length):
+def preprocess_sft(
+    sample,
+    tokenizer,
+    messages_key,
+    tools_key,
+    enable_thinking_key,
+    allow_thinking,
+    generation_prompt,
+    max_length,
+    formatting_prompt,
+):
     messages = sample.get(messages_key, [])
     tools = sample.get(tools_key, None)
     if not messages:
         return None, None
 
+    if formatting_prompt is not None:
+        for message in messages:
+            if message["role"] == "user":
+                message["content"] = formatting_prompt.format(message["content"])
+
     num_history_tokens = 0
     input_ids, loss_mask = [], []
     for turn_idx in range(len(messages)):
         role = messages[turn_idx].get("role")
+
+        if isinstance(allow_thinking, str):
+            allow_thinking = allow_thinking.upper() == "TRUE"
+        else:
+            allow_thinking = False
+
+        tokenizer_kwargs = {enable_thinking_key: allow_thinking} if enable_thinking_key is not None else {}
         tokens = tokenizer.apply_chat_template(
             messages[: turn_idx + 1],
             tools=tools,
-            add_generation_prompt=False,
+            add_generation_prompt=True,
             tokenize=True,
+            **tokenizer_kwargs,
         )
         current_turn_tokens = tokens[num_history_tokens:]
         num_history_tokens = len(tokens)
@@ -155,7 +190,16 @@ def preprocess_sft(sample, tokenizer, messages_key, tools_key, generation_prompt
     return input_ids, loss_mask
 
 
-def preprocess_rl(sample, tokenizer, prompt_key, answer_key, max_length):
+def preprocess_rl(
+    sample,
+    tokenizer,
+    prompt_key,
+    answer_key,
+    enable_thinking_key,
+    allow_thinking,
+    max_length,
+    formatting_prompt,
+):
     prompt = sample.get(prompt_key, "")
     answer = sample.get(answer_key, "")
     if not prompt or not answer:
@@ -170,10 +214,22 @@ def preprocess_rl(sample, tokenizer, prompt_key, answer_key, max_length):
         assert prompt[0]["role"] == "user" and prompt[-1]["role"] == "user"
         messages = prompt
 
+    if formatting_prompt is not None:
+        for message in messages:
+            if message["role"] == "user":
+                message["content"] = formatting_prompt.format(message["content"])
+
+    if isinstance(allow_thinking, str):
+        allow_thinking = allow_thinking.upper() == "TRUE"
+    else:
+        allow_thinking = False
+
+    tokenizer_kwargs = {enable_thinking_key: allow_thinking} if enable_thinking_key is not None else {}
     input_ids = tokenizer.apply_chat_template(
         messages,
         add_generation_prompt=True,
         tokenize=True,
+        **tokenizer_kwargs,
     )
     token_length = len(input_ids)
     if token_length >= max_length:
@@ -189,6 +245,7 @@ if __name__ == '__main__':
     parser.add_argument('--files', type=str, required=True, help='Comma-separated input data files (json or jsonl).')
     parser.add_argument('--output_path', type=str, required=True, help='Directory to save the processed dataset.')
     parser.add_argument('--tokenizer_name_or_path', type=str, required=True, help='Path to the tokenizer.')
+    parser.add_argument('--formatting_prompt', type=str, default=None, help='Path to the formatting prompt file.')
     parser.add_argument('--max_length', type=int, default=8192, help='Maximum sequence length.')
     parser.add_argument('--training_type', type=str, default='sft', choices=['sft', 'rl'], help='Type of training.')
     parser.add_argument('--split', type=str, default='train', choices=['train', 'valid'], help='Data split.')
@@ -203,6 +260,9 @@ if __name__ == '__main__':
     parser.add_argument('--prompt_key', type=str, default='problem', help='Key for prompt in the rl data.')
     parser.add_argument('--answer_key', type=str, default='answer', help='Key for answer in the rl data.')
     parser.add_argument('--reward_type', type=str, default='math_rlvr', help='Type of reward for rl data.')
+    # Reasoning related
+    parser.add_argument('--enable_thinking_key', type=str, default='enable_thinking', help='Key to enable thinking.')
+    parser.add_argument('--allow_thinking', type=str, default="False", help='Whether to allow thinking mode.')
     args = parser.parse_args()
 
     prepare_dataset(

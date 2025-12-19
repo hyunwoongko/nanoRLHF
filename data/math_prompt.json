@@ -1,0 +1,5 @@
+{
+  "prompt": "Solve the following math problem. Make sure to put the answer (and only answer) inside \\boxed{{}}.\n\n{}",
+  "source": "https://github.com/NVIDIA-NeMo/RL/blob/48dbb37970e4e5b50d5f6f684a1031d820350753/examples/prompts/math.txt"
+}
+

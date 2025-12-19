@@ -14,7 +14,7 @@ class RewardManager:
         reward_fn_inputs = [
             {
                 # shape of input_ids is [1, num_completion_tokens].
-                "response_str": self.tokenizer.decode(response["input_ids"][0], skip_special_tokens=True),
+                "response_str": self.tokenizer.decode(response["input_ids"][0], skip_special_tokens=False),
                 "reward_model": response["reward_model"],
             }
             for response in response_tokens_unpacked

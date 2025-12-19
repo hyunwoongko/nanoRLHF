@@ -38,6 +38,7 @@ def flash_attn_decode_kernel_split_k_paged(
 
     group_size = num_heads // kv_heads
     kv_h = h // group_size
+
     ctx_len = tl.load(context_lens_ptr + b * stride_cl_b).to(tl.int32)
 
     offs_q = q_start + tl.arange(0, block_size_q)
@@ -53,20 +54,40 @@ def flash_attn_decode_kernel_split_k_paged(
         strides=(stride_q_seq, stride_q_dim),
         order=(1, 0),
     )
-    q = tl.load(q_block_ptr, boundary_check=(0, 1), padding_option="zero")
+    q = tl.load(q_block_ptr, boundary_check=(0, 1), padding_option='zero')
 
-    seq_len_k_fixed = max_num_blocks * kv_block_size
+    seq_len_k_cap = max_num_blocks * kv_block_size
+    seq_len_k = tl.minimum(ctx_len, seq_len_k_cap)
+
     k_low = pid_split * block_n_per_split
-    k_high = tl.minimum((pid_split + 1) * block_n_per_split, seq_len_k_fixed)
+    k_high = tl.minimum((pid_split + 1) * block_n_per_split, seq_len_k)
 
-    max_q = tl.full((block_size_q,), -float("inf"), dtype=tl.float32)
+    max_q = tl.full((block_size_q,), -float('inf'), dtype=tl.float32)
     ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
+    if k_low >= k_high:
+        ez_dot_v_offset = ez_dot_v_ptr + pid_bh * stride_ez_dot_v_bh + pid_split * stride_ez_dot_v_split
+        ez_dot_v_block_ptr = tl.make_block_ptr(
+            base=ez_dot_v_offset,
+            shape=(seq_len_q, dim),
+            offsets=(q_start, 0),
+            block_shape=(block_size_q, dim),
+            strides=(stride_ez_dot_v_seq, stride_ez_dot_v_dim),
+            order=(1, 0),
+        )
+        tl.store(ez_dot_v_block_ptr, ez_dot_v)
+
+        max_q_block_ptr = max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
+        ez_sum_block_ptr = ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+        tl.store(max_q_block_ptr, max_q, mask=q_mask)
+        tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
+        return
+
     for kv_start in range(k_low, k_high, block_size_k):
         kv_idx = kv_start + offs_k
-        kv_mask = (kv_idx < k_high) & (kv_idx < ctx_len)
 
+        kv_mask = kv_idx < k_high
         block_idx = kv_idx // kv_block_size
         block_off = kv_idx - block_idx * kv_block_size
 
@@ -77,25 +98,22 @@ def flash_attn_decode_kernel_split_k_paged(
         slot = page_id * kv_block_size + block_off
         d = tl.arange(0, dim)
 
-        k_ptrs = (
-            k_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
-        )
-        v_ptrs = (
-            v_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
-        )
+        k_ptrs = k_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        v_ptrs = v_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
 
         k_tile = tl.load(k_ptrs, mask=kv_mask[:, None], other=0.0)
         v_tile = tl.load(v_ptrs, mask=kv_mask[:, None], other=0.0)
-        scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
 
+        scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
+
         if causal:
-            offset = seq_len_k_fixed - seq_len_q
+            offset = seq_len_k - seq_len_q
             q_pos = offset + offs_q[:, None]
             kv_pos = kv_idx[None, :]
-            scores = tl.where(base_mask | (kv_pos > q_pos), -float("inf"), scores)
+            scores = tl.where(base_mask | (kv_pos > q_pos), -float('inf'), scores)
         else:
-            scores = tl.where(base_mask, -float("inf"), scores)
+            scores = tl.where(base_mask, -float('inf'), scores)
 
         current_max_q = tl.max(scores, axis=1)
         new_max_q = tl.maximum(max_q, current_max_q)
@@ -118,9 +136,7 @@ def flash_attn_decode_kernel_split_k_paged(
     tl.store(ez_dot_v_block_ptr, ez_dot_v)
 
     max_q_block_ptr = max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
-    ez_sum_block_ptr = (
-        ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
-    )
+    ez_sum_block_ptr = ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
     tl.store(max_q_block_ptr, max_q, mask=q_mask)
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
 

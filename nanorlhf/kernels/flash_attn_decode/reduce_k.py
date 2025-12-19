@@ -25,7 +25,7 @@ def flash_attn_decode_kernel_reduce_k(
     offs_q = q_start + tl.arange(0, block_size_q)
     q_mask = offs_q < seq_len_q
 
-    max_q_global = tl.full((block_size_q,), -float("inf"), dtype=tl.float32)
+    max_q_global = tl.full((block_size_q,), -float('inf'), dtype=tl.float32)
 
     for split in range(split_k):
         max_q_block_ptr = (
@@ -34,7 +34,7 @@ def flash_attn_decode_kernel_reduce_k(
             + split * stride_max_q_split
             + offs_q * stride_max_q_seq
         )
-        max_q_split = tl.load(max_q_block_ptr, mask=q_mask, other=-float("inf"))
+        max_q_split = tl.load(max_q_block_ptr, mask=q_mask, other=-float('inf'))
         max_q_global = tl.maximum(max_q_global, max_q_split)
 
     ez_sum_global = tl.zeros((block_size_q,), dtype=tl.float32)
@@ -53,22 +53,18 @@ def flash_attn_decode_kernel_reduce_k(
             + split * stride_ez_sum_split
             + offs_q * stride_ez_sum_seq
         )
-        max_q_split = tl.load(max_q_block_ptr, mask=q_mask, other=-float("inf"))
+        max_q_split = tl.load(max_q_block_ptr, mask=q_mask, other=-float('inf'))
         ez_sum_split = tl.load(ez_sum_block_ptr, mask=q_mask, other=0.0)
 
         if causal:
             max_q_offset = max_q_split - max_q_global
-            alpha = tl.where(max_q_offset > -float("inf"), tl.exp(max_q_offset), 0.0)
+            alpha = tl.where(max_q_offset > -float('inf'), tl.exp(max_q_offset), 0.0)
         else:
             alpha = tl.exp(max_q_split - max_q_global)
 
         ez_sum_global += ez_sum_split * alpha
 
-        ez_dot_v_split_offset = (
-            ez_dot_v_ptr
-            + pid_bh * stride_ez_dot_v_bh
-            + split * stride_ez_dot_v_split
-        )
+        ez_dot_v_split_offset = ez_dot_v_ptr + pid_bh * stride_ez_dot_v_bh + split * stride_ez_dot_v_split
         ez_dot_v_block_ptr = tl.make_block_ptr(
             base=ez_dot_v_split_offset,
             shape=(seq_len_q, dim),

@@ -68,7 +68,6 @@ class OptimConfig:
 class AlgorithmConfig:
     gamma: float = 1.0
     lam: float = 1.0
-    adv_estimator: str = "gae"
     use_kl_in_reward: bool = False
     kl_loss_coef: float = 0.1
     clip_ratio_high: float = 0.2
@@ -118,12 +117,6 @@ class RLConfig:
                 f"Therefore, rollout.tensor_parallel_size must equal actor.tensor_parallel_size "
                 f"({self.actor.tensor_parallel_size}).\n\n"
                 f"But got rollout.tensor_parallel_size={self.rollout.tensor_parallel_size}."
-            )
-
-        if self.algorithm.adv_estimator not in ["gae", "grpo", "gspo"]:
-            raise ValueError(
-                f"Unsupported advantage estimator: {self.algorithm.adv_estimator}. "
-                "Supported options are: 'gae', 'grpo', 'gspo'."
             )
 
         if self.data.train_batch_size % self.data.train_micro_batch_size != 0:

@@ -19,7 +19,9 @@ class RolloutWorkerGroup:
         self.global_world_size = self.tensor_parallel_size * self.data_parallel_size
 
         self.schedulers = self.create_schedulers()
-        self.sampling_params = SamplingParams(temperature=0.0, max_tokens=config.rollout.max_model_len)
+        self.sampling_params = SamplingParams(temperature=1.0, top_p=1.0, max_tokens=config.rollout.max_model_len)
+        # TODO: 여기서 max_model_len을 쓰면 안되고 max_new_tokens 같은 attribute를 새로 만들어서 그걸 써야 함.
+        # TODO: verl처럼 max_prompt_len도 받아서 입력도 잘라주고, max_new_tokens도 받아서 sampling_params에 넣어주게 바꿔야 함.
 
     def create_schedulers(self):
         schedulers = []
@@ -35,7 +37,7 @@ class RolloutWorkerGroup:
 
         # data parallel batches -> data parallel unpacked batches
         data_parallel_unpacked_batches = []
-        for data_parallel_batch_per_rank in data_parallel_batches:
+        for data_parallel_rank, data_parallel_batch_per_rank in enumerate(data_parallel_batches):
             unpacked_batch_per_rank = unpack_sequences(
                 input_ids=data_parallel_batch_per_rank["input_ids"],
                 position_ids=data_parallel_batch_per_rank["position_ids"],

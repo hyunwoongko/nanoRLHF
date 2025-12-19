@@ -6,9 +6,11 @@ from transformers import AutoModelForCausalLM
 from nanorlhf import nanoray
 from nanorlhf.kernels import patch_kernel
 from nanorlhf.kernels.utils.vllm import set_context, reset_context, get_context
-from nanorlhf.nanotron import TensorParallel, MPU
+from nanorlhf.nanotron import TensorParallel, MPU, ParallelMode
+from nanorlhf.nanotron.distributed.collectives import Collectives
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
+import torch.distributed as dist
 
 
 @nanoray.actor
@@ -23,9 +25,6 @@ class ModelRunner:
         self.max_graph_batch_size = min(int(config.max_num_seqs), 512)
         self.graph_batch_size_list = self.make_graph_batch_size_list(self.max_graph_batch_size)
         self.tensor_parallel_size = int(config.tensor_parallel_size)
-        self.is_first_tensor_parallel_rank = (self.tensor_parallel_size <= 1) or (
-            (rank % self.tensor_parallel_size) == 0
-        )
 
         model = AutoModelForCausalLM.from_pretrained(
             config.model, torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16)
@@ -45,7 +44,7 @@ class ModelRunner:
             global_world_size = config.tensor_parallel_size * config.data_parallel_size
 
         if global_world_size > 1:
-            mpu = MPU(
+            self.mpu = MPU(
                 rank=rank,
                 local_rank=rank,
                 world_size=global_world_size,
@@ -61,12 +60,17 @@ class ModelRunner:
                 seed=config.seed if actor_config is None else actor_config.seed,
             )
             if config.tensor_parallel_size > 1:
-                self.model = TensorParallel(model, mpu, is_rollout=True)
+                self.model = TensorParallel(model, self.mpu, is_rollout=True)
                 self.model.parallelize()
             else:
                 self.model = model.to(self.device)
         else:
             self.model = model.to(self.device)
+            self.mpu = None
+
+        self.is_first_tensor_parallel_rank = (self.tensor_parallel_size <= 1) or (
+            (self.mpu is not None and self.mpu.get_local_rank(ParallelMode.ROLLOUT_TENSOR) == 0)
+        )
 
         # paged attention kernel patch
         self.model = patch_kernel(self.model, use_paged_attention=True)
@@ -258,13 +262,25 @@ class ModelRunner:
         set_context(False, slot_mapping, context_lens, block_tables)
         return input_ids, position_ids, attention_mask
 
-    def sample(self, logits_for_sampling, seqs):
-        if all(seq.temperature <= 0.0 for seq in seqs):
-            return logits_for_sampling.argmax(dim=-1)
+    def sample(self, logits, seqs):
         temperatures = [seq.temperature + 1e-12 for seq in seqs]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
-        logits = logits_for_sampling.float().div_(temperatures.unsqueeze(dim=1))
-        probs = torch.softmax(logits, dim=-1)
+
+        top_ps = [seq.top_p for seq in seqs]
+        top_ps = torch.tensor(top_ps, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).clamp_(0.0, 1.0)
+
+        logits = logits.float().div_(temperatures.unsqueeze(dim=1))
+        sorted_logits, sorted_indices = torch.sort(logits, dim=-1, descending=True)
+        sorted_probs = torch.softmax(sorted_logits, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+        remove_mask = cumulative_probs > top_ps.unsqueeze(dim=1)
+        remove_mask[:, 0] = False
+
+        sorted_logits = sorted_logits.masked_fill(remove_mask, float("-inf"))
+        filtered_logits = torch.empty_like(logits)
+        filtered_logits.scatter_(dim=1, index=sorted_indices, src=sorted_logits)
+        probs = torch.softmax(filtered_logits, dim=-1)
         return probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
 
     @torch.inference_mode()
@@ -411,6 +427,10 @@ class ModelRunner:
                         use_cache=False,
                     ).logits
                     logits_for_sampling = logits[:, -1, :]
+
+            if self.tensor_parallel_size > 1:
+                collectives = Collectives(self.mpu, ParallelMode.ROLLOUT_TENSOR)
+                logits_for_sampling = collectives.all_gather(logits_for_sampling, dim=-1)
 
             if self.is_first_tensor_parallel_rank:
                 return self.sample(logits_for_sampling, seqs).tolist()

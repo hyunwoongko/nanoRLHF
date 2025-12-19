@@ -29,6 +29,7 @@ def _store_kv_to_cache_kernel(
     slot_idx = tl.load(slot_mapping_ptr + tok)
     offs_d = tl.arange(0, block_size_d)
     mask_d = offs_d < dim
+    valid_slot = slot_idx >= 0
 
     new_k_row = new_k_ptr + tok * stride_new_tok + head * stride_new_head
     new_v_row = new_v_ptr + tok * stride_new_tok + head * stride_new_head
@@ -37,8 +38,10 @@ def _store_kv_to_cache_kernel(
 
     cache_k_row = cache_k_ptr + slot_idx * stride_cache_slot + head * stride_cache_head
     cache_v_row = cache_v_ptr + slot_idx * stride_cache_slot + head * stride_cache_head
-    tl.store(cache_k_row + offs_d * stride_cache_d, k_vals, mask=mask_d)
-    tl.store(cache_v_row + offs_d * stride_cache_d, v_vals, mask=mask_d)
+
+    store_mask = mask_d & valid_slot
+    tl.store(cache_k_row + offs_d * stride_cache_d, k_vals, mask=store_mask)
+    tl.store(cache_v_row + offs_d * stride_cache_d, v_vals, mask=store_mask)
 
 
 def store_kv_to_cache_kernel(key_states_not_repeated, value_states_not_repeated, key_cache, value_cache, slot_mapping):

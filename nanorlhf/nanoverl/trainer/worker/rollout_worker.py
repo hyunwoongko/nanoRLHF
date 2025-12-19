@@ -1,6 +1,7 @@
 from typing import List
 
 import torch
+from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
 from nanorlhf.nanovllm.core.model_runner import ModelRunner

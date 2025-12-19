@@ -22,7 +22,7 @@ def load_test_dataset(test):
 
 
 def generate_model_answer(model, dataset):
-    sampling_params = SamplingParams(max_tokens=2048, temperature=0.0)
+    sampling_params = SamplingParams(max_tokens=2048, temperature=1.0, top_p=1.0)
     tokenizer = AutoTokenizer.from_pretrained(model)
     llm = LLM(model)
 
