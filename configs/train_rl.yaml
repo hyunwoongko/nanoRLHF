@@ -1,8 +1,8 @@
 data:
-  train_batch_size: 8
-  valid_batch_size: 10
-  train_micro_batch_size: 2
-  valid_micro_batch_size: 2
+  train_batch_size: 256
+  valid_batch_size: 200
+  train_micro_batch_size_per_gpu: 16
+  valid_micro_batch_size_per_gpu: 4
   train_data: ./data/DeepMath-72k/preprocessed/train.nano
   valid_data: ./data/DeepMath-72k/preprocessed/valid.nano
   num_workers: 8
@@ -11,9 +11,9 @@ actor:
   model_name_or_path: "Qwen/Qwen3-1.7B"
   tokenizer_name_or_path: "Qwen/Qwen3-1.7B"
   tensor_parallel_size: 2
-  pipeline_parallel_size: 1
-  data_parallel_size: 2
-  zero_stage: 2
+  pipeline_parallel_size: 2
+  data_parallel_size: 1
+  zero_stage: 0
   host: 127.0.0.1
   port: 23333
   backend: nccl
@@ -25,10 +25,15 @@ rollout:
   max_num_batched_tokens: 65536
   max_num_seqs: 1024
   max_model_len: 2048
+  max_prompt_len: 512
+  max_response_len: 1536
   gpu_memory_utilization: 0.9
   kvcache_block_size: 256
   tensor_parallel_size: 2
   data_parallel_size: 2
+  temperature: 1.0
+  top_p: 1.0
+  enforce_eager: false
 
 reward:
   name: compute_score

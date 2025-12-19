@@ -9,8 +9,8 @@ import yaml
 class DataConfig:
     train_batch_size: int = 256
     valid_batch_size: int = 200
-    train_micro_batch_size: int = 64
-    valid_micro_batch_size: int = 50
+    train_micro_batch_size_per_gpu: int = 64
+    valid_micro_batch_size_per_gpu: int = 50
     train_data: Optional[str] = None
     valid_data: Optional[str] = None
     num_workers: int = 8
@@ -72,18 +72,18 @@ class SFTConfig:
             f"{torch.cuda.device_count()}, but got {global_world_size}."
         )
 
-        if self.data.train_batch_size % self.data.train_micro_batch_size != 0:
+        if self.data.train_batch_size % self.data.train_micro_batch_size_per_gpu != 0:
             raise ValueError(
-                "`train_batch_size` must be divisible by `train_micro_batch_size`. "
+                "`train_batch_size` must be divisible by `train_micro_batch_size_per_gpu`. "
                 f"Got train_batch_size={self.data.train_batch_size} and "
-                f"train_micro_batch_size={self.data.train_micro_batch_size}."
+                f"train_micro_batch_size_per_gpu={self.data.train_micro_batch_size_per_gpu}."
             )
 
-        if self.data.valid_batch_size % self.data.valid_micro_batch_size != 0:
+        if self.data.valid_batch_size % self.data.valid_micro_batch_size_per_gpu != 0:
             raise ValueError(
-                "`valid_batch_size` must be divisible by `valid_micro_batch_size`. "
+                "`valid_batch_size` must be divisible by `valid_micro_batch_size_per_gpu`. "
                 f"Got valid_batch_size={self.data.valid_batch_size} and "
-                f"valid_micro_batch_size={self.data.valid_micro_batch_size}."
+                f"valid_micro_batch_size_per_gpu={self.data.valid_micro_batch_size_per_gpu}."
             )
 
     @classmethod

@@ -1,12 +1,25 @@
-import torch
+import functools
+from typing import Optional
+
 from torch.utils.data import Dataset
 
 from nanorlhf.nanosets import load_dataset
 
 
+def filter_by_length(sample, max_prompt_length):
+    if sample is None:
+        return False
+    input_ids = sample["input_ids"]
+    return len(input_ids) <= max_prompt_length
+
+
 class RLDataset(Dataset):
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, max_prompt_length: Optional[int] = None):
         self.dataset = load_dataset(file_path)
+
+        if max_prompt_length is not None:
+            filter_fn = functools.partial(filter_by_length, max_prompt_length=max_prompt_length)
+            self.dataset = self.dataset.filter(filter_fn)
 
     def __len__(self):
         return len(self.dataset)

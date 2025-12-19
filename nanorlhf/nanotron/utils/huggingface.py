@@ -83,6 +83,8 @@ def post_process_hf_model(
 
     if labels is None:
         output_type = get_output_type(model)
+        if output_type == TokenClassifierOutput:
+            return output_type(logits=logits, hidden_states=last_hidden_state)
         return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
 
     if is_causal_lm(model):

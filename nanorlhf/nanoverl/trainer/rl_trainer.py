@@ -40,7 +40,7 @@ class RLTrainer(BaseTrainer):
     def load_dataloader(self, config, split: str):
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
         file_path = config.data.train_data if split == "train" else config.data.valid_data
-        dataset = RLDataset(file_path)
+        dataset = RLDataset(file_path, max_prompt_length=config.rollout.max_prompt_len)
 
         if split == "train":
             batch_size = config.data.train_batch_size
@@ -50,7 +50,7 @@ class RLTrainer(BaseTrainer):
             shuffle = drop_last = False
 
             if config.actor.pipeline_parallel_size > 1:
-                valid_micro_batch_size = config.data.valid_micro_batch_size
+                valid_micro_batch_size = config.data.valid_micro_batch_size_per_gpu
                 assert len(dataset) % valid_micro_batch_size == 0, (
                     "For pipeline parallel validation, because we don't drop the last incomplete batch, "
                     "the dataset size must be divisible by the `valid_micro_batch_size`. "
@@ -147,14 +147,68 @@ class RLTrainer(BaseTrainer):
             )
             for batch in pbar:
                 self.global_step += 1
+                pbar.set_postfix(global_step=self.global_step, status="generating_responses")
                 total_tokens_repacked, response_tokens_unpacked = self.rollout_worker_group.generate(batch)
+
+                pbar.set_postfix(global_step=self.global_step, status="computing_rewards")
                 reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
+                mean_reward = sum(reward_scores) / len(reward_scores)
+
+                pbar.set_postfix(global_step=self.global_step, status="making_experiences", reward=mean_reward)
                 experience_info = self.actor_critic_ref_worker_group.make_experience(
                     total_tokens_repacked, reward_scores
                 )
+                pbar.set_postfix(global_step=self.global_step, status="training_policies", reward=mean_reward)
                 train_step_output = self.actor_critic_ref_worker_group.step()
-                print(train_step_output)
-                print(f"reward: {sum(reward_scores) / len(reward_scores):.4f}")
+
+                self.log(
+                    {
+                        "train/loss": train_step_output["loss_total"],
+                        "train/policy_loss": train_step_output["loss_policy"],
+                        "train/value_loss": train_step_output["loss_value"],
+                        "train/epoch": epoch,
+                        "train/global_step": self.global_step,
+                        "train/num_sequences": experience_info["num_sequences"],
+                        "train/num_total_tokens": experience_info["num_total_tokens"],
+                        "train/num_response_tokens": experience_info["num_response_tokens"],
+                        "train/approx_kl": experience_info["approx_kl"],
+                        "train/mean_logprobs": experience_info["mean_logprobs"],
+                        "train/reward": mean_reward,
+                        "train/actor_lr": train_step_output["actor_lr"],
+                        "train/critic_lr": train_step_output["critic_lr"],
+                        "train/skipped": 1 if train_step_output["skipped"] else 0,
+                        "train/num_micro_batches": train_step_output["num_micro_batches"],
+                        "train/num_updates": train_step_output["num_updates"],
+                    }
+                )
+
+                if self.global_step % self.config.training.test_freq == 0:
+                    total_valid_reward_scores = []
+                    pbar = tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True)
+                    for valid_batch in pbar:
+                        pbar.set_postfix(global_step=self.global_step, status="generating_validation_responses")
+                        _, response_tokens_unpacked = self.rollout_worker_group.generate(valid_batch)
+
+                        pbar.set_postfix(global_step=self.global_step, status="computing_validation_rewards")
+                        valid_reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
+                        total_valid_reward_scores.extend(valid_reward_scores)
+                    mean_valid_reward = sum(total_valid_reward_scores) / len(total_valid_reward_scores)
+
+                    self.log(
+                        {
+                            "valid/reward": mean_valid_reward,
+                            "valid/epoch": epoch,
+                            "valid/global_step": self.global_step,
+                        }
+                    )
+                    print(f"\n[Validation] step {self.global_step}, reward: {mean_valid_reward:.6f}")
+
+                if self.global_step % self.config.training.save_freq == 0:
+                    # Periodic save during training
+                    self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
+
+        # Final save after training
+        self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
 
 
 if __name__ == '__main__':

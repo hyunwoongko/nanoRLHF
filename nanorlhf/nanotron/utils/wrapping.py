@@ -94,6 +94,13 @@ class ParallelizationWrapper(ABC):
                     wrapper._parallelize()
                     setattr(self.model, "forward", wrapper._forward)
 
+                if hasattr(wrapper, "_convert_tensor_to_micro_loss"):
+                    setattr(
+                        self.model,
+                        "convert_tensor_to_micro_loss",
+                        wrapper._convert_tensor_to_micro_loss,
+                    )
+
         for parameter in self.model.parameters():
             if hasattr(parameter, "__nanotron_parallel__"):
                 # sorting parallel groups to fix parallelization order
@@ -195,6 +202,8 @@ class ParallelizationWrapper(ABC):
 
         delattr(self.model, "__nanotron__mp_plan__")
         delattr(self.model, "__nanotron_wrappers__")
+        if hasattr(self.model, "convert_tensor_to_micro_loss"):
+            delattr(self.model, "convert_tensor_to_micro_loss")
 
 
 def register_wrapper(module: nn.Module, mode: ParallelMode, wrapper: ParallelizationWrapper):

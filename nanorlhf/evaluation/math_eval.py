@@ -21,7 +21,7 @@ def load_test_dataset(test):
     return load_dataset(data_path)
 
 
-def generate_model_answer(model, dataset):
+def generate_model_answer(model, dataset, formatting_prompt):
     sampling_params = SamplingParams(max_tokens=2048, temperature=1.0, top_p=1.0)
     tokenizer = AutoTokenizer.from_pretrained(model)
     llm = LLM(model)
@@ -29,7 +29,13 @@ def generate_model_answer(model, dataset):
     prompts = []
     for idx in range(len(dataset)):
         sample = dataset[idx]
-        messages = [{"role": "user", "content": sample["problem"]}]
+        if formatting_prompt is not None:
+            formatting_prompt = json.load(open(formatting_prompt, "r")).prompt
+            prompt = formatting_prompt.format(sample['problem'])
+        else:
+            prompt = sample["problem"]
+
+        messages = [{"role": "user", "content": prompt}]
         messages = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         prompts.append(messages)
 
@@ -73,7 +79,7 @@ def evaluate(args):
     print("Loading test dataset...")
     dataset = load_test_dataset(args.test)
     print("Generating model answers...")
-    model_outputs = generate_model_answer(args.model, dataset)
+    model_outputs = generate_model_answer(args.model, dataset, args.formatting_prompt)
     print("Evaluating model answers...")
     eval_output, model_outputs_for_saving = evaluate_model_answer(model_outputs, dataset)
     print(f"Evaluation result: {eval_output}")
@@ -98,6 +104,7 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("--model", type=str, required=True, help="Model name or path.")
     parser.add_argument("--test", type=str, default="MATH-500", help="Datasets to evaluate on. comma-separated.")
+    parser.add_argument("--formatting_prompt", type=str, default=None, help="Path to the formatting prompt file.")
     args = parser.parse_args()
 
     datasets = args.test.split(",")

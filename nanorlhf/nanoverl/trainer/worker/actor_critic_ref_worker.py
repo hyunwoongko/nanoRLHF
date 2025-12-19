@@ -1,69 +1,19 @@
 from collections import deque
-from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional
 
 import torch
+import torch.distributed as dist
 from torch.nn import functional as F
 from torch.optim import AdamW
-from transformers import AutoModelForCausalLM, AutoModelForTokenClassification
-import torch.distributed as dist
+from transformers import AutoModelForCausalLM, AutoModelForTokenClassification, AutoTokenizer
 
 from nanorlhf import nanoray
 from nanorlhf.kernels import patch_kernel
 from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel, ParallelMode
 from nanorlhf.nanotron.core.tp.loss import VocabParallelCrossEntropyFunction
+from nanorlhf.nanoverl.utils.experience import Experience
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
-
-
-@dataclass
-class Experience:
-    input_ids: torch.Tensor
-    position_ids: torch.Tensor
-    loss_mask: torch.Tensor
-
-    old_logprobs: torch.Tensor
-    ref_logprobs: torch.Tensor
-    old_values: torch.Tensor
-
-    rewards: Optional[torch.Tensor] = None
-    advantages: Optional[torch.Tensor] = None
-    returns: Optional[torch.Tensor] = None
-
-    def to(
-        self,
-        device: Optional[Union[torch.device, str]] = None,
-        non_blocking: bool = True,
-        pin_memory: bool = False,
-        detach: bool = False,
-    ):
-        if device is not None and not isinstance(device, torch.device):
-            device = torch.device(device)
-
-        for name, value in vars(self).items():
-            if not torch.is_tensor(value):
-                continue
-
-            t = value
-            if detach:
-                t = t.detach()
-            if device is not None:
-                t = t.to(device, non_blocking=non_blocking)
-            if pin_memory:
-                if t.device.type != "cpu":
-                    raise ValueError(f"pin_memory=True requires CPU tensors, but {name} is on {t.device}")
-                t = t.pin_memory()
-            setattr(self, name, t)
-
-        return self
-
-    def to_dict(self):
-        result = {}
-        for name, value in vars(self).items():
-            if value is None:
-                continue
-            result[name] = value
-        return result
 
 
 def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
@@ -137,15 +87,20 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
         model = PipelineParallel(
             model,
             mpu=mpu,
-            micro_batch_size=config.data.train_micro_batch_size,
+            micro_batch_size=config.data.train_micro_batch_size_per_gpu,
             gradient_checkpointing_enable=config.actor.gradient_checkpointing_enable,
+        )
+        accum_steps = max(
+            1,
+            config.data.train_batch_size
+            // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
         )
         model, optimizer = DataParallel(
             model,
             mpu=mpu,
             optimizer=optimizer,
             zero_stage=0 if role == "ref" else config.actor.zero_stage,
-            accum_steps=config.data.train_batch_size // config.data.train_micro_batch_size,
+            accum_steps=accum_steps,
         )
         model.parallelize()
     else:
@@ -161,6 +116,9 @@ class ActorCriticRefWorker:
         self.config = config
         self.rank = rank
         self.experience_buffer = deque(maxlen=self.config.data.experience_staleness + 1)
+
+        # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
+        self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)
 
         self.actor, self.actor_optimizer, self.mpu = initialize_model(config, rank, role="actor")
         self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
@@ -188,10 +146,10 @@ class ActorCriticRefWorker:
             with torch.set_grad_enabled(enable_grad):
                 outputs = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
 
-            if self.config.actor.pipeline_parallel_size > 1:
-                logits = torch.cat([out.logits for out in outputs], dim=1).contiguous()
-            else:
-                logits = outputs.logits
+                if self.config.actor.pipeline_parallel_size > 1:
+                    logits = torch.cat([out.logits for out in outputs], dim=1).contiguous()
+                else:
+                    logits = outputs.logits
 
         logits_shifted = logits[:, :-1, :]
         targets = input_ids[:, 1:]
@@ -305,15 +263,97 @@ class ActorCriticRefWorker:
         experience.returns = returns.unsqueeze(0)
         return experience
 
+    @torch.inference_mode()
     def make_experience(self, input_batch, reward_scores):
         device = torch.cuda.current_device()
         input_ids = input_batch["input_ids"].to(device, non_blocking=True)
         position_ids = input_batch["position_ids"].to(device, non_blocking=True)
         loss_mask = input_batch["loss_mask"].to(device, non_blocking=True)
 
-        old_logprobs = self.compute_token_logprobs(self.actor, input_ids, position_ids, loss_mask, enable_grad=False)
-        ref_logprobs = self.compute_token_logprobs(self.ref, input_ids, position_ids, loss_mask, enable_grad=False)
-        old_values = self.compute_values(input_ids, position_ids, shift_for_actions=True, enable_grad=False)
+        num_sequences = int(((position_ids == 0) & (loss_mask == 0)).sum().item())
+        micro_batch_size = self.config.data.train_micro_batch_size_per_gpu
+        num_micro_batches = num_sequences // micro_batch_size
+
+        input_batch_in_cuda = {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "loss_mask": loss_mask,
+        }
+
+        micro_batches = [
+            split_packed_batch(input_batch_in_cuda, micro_idx, num_micro_batches)
+            for micro_idx in range(num_micro_batches)
+        ]
+
+        if self.config.actor.pipeline_parallel_size > 1:
+            actor_micro_iterator = self.actor(
+                input_ids,
+                position_ids=position_ids,
+                attention_mask=None,
+                use_cache=False,
+            )
+            ref_micro_iterator = self.ref(
+                input_ids,
+                position_ids=position_ids,
+                attention_mask=None,
+                use_cache=False,
+            )
+            critic_micro_iterator = self.critic(
+                input_ids,
+                position_ids=position_ids,
+                attention_mask=None,
+                use_cache=False,
+            )
+            micro_batch_iterator = enumerate(zip(actor_micro_iterator, ref_micro_iterator, critic_micro_iterator))
+        else:
+            micro_batch_iterator = enumerate(micro_batches)
+
+        micro_old_logprobs_list = []
+        micro_ref_logprobs_list = []
+        micro_old_values_list = []
+
+        for micro_idx, micro_input_or_output in micro_batch_iterator:
+            if self.config.actor.pipeline_parallel_size > 1:
+                actor_outputs, ref_outputs, critic_outputs = micro_input_or_output
+                actor_logits, ref_logits, critic_logits = (
+                    actor_outputs.logits,
+                    ref_outputs.logits,
+                    critic_outputs.logits,
+                )
+            else:
+                actor_logits, ref_logits, critic_logits = None, None, None
+
+            micro_batch = micro_batches[micro_idx]
+            micro_old_logprobs = self.compute_token_logprobs(
+                self.actor,
+                micro_batch["input_ids"],
+                micro_batch["position_ids"],
+                micro_batch["loss_mask"],
+                enable_grad=False,
+                logits=actor_logits,
+            )
+            micro_ref_logprobs = self.compute_token_logprobs(
+                self.ref,
+                micro_batch["input_ids"],
+                micro_batch["position_ids"],
+                micro_batch["loss_mask"],
+                enable_grad=False,
+                logits=ref_logits,
+            )
+            micro_old_values = self.compute_values(
+                micro_batch["input_ids"],
+                micro_batch["position_ids"],
+                shift_for_actions=True,
+                enable_grad=False,
+                logits=critic_logits,
+            )
+            micro_old_logprobs_list.append(micro_old_logprobs)
+            micro_ref_logprobs_list.append(micro_ref_logprobs)
+            micro_old_values_list.append(micro_old_values)
+
+        old_logprobs = torch.cat(micro_old_logprobs_list, dim=1)
+        ref_logprobs = torch.cat(micro_ref_logprobs_list, dim=1)
+        old_values = torch.cat(micro_old_values_list, dim=1)
 
         experience = Experience(
             input_ids=input_ids,
@@ -357,7 +397,7 @@ class ActorCriticRefWorker:
         starts = ((experience.position_ids[0] == 0) & (experience.loss_mask[0] == 0)).nonzero(as_tuple=False).flatten()
         num_sequences = int(starts.numel())
 
-        micro_batch_size = self.config.data.train_micro_batch_size
+        micro_batch_size = self.config.data.train_micro_batch_size_per_gpu
         num_of_micro_batches = num_sequences // micro_batch_size
 
         experience_dict = experience.to_dict()
@@ -438,10 +478,19 @@ class ActorCriticRefWorker:
 
             value_diff = new_values - micro_batch["returns"].float()
             value_loss = (value_diff**2)[micro_loss_mask].mean()
+            contribution = num_of_micro_valid_tokens / sum_of_valid_tokens
+
+            if self.config.actor.pipeline_parallel_size > 1:
+                policy_loss = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
+                (policy_loss * contribution).backward()
+
+                value_loss = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
+                (value_loss * contribution).backward()
+
             total_loss = policy_loss + value_loss
 
-            contribution = num_of_micro_valid_tokens / sum_of_valid_tokens
-            (total_loss * contribution).backward()
+            if self.config.actor.pipeline_parallel_size <= 1:
+                (total_loss * contribution).backward()
 
             sum_of_total_losses += total_loss.detach() * num_of_micro_valid_tokens
             sum_of_policy_losses += policy_loss.detach() * num_of_micro_valid_tokens
@@ -474,6 +523,9 @@ class ActorCriticRefWorker:
         policy_loss = (sum_of_policy_losses / sum_of_valid_tokens.clamp_min(1.0)).item()
         value_loss = (sum_of_value_losses / sum_of_valid_tokens.clamp_min(1.0)).item()
 
+        actor_lr = self.actor_optimizer.param_groups[0]["lr"]
+        critic_lr = self.critic_optimizer.param_groups[0]["lr"]
+
         return {
             "skipped": False,
             "num_sequences": num_sequences,
@@ -482,4 +534,12 @@ class ActorCriticRefWorker:
             "loss_total": float(total_loss),
             "loss_policy": float(policy_loss),
             "loss_value": float(value_loss),
+            "actor_lr": float(actor_lr),
+            "critic_lr": float(critic_lr),
         }
+
+    def save_parallelized(self, save_dir: str):
+        self.actor.save_parallelized(save_dir)
+        if self.mpu is None or self.mpu.get_global_rank() == 0:
+            self.tokenizer.save_pretrained(save_dir)
+        return {"ok": True, "save_dir": save_dir}

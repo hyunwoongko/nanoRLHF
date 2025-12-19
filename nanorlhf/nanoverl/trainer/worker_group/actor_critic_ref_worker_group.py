@@ -64,3 +64,23 @@ class ActorCriticRefWorkerGroup:
             return {"skipped": True}
 
         return outputs[0]
+
+    def save_parallelized(self, global_step):
+        experiment_dir = (
+            f"{self.config.training.default_local_dir}"
+            f"/{self.config.training.project_name}"
+            f"/{self.config.training.experiment_name}"
+        )
+        save_dir = f"{experiment_dir}/step_{global_step}"
+        object_refs = []
+        for model in self.workers:
+            object_ref = model.save_parallelized.remote(save_dir, blocking=False)
+            object_refs.append(object_ref)
+        outputs = nanoray.get(object_refs)
+
+        if all(out["ok"] for out in outputs):
+            with open(f"{experiment_dir}/latest_checkpointed_iteration.txt", "w") as f:
+                f.write(str(global_step))
+            print(f"\n[SAVE] Saved checkpoint at step {global_step} to {save_dir}")
+        else:
+            print(f"\n[SAVE] Failed to save checkpoint at step {global_step} to {save_dir}")

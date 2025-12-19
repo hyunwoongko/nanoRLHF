@@ -485,10 +485,14 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         )
 
         if hasattr(modeling_output, "loss") and modeling_output.loss is not None:
-            modeling_output.loss.__class__ = MicroLossTensor
-            modeling_output.loss.set_arguments(self.mpu, self.buffer, buffer_id)
+            modeling_output.loss = self._convert_tensor_to_micro_loss(modeling_output.loss, buffer_id)
 
         return modeling_output
+
+    def _convert_tensor_to_micro_loss(self, loss: torch.Tensor, micro_idx: int):
+        loss.__class__ = MicroLossTensor
+        loss.set_arguments(self.mpu, self.buffer, micro_idx)  # noqa
+        return loss
 
     def _exec_all_reduce_embedding(self):
         for head, embedding in self.buffer.embeddings.items():

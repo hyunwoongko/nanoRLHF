@@ -65,15 +65,21 @@ def initialize_model(config, rank):
         model = PipelineParallel(
             model,
             mpu=mpu,
-            micro_batch_size=config.data.train_micro_batch_size,
+            micro_batch_size=config.data.train_micro_batch_size_per_gpu,
             gradient_checkpointing_enable=config.model.gradient_checkpointing_enable,
+        )
+
+        accum_steps = max(
+            1,
+            config.data.train_batch_size
+            // (config.model.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
         )
         model, optimizer = DataParallel(
             model,
             mpu=mpu,
             optimizer=optimizer,
             zero_stage=config.model.zero_stage,
-            accum_steps=config.data.train_batch_size // config.data.train_micro_batch_size,
+            accum_steps=accum_steps,
         )
         model.parallelize()
     else:
@@ -103,10 +109,10 @@ class SFTWorker:
         if train:
             self.model.train()
             self.optimizer.zero_grad(set_to_none=True)
-            micro_batch_size = self.config.data.train_micro_batch_size
+            micro_batch_size = self.config.data.train_micro_batch_size_per_gpu
         else:
             self.model.eval()
-            micro_batch_size = self.config.data.valid_micro_batch_size
+            micro_batch_size = self.config.data.valid_micro_batch_size_per_gpu
 
         batch_size = (batch["position_ids"] == 0).sum().item()
         num_of_micro_batches = batch_size // micro_batch_size

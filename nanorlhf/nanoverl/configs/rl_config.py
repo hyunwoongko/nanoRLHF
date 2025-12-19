@@ -9,8 +9,8 @@ import torch
 class DataConfig:
     train_batch_size: int = 256
     valid_batch_size: int = 200
-    train_micro_batch_size: int = 4
-    valid_micro_batch_size: int = 2
+    train_micro_batch_size_per_gpu: int = 4
+    valid_micro_batch_size_per_gpu: int = 2
     train_data: Optional[str] = None
     valid_data: Optional[str] = None
     num_workers: int = 8
@@ -38,11 +38,14 @@ class RolloutConfig:
     max_num_batched_tokens: int = 16384
     max_num_seqs: int = 1024
     max_model_len: int = 2048
-    n: int = 4
+    max_prompt_len: int = 512
+    max_response_len: int = 1536
     gpu_memory_utilization: float = 0.4
     kvcache_block_size: int = 256
     tensor_parallel_size: int = 1
     data_parallel_size: int = 1
+    temperature: float = 1.0
+    top_p: float = 1.0
     enforce_eager: bool = False
 
 
@@ -119,18 +122,18 @@ class RLConfig:
                 f"But got rollout.tensor_parallel_size={self.rollout.tensor_parallel_size}."
             )
 
-        if self.data.train_batch_size % self.data.train_micro_batch_size != 0:
+        if self.data.train_batch_size % self.data.train_micro_batch_size_per_gpu != 0:
             raise ValueError(
-                "`train_batch_size` must be divisible by `train_micro_batch_size`. "
+                "`train_batch_size` must be divisible by `train_micro_batch_size_per_gpu`. "
                 f"Got train_batch_size={self.data.train_batch_size} and "
-                f"train_micro_batch_size={self.data.train_micro_batch_size}."
+                f"train_micro_batch_size_per_gpu={self.data.train_micro_batch_size_per_gpu}."
             )
 
-        if self.data.valid_batch_size % self.data.valid_micro_batch_size != 0:
+        if self.data.valid_batch_size % self.data.valid_micro_batch_size_per_gpu != 0:
             raise ValueError(
-                "`valid_batch_size` must be divisible by `valid_micro_batch_size`. "
+                "`valid_batch_size` must be divisible by `valid_micro_batch_size_per_gpu`. "
                 f"Got valid_batch_size={self.data.valid_batch_size} and "
-                f"valid_micro_batch_size={self.data.valid_micro_batch_size}."
+                f"valid_micro_batch_size_per_gpu={self.data.valid_micro_batch_size_per_gpu}."
             )
 
         assert (
@@ -149,6 +152,13 @@ class RLConfig:
             f"Got valid_batch_size={self.data.valid_batch_size}, rollout_dp={self.rollout.data_parallel_size}, "
             f"remainder={self.data.valid_batch_size % self.rollout.data_parallel_size}.\n"
             "Fix: set valid_batch_size = k * rollout_dp."
+        )
+        assert self.rollout.max_prompt_len + self.rollout.max_response_len <= self.rollout.max_model_len, (
+            "The sum of max_prompt_len and max_response_len must be less than or equal to max_model_len.\n"
+            f"Got max_prompt_len={self.rollout.max_prompt_len}, "
+            f"max_response_len={self.rollout.max_response_len}, "
+            f"max_model_len={self.rollout.max_model_len}.\n"
+            "Fix: set max_model_len >= max_prompt_len + max_response_len."
         )
 
     @classmethod

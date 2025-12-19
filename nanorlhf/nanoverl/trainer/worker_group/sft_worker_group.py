@@ -52,8 +52,11 @@ class SFTWorkerGroup:
         for model in self.workers:
             object_ref = model.save_parallelized.remote(save_dir, blocking=False)
             object_refs.append(object_ref)
-        nanoray.get(object_refs)
+        outputs = nanoray.get(object_refs)
 
-        with open(f"{experiment_dir}/latest_checkpointed_iteration.txt", "w") as f:
-            f.write(str(global_step))
-        print(f"\n[SAVE] Saved checkpoint at step {global_step} to {save_dir}")
+        if all(out["ok"] for out in outputs):
+            with open(f"{experiment_dir}/latest_checkpointed_iteration.txt", "w") as f:
+                f.write(str(global_step))
+            print(f"\n[SAVE] Saved checkpoint at step {global_step} to {save_dir}")
+        else:
+            print(f"\n[SAVE] Failed to save checkpoint at step {global_step} to {save_dir}")
