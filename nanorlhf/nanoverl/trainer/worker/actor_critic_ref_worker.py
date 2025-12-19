@@ -478,18 +478,16 @@ class ActorCriticRefWorker:
 
             value_diff = new_values - micro_batch["returns"].float()
             value_loss = (value_diff**2)[micro_loss_mask].mean()
+
             contribution = num_of_micro_valid_tokens / sum_of_valid_tokens
+            total_loss = policy_loss + value_loss
 
             if self.config.actor.pipeline_parallel_size > 1:
                 policy_loss = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
                 (policy_loss * contribution).backward()
-
                 value_loss = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
                 (value_loss * contribution).backward()
-
-            total_loss = policy_loss + value_loss
-
-            if self.config.actor.pipeline_parallel_size <= 1:
+            else:
                 (total_loss * contribution).backward()
 
             sum_of_total_losses += total_loss.detach() * num_of_micro_valid_tokens
