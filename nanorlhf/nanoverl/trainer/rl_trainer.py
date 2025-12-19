@@ -34,8 +34,8 @@ class RLTrainer(BaseTrainer):
         self.reward_manager = RewardManager(self.config)
 
         actor_workers, rollout_workers = self.spawn_workers(self.config, self.node_ids, self.total_steps)
-        self.rollout_worker_group = RolloutWorkerGroup(self.config, rollout_workers)
         self.actor_critic_ref_worker_group = ActorCriticRefWorkerGroup(self.config, actor_workers)
+        self.rollout_worker_group = RolloutWorkerGroup(self.config, rollout_workers)
 
     def load_dataloader(self, config, split: str):
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
