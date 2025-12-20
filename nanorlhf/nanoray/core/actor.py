@@ -125,6 +125,7 @@ class ActorOptions:
 
     # env
     runtime_env: Optional[RuntimeEnv] = None
+    max_concurrency: Optional[int] = 1
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,7 @@ class ActorMethod:
         runtime_env: Optional[RuntimeEnv] = None,
         placement_group: Optional[PlacementGroup] = None,
         bundle_index: Optional[int] = None,
+        max_concurrency: Optional[int] = 1,
     ) -> "ActorMethod":
         """
         Configure scheduling options for this method call.
@@ -164,6 +166,7 @@ class ActorMethod:
             runtime_env (Optional[RuntimeEnv]): Per-call runtime environment.
             placement_group (Optional[PlacementGroup]): Placement group.
             bundle_index (Optional[int]): Bundle index for SPREAD strategy.
+            max_concurrency (Optional[int]): Max concurrent calls if applicable.
         """
         return ActorMethod(
             self.ref,
@@ -176,6 +179,7 @@ class ActorMethod:
                 placement_group=placement_group,
                 bundle_index=bundle_index,
                 runtime_env=runtime_env,
+                max_concurrency=max_concurrency,
             ),
         )
 
@@ -209,6 +213,7 @@ class ActorMethod:
             bundle_index=o.bundle_index,
             runtime_env=o.runtime_env,
             task_id=new_task_id(),
+            max_concurrency=o.max_concurrency,
         )
         return sess.submit(task, blocking=blocking)
 
@@ -233,6 +238,7 @@ class ActorClass:
         runtime_env: Optional[RuntimeEnv] = None,
         placement_group: Optional[PlacementGroup] = None,
         bundle_index: Optional[int] = None,
+        max_concurrency: Optional[int] = 1,
     ) -> "ActorClass":
         """
         Configure scheduling options for the actor constructor task.
@@ -245,6 +251,7 @@ class ActorClass:
             runtime_env (Optional[RuntimeEnv]): Runtime environment to apply during construction.
             placement_group (Optional[PlacementGroup]): Placement group.
             bundle_index (Optional[int]): Bundle index for SPREAD strategy.
+            max_concurrency (Optional[int]): Max concurrent calls if applicable.
 
         Returns:
             ActorClass: A new proxy with updated options.
@@ -259,6 +266,7 @@ class ActorClass:
             placement_group=placement_group,
             bundle_index=bundle_index,
             runtime_env=runtime_env,
+            max_concurrency=max_concurrency,
         )
         return out
 
@@ -290,6 +298,7 @@ class ActorClass:
             placement_group_id=(o.placement_group.pg_id if o.placement_group else None),
             bundle_index=o.bundle_index,
             runtime_env=o.runtime_env,
+            max_concurrency=o.max_concurrency,
         )
         return sess.submit(task, blocking=blocking)
 

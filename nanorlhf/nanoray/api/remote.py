@@ -55,6 +55,7 @@ class RemoteFunction:
     placement_group: Optional[PlacementGroup] = None
     bundle_index: Optional[int] = None
     pinned_node_id: Optional[str] = None
+    max_concurrency: Optional[int] = 1
 
     def __post_init__(self) -> None:
         if self.resources is None:
@@ -70,6 +71,7 @@ class RemoteFunction:
         placement_group: Optional[PlacementGroup] = None,
         bundle_index: Optional[int] = None,
         pinned_node_id: Optional[str] = None,
+        max_concurrency: Optional[int] = None,
     ) -> "RemoteFunction":
         """
         Return a new RemoteFunction with per-call overrides.
@@ -89,6 +91,7 @@ class RemoteFunction:
             placement_group=self.placement_group if placement_group is None else placement_group,
             bundle_index=self.bundle_index if bundle_index is None else bundle_index,
             pinned_node_id=self.pinned_node_id if pinned_node_id is None else pinned_node_id,
+            max_concurrency=self.max_concurrency if max_concurrency is None else max_concurrency,
         )
 
     def task(self, *args: Any, **kwargs: Any) -> Task:
@@ -115,6 +118,7 @@ class RemoteFunction:
             placement_group_id=self.placement_group.pg_id if self.placement_group else None,
             bundle_index=self.bundle_index,
             pinned_node_id=self.pinned_node_id,
+            max_concurrency=self.max_concurrency,
         )
 
     def remote(self, *args: Any, blocking: bool = False, **kwargs: Any) -> Optional[ObjectRef]:

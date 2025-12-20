@@ -45,26 +45,16 @@ class RLTrainer(BaseTrainer):
 
         if split == "train":
             batch_size = config.data.train_batch_size
-            shuffle = drop_last = True
         else:
             batch_size = config.data.valid_batch_size
-            shuffle = drop_last = False
-
-            if config.actor.pipeline_parallel_size > 1:
-                valid_micro_batch_size = config.data.valid_micro_batch_size_per_gpu
-                assert len(dataset) % valid_micro_batch_size == 0, (
-                    "For pipeline parallel validation, because we don't drop the last incomplete batch, "
-                    "the dataset size must be divisible by the `valid_micro_batch_size`. "
-                    f"valid dataset size: {len(dataset)}, valid micro batch size: {valid_micro_batch_size}."
-                )
 
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=config.data.num_workers,
+            shuffle=True,
             pin_memory=True,
-            drop_last=drop_last,
+            drop_last=True,
+            num_workers=config.data.num_workers,
             collate_fn=packed_collate_fn_for_rl,
         )
 
@@ -141,7 +131,7 @@ class RLTrainer(BaseTrainer):
         rollout_object_refs = self.rollout_worker_group.sync_actor_to_rollout()
         return nanoray.get(actor_object_refs + rollout_object_refs)
 
-    def fit(self):
+    def create_continuous_iterator(self):
         for epoch in range(self.config.training.total_epochs):
             pbar = tqdm(
                 self.train_dataloader,
@@ -149,77 +139,95 @@ class RLTrainer(BaseTrainer):
                 dynamic_ncols=True,
             )
             for batch in pbar:
-                self.global_step += 1
+                yield batch, pbar, epoch
 
-                pbar.set_postfix(global_step=self.global_step, status="synchronizing_actor_to_rollout")
-                sync_info = self.sync_actor_to_rollout()
+    def async_generate_next_batch(self, iterator):
+        try:
+            batch, pbar, epoch = next(iterator)
+        except StopIteration:
+            return None
+
+        pbar.set_postfix(global_step=self.global_step, status="synchronizing_actor_to_rollout")
+        sync_info = self.sync_actor_to_rollout()
+
+        self.log(
+            {f"sync/num_tensors_synced_rank_{n}": sync_info[n]["num_tensors_synced"] for n in range(len(sync_info))}
+        )
+
+        rollout_future = self.rollout_worker_group.async_generate(batch)
+        return rollout_future, batch, pbar, epoch
+
+    def fit(self):
+        continuous_iterator = self.create_continuous_iterator()
+        # generate the first batch before entering the training loop
+        batch_data_future = self.async_generate_next_batch(continuous_iterator)
+
+        while batch_data_future is not None:
+            self.global_step += 1
+            rollout_future, batch, pbar, epoch = batch_data_future
+
+            # wait for the previous batch to complete
+            pbar.set_postfix(global_step=self.global_step, status="rollout_response")
+            total_tokens_repacked, response_tokens_unpacked = rollout_future.result()
+            # asynchronously generate the next batch while we compute rewards and loss on the current batch
+            batch_data_future = self.async_generate_next_batch(continuous_iterator)
+
+            pbar.set_postfix(global_step=self.global_step, status="computing_rewards")
+            reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
+            mean_reward = sum(reward_scores) / len(reward_scores)
+
+            pbar.set_postfix(global_step=self.global_step, status="making_experiences", reward=mean_reward)
+            experience_info = self.actor_critic_ref_worker_group.make_experience(total_tokens_repacked, reward_scores)
+
+            pbar.set_postfix(global_step=self.global_step, status="training_policies", reward=mean_reward)
+            train_step_output = self.actor_critic_ref_worker_group.step()
+
+            self.log(
+                {
+                    "train/loss": train_step_output["loss_total"],
+                    "train/policy_loss": train_step_output["loss_policy"],
+                    "train/value_loss": train_step_output["loss_value"],
+                    "train/epoch": epoch,
+                    "train/global_step": self.global_step,
+                    "train/num_sequences": experience_info["num_sequences"],
+                    "train/num_total_tokens": experience_info["num_total_tokens"],
+                    "train/num_response_tokens": experience_info["num_response_tokens"],
+                    "train/approx_kl": experience_info["approx_kl"],
+                    "train/mean_logprobs": experience_info["mean_logprobs"],
+                    "train/reward": mean_reward,
+                    "train/actor_lr": train_step_output["actor_lr"],
+                    "train/critic_lr": train_step_output["critic_lr"],
+                    "train/skipped": 1 if train_step_output["skipped"] else 0,
+                    "train/num_micro_batches": train_step_output["num_micro_batches"],
+                    "train/num_updates": train_step_output["num_updates"],
+                }
+            )
+
+            if self.global_step % self.config.training.test_freq == 0:
+                total_valid_reward_scores = []
+                pbar = tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True)
+                for valid_batch in pbar:
+                    pbar.set_postfix(global_step=self.global_step, status="generating_validation_responses")
+                    # We use synchronous generation for validation because there's no overlap with training
+                    _, response_tokens_unpacked = self.rollout_worker_group.generate(valid_batch)
+
+                    pbar.set_postfix(global_step=self.global_step, status="computing_validation_rewards")
+                    valid_reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
+                    total_valid_reward_scores.extend(valid_reward_scores)
+                mean_valid_reward = sum(total_valid_reward_scores) / len(total_valid_reward_scores)
 
                 self.log(
                     {
-                        f"sync/num_tensors_synced_rank{n}": sync_info[n]["num_tensors_synced"]
-                        for n in range(len(sync_info))
+                        "valid/reward": mean_valid_reward,
+                        "valid/epoch": epoch,
+                        "valid/global_step": self.global_step,
                     }
                 )
+                print(f"\n[Validation] step {self.global_step}, reward: {mean_valid_reward:.6f}")
 
-                pbar.set_postfix(global_step=self.global_step, status="generating_responses")
-                total_tokens_repacked, response_tokens_unpacked = self.rollout_worker_group.generate(batch)
-
-                pbar.set_postfix(global_step=self.global_step, status="computing_rewards")
-                reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
-                mean_reward = sum(reward_scores) / len(reward_scores)
-
-                pbar.set_postfix(global_step=self.global_step, status="making_experiences", reward=mean_reward)
-                experience_info = self.actor_critic_ref_worker_group.make_experience(
-                    total_tokens_repacked, reward_scores
-                )
-                pbar.set_postfix(global_step=self.global_step, status="training_policies", reward=mean_reward)
-                train_step_output = self.actor_critic_ref_worker_group.step()
-
-                self.log(
-                    {
-                        "train/loss": train_step_output["loss_total"],
-                        "train/policy_loss": train_step_output["loss_policy"],
-                        "train/value_loss": train_step_output["loss_value"],
-                        "train/epoch": epoch,
-                        "train/global_step": self.global_step,
-                        "train/num_sequences": experience_info["num_sequences"],
-                        "train/num_total_tokens": experience_info["num_total_tokens"],
-                        "train/num_response_tokens": experience_info["num_response_tokens"],
-                        "train/approx_kl": experience_info["approx_kl"],
-                        "train/mean_logprobs": experience_info["mean_logprobs"],
-                        "train/reward": mean_reward,
-                        "train/actor_lr": train_step_output["actor_lr"],
-                        "train/critic_lr": train_step_output["critic_lr"],
-                        "train/skipped": 1 if train_step_output["skipped"] else 0,
-                        "train/num_micro_batches": train_step_output["num_micro_batches"],
-                        "train/num_updates": train_step_output["num_updates"],
-                    }
-                )
-
-                if self.global_step % self.config.training.test_freq == 0:
-                    total_valid_reward_scores = []
-                    pbar = tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True)
-                    for valid_batch in pbar:
-                        pbar.set_postfix(global_step=self.global_step, status="generating_validation_responses")
-                        _, response_tokens_unpacked = self.rollout_worker_group.generate(valid_batch)
-
-                        pbar.set_postfix(global_step=self.global_step, status="computing_validation_rewards")
-                        valid_reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
-                        total_valid_reward_scores.extend(valid_reward_scores)
-                    mean_valid_reward = sum(total_valid_reward_scores) / len(total_valid_reward_scores)
-
-                    self.log(
-                        {
-                            "valid/reward": mean_valid_reward,
-                            "valid/epoch": epoch,
-                            "valid/global_step": self.global_step,
-                        }
-                    )
-                    print(f"\n[Validation] step {self.global_step}, reward: {mean_valid_reward:.6f}")
-
-                if self.global_step % self.config.training.save_freq == 0:
-                    # Periodic save during training
-                    self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
+            if self.global_step % self.config.training.save_freq == 0:
+                # Periodic save during training
+                self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
 
         # Final save after training
         self.actor_critic_ref_worker_group.save_parallelized(self.global_step)

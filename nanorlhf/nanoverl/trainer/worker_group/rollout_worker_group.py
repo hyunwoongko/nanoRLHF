@@ -1,5 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+
 import torch
-from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch, unpack_sequences, repack_sequences
@@ -18,6 +19,7 @@ class RolloutWorkerGroup:
         self.data_parallel_size = int(config.rollout.data_parallel_size)
         self.global_world_size = self.tensor_parallel_size * self.data_parallel_size
 
+        self.async_executor = ThreadPoolExecutor(max_workers=1)
         self.schedulers = self.create_schedulers()
         self.sampling_params = SamplingParams(
             temperature=float(config.rollout.temperature),
@@ -61,6 +63,9 @@ class RolloutWorkerGroup:
             data_parallel_unpacked_batches, data_parallel_outputs
         )
         return total_tokens_repacked, response_tokens_unpacked
+
+    def async_generate(self, batches):
+        return self.async_executor.submit(self.generate, batches)
 
     def split_data_parallel_batch(self, batch):
         assert "cu_seq_lens_q" in batch

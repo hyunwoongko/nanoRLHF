@@ -37,26 +37,16 @@ class SFTTrainer(BaseTrainer):
 
         if split == "train":
             batch_size = config.data.train_batch_size
-            shuffle = drop_last = True
         else:
             batch_size = config.data.valid_batch_size
-            shuffle = drop_last = False
-
-            if config.model.pipeline_parallel_size > 1:
-                valid_micro_batch_size = config.data.valid_micro_batch_size_per_gpu
-                assert len(dataset) % valid_micro_batch_size == 0, (
-                    "For pipeline parallel validation, because we don't drop the last incomplete batch, "
-                    "the dataset size must be divisible by the `valid_micro_batch_size`. "
-                    f"valid dataset size: {len(dataset)}, valid micro batch size: {valid_micro_batch_size}."
-                )
 
         return DataLoader(
             dataset,
             batch_size=batch_size,
-            shuffle=shuffle,
-            num_workers=config.data.num_workers,
+            shuffle=True,
             pin_memory=True,
-            drop_last=drop_last,
+            drop_last=True,
+            num_workers=config.data.num_workers,
             collate_fn=packed_collate_fn_for_sft,
         )
 

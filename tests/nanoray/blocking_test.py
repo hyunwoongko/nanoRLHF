@@ -79,7 +79,9 @@ def test_blocking_impacts_wall_time_for_tasks_and_actors():
     delays = [2.0, 4.0]
 
     start = time.time()
-    task_refs = [sleep_and_double.remote(0, delay=d, blocking=False) for d in delays]
+    task_refs = [
+        sleep_and_double.options(max_concurrency=len(delays)).remote(0, delay=d, blocking=False) for d in delays
+    ]
     task_refs = [r for r in task_refs if r is not None]
     task_refs += nanoray.drain()
     for ref in task_refs:
@@ -87,7 +89,9 @@ def test_blocking_impacts_wall_time_for_tasks_and_actors():
     non_blocking_task_time = time.time() - start
 
     start = time.time()
-    blocking_task_refs = [sleep_and_double.remote(0, delay=d, blocking=True) for d in delays]
+    blocking_task_refs = [
+        sleep_and_double.options(max_concurrency=len(delays)).remote(0, delay=d, blocking=True) for d in delays
+    ]
     blocking_task_refs = [r for r in blocking_task_refs if r is not None]
     blocking_task_refs += nanoray.drain()
     for ref in blocking_task_refs:
@@ -98,7 +102,7 @@ def test_blocking_impacts_wall_time_for_tasks_and_actors():
     assert 3.5 <= non_blocking_task_time <= 5.5
     assert 5.5 <= blocking_task_time <= 7.0
 
-    actor_ref = Accumulator.remote(blocking=True)
+    actor_ref = Accumulator.options(max_concurrency=len(delays)).remote(blocking=True)
     actor_handle = nanoray.get(actor_ref)
 
     start = time.time()

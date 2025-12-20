@@ -1,13 +1,12 @@
 #!/bin/bash
 
+# Train dataset has 72k rows and it sampled from training dataset.
+# I sampled only data with difficulty level 5 or higher and removed answer is 'yes' or 'no' only.
 data_path="./data/DeepMath-72k"
+train="$data_path/train.jsonl"
 
-# Train dataset has 40k rows and it sampled from training dataset.
-# I sampled only data with difficulty level 6 or higher.
-train="${data_path}/train.jsonl"
-
-# Valid dataset has 1k rows and it sampled from training dataset.
-valid="${data_path}/valid.jsonl"
+# Valid dataset has 1k rows and it sampled from validation dataset.
+valid="$data_path/valid.jsonl"
 
 # Arguments for dataset preprocessing
 tokenizer_name_or_path="Qwen/Qwen3-0.6B"

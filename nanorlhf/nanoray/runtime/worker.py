@@ -11,7 +11,6 @@ from nanorlhf.nanoray.utils import new_actor_id, task_result_object_id
 import multiprocessing as mp
 
 _PROCESS_ACTORS: Dict[str, object] = {}
-_MAX_PROCESS_WORKERS = 16
 
 
 def _invoke(fn, args, kwargs):
@@ -58,43 +57,13 @@ class Worker:
 
     **ActorCreate/ActorCall are always executed in-process** because actor instances
     live in this worker's memory.
-
-    Args:
-        store (ObjectStore): The node-local object store.
-
-    Examples:
-       >>> # Local (in-process) function execution
-        >>> from nanorlhf.nanoray.core.task import Task
-        >>> from nanorlhf.nanoray.core.object_store import ObjectStore
-        >>> def add(x, y): return x + y
-        >>> store = ObjectStore("node-A")
-        >>> w = Worker(store=store, node_id="A")
-        >>> task = Task.from_call(add, (3, 4))
-        >>> ref = w.execute_task(task)
-        >>> store.get(ref)
-        7
-
-        >>> # Actors: creation and method calls are *always* in-process
-        >>> from nanorlhf.nanoray.api.remote import actor
-        >>> from nanorlhf.nanoray.api.session import get
-        >>> @actor
-        ... class Counter:
-        ...     def __init__(self): self.x = 0
-        ...     def inc(self, n=1): self.x += n; return self.x
-        >>> # ActorCreate path
-        >>> h_ref = w.execute_task(Task(fn=ActorCreate(Counter, (), {})))
-        >>> handle = store.get(h_ref) if hasattr(store, "get") else get(h_ref)
-        >>> # ActorCall path
-        >>> r_ref = w.execute_task(Task(fn=ActorCall(handle.actor_id, "inc"), args=(2,)))
-        >>> store.get(r_ref)
-        2
     """
 
     def __init__(self, store: ObjectStore, node_id: Optional[str] = None):
         self.store = store
         self.node_id = node_id or store.node_id
         self._actors: Dict[str, object] = {}  # local actor registry
-        self._executor = ThreadPoolExecutor()
+        self._task_executors: Dict[int, ThreadPoolExecutor] = {}
         self._actor_executors: Dict[str, ProcessPoolExecutor] = {}
 
     def execute_task(self, task: Task) -> ObjectRef:
@@ -131,7 +100,7 @@ class Worker:
                     init_args = tuple(fn.get("args", ()))
                     init_kwargs = dict(fn.get("kwargs", {}) or {})
 
-                    executor = ProcessPoolExecutor(_MAX_PROCESS_WORKERS, mp_context=mp.get_context("spawn"))
+                    executor = ProcessPoolExecutor(task.max_concurrency or 1, mp_context=mp.get_context("spawn"))
                     self._actor_executors[actor_id] = executor
                     payload = dumps((cls, init_args, init_kwargs))
                     create_future = executor.submit(_create_actor_process, actor_id, payload)
@@ -161,13 +130,20 @@ class Worker:
                         raise RuntimeError(f"Actor {actor_id} not found on node {self.node_id}.")
 
                     payload = dumps((task.args, task.kwargs))
-                    fut = executor.submit(_call_actor_process, actor_id, method_name, payload)
-                    return self.store.put_future(fut, object_id=task_result_object_id(task.task_id))
+                    future = executor.submit(_call_actor_process, actor_id, method_name, payload)
+                    return self.store.put_future(future, object_id=task_result_object_id(task.task_id))
 
                 # Regular function call
                 payload = dumps((fn, task.args, task.kwargs))
-                fut = self._executor.submit(_invoke_serialized, payload)
-                return self.store.put_future(fut, object_id=task_result_object_id(task.task_id))
+                max_concurrency = task.max_concurrency or 1
+                if max_concurrency in self._task_executors:
+                    executor = self._task_executors[max_concurrency]
+                else:
+                    executor = ThreadPoolExecutor(max_concurrency)
+                    self._task_executors[max_concurrency] = executor
+
+                future = executor.submit(_invoke_serialized, payload)
+                return self.store.put_future(future, object_id=task_result_object_id(task.task_id))
 
         except Exception as e:
             raise RuntimeError(f"Task failed in worker@{self.node_id}") from e

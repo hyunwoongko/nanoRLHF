@@ -126,9 +126,6 @@ def _save_parallelized_with_merge(
         save_function(state_dict_merged, output_model_file)
         logger.info(f"[merge] Model weights saved in {output_model_file}")
 
-    if dist.is_initialized():
-        dist.barrier()
-
 
 def _save_parallelized_without_merge(
     self,
@@ -184,9 +181,6 @@ def _save_parallelized_without_merge(
     if output_model_file is not None:
         logger.info(f"[shard] Model weights saved in {output_model_file}")
 
-    if dist.is_initialized():
-        dist.barrier()
-
 
 def _raise_if_rollout_model(self):
     found_rollout_group = False
@@ -237,6 +231,11 @@ def save_parallelized(
                 state_dict=state_dict,
                 save_function=save_function,
             )
+
+    if dist.is_initialized():
+        dist.barrier(group=mpu.get_group(ParallelMode.TENSOR))
+        dist.barrier(group=mpu.get_group(ParallelMode.PIPELINE))
+        dist.barrier(group=mpu.get_group(ParallelMode.DATA))
 
 
 def from_parallelized(

@@ -59,6 +59,7 @@ class Task(Generic[T]):
     resources: Optional[Dict[str, float]] = None
     runtime_env: Optional[RuntimeEnv] = None
     pinned_node_id: Optional[str] = None
+    max_concurrency: int = 1
 
     # placement group (if any)
     placement_group_id: Optional[str] = None
@@ -76,6 +77,7 @@ class Task(Generic[T]):
         resources: Optional[Dict[str, float]] = None,
         runtime_env: Optional[RuntimeEnv] = None,
         pinned_node_id: Optional[str] = None,
+        max_concurrency: int = 1,
         placement_group_id: Optional[str] = None,
         bundle_index: Optional[int] = None,
     ) -> "Task[T]":
@@ -91,6 +93,7 @@ class Task(Generic[T]):
             resources (Optional[Dict[str, float]]): Custom resources (e.g., `{"ram_gb": 4}`).
             runtime_env (Optional[RuntimeEnv]): Optional runtime environment task.
             pinned_node_id (Optional[str]): If set, the task will only run on this node.
+            max_concurrency (int): Max concurrent calls if this is an actor creation task.
             placement_group_id (Optional[str]): If set, this task belongs to a PG.
             bundle_index (Optional[int]): Which bundle of that PG this task consumes.
 
@@ -112,6 +115,7 @@ class Task(Generic[T]):
             resources=resources,
             runtime_env=runtime_env,
             pinned_node_id=pinned_node_id,
+            max_concurrency=max_concurrency,
             placement_group_id=placement_group_id,
             bundle_index=bundle_index,
         )

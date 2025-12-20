@@ -1,5 +1,5 @@
 import time
-from typing import List
+from typing import List, Dict
 
 from nanorlhf import nanoray
 from nanorlhf.nanoray.core.object_ref import ObjectRef
@@ -7,12 +7,10 @@ from nanorlhf.nanoray.core.object_ref import ObjectRef
 
 @nanoray.remote()
 def heavy_sleep(duration: float, value: int) -> str:
-    """Simulate a heavy computation by sleeping before returning."""
     import time as _time
 
     _time.sleep(duration)
-    message = f"task {value} finished after {duration:.1f}s"
-    return message
+    return f"task {value} finished after {duration:.1f}s"
 
 
 @nanoray.actor
@@ -28,90 +26,170 @@ class SlowActor:
         import time as _time
 
         _time.sleep(self.work_delay)
-        return f"actor {value} finished after {self.work_delay:.1f}s"
+        return f"actor work({value}) finished after {self.work_delay:.1f}s"
 
 
-def describe(label: str, refs: List[object]):
+def _unwrap_actor_handle(x):
+    # In case ActorRef is wrapped as ObjectRef in store
+    while isinstance(x, ObjectRef):
+        x = nanoray.get(x)
+    return x
+
+
+def _describe(label: str, refs: List[object]):
     print(f"{label}: {[getattr(r, 'object_id', None) for r in refs]}")
 
 
-def run_task_case(label: str, node_ids: List[str], durations: List[float]):
-    print(f"\n=== {label} (tasks across {', '.join(node_ids)}) ===")
-    start_total = time.perf_counter()
-    start_submit = time.perf_counter()
-    refs = []
-    placements = []
-    for i, d in enumerate(durations):
-        node_id = node_ids[i % len(node_ids)]
-        placements.append((i, d, node_id))
-        refs.append(heavy_sleep.options(pinned_node_id=node_id).remote(d, i, blocking=False))
-    submit_elapsed = time.perf_counter() - start_submit
+def _expected_parallel_wall_for_tasks(durations: List[float], placements: List[str]) -> float:
+    per_node_max: Dict[str, float] = {}
+    for d, nid in zip(durations, placements):
+        per_node_max[nid] = max(d, per_node_max.get(nid, 0.0))
+    return max(per_node_max.values()) if per_node_max else 0.0
+
+
+def bench_tasks_concurrent(
+    label: str,
+    node_ids: List[str],
+    durations: List[float],
+    *,
+    max_concurrency: int,
+):
+    print(f"\n=== [1] {label}: tasks concurrently across {', '.join(node_ids)} ===")
+
+    placements = [node_ids[i % len(node_ids)] for i in range(len(durations))]
+    expected = _expected_parallel_wall_for_tasks(durations, placements)
+
+    # submit (enqueue only)
+    t0 = time.perf_counter()
+    t_submit0 = time.perf_counter()
+    refs = [
+        heavy_sleep.options(
+            pinned_node_id=placements[i],
+            max_concurrency=max_concurrency,
+        ).remote(durations[i], i, blocking=False)
+        for i in range(len(durations))
+    ]
+    submit_elapsed = time.perf_counter() - t_submit0
 
     print("Task placement:")
-    for idx, d, node_id in placements:
-        print(f"   task {idx} -> {node_id} (sleep={d:.1f}s)")
+    for i, (d, nid) in enumerate(zip(durations, placements)):
+        print(f"  task {i} -> {nid} (sleep={d:.1f}s)")
+    _describe("Immediately after submit", refs)
+    print(f"Submit overhead: {submit_elapsed*1e3:.2f} ms")
 
-    describe("Immediately after submit", refs)
-    print(f"Submission overhead: {submit_elapsed*1e3:.2f} ms")
+    # drive execution
+    t_drain0 = time.perf_counter()
+    produced = nanoray.drain()
+    drain_elapsed = time.perf_counter() - t_drain0
+    # normalize refs list: include any None + produced
+    refs2 = [r for r in refs if r is not None] + produced
 
-    refs = [r for r in refs if r is not None] + nanoray.drain()
-    values = [nanoray.get(r) for r in refs]
-    total_elapsed = time.perf_counter() - start_total
+    # get results
+    t_get0 = time.perf_counter()
+    values = [nanoray.get(r) for r in refs2]
+    get_elapsed = time.perf_counter() - t_get0
 
+    total_elapsed = time.perf_counter() - t0
+
+    print(f"Drain time: {drain_elapsed:.2f}s, Get time: {get_elapsed:.2f}s")
     print("Results:")
     for v in values:
-        print("  ", v)
-
-    per_node_max = {}
-    for _, d, node_id in placements:
-        per_node_max[node_id] = max(d, per_node_max.get(node_id, 0.0))
-    expected = max(per_node_max.values()) if per_node_max else 0.0
+        print(" ", v)
     print(f"Wall time: {total_elapsed:.2f}s (expected ~{expected:.1f}s)")
+    return total_elapsed
 
 
-def run_actor_creation_case(label: str, node_id: str, init_delay: float, work_delay: float):
-    print(f"\n=== {label} (actor create on {node_id}) ===")
-    start_total = time.perf_counter()
-    start_submit = time.perf_counter()
-    actor_ref = SlowActor.options(pinned_node_id=node_id).remote(work_delay, init_delay=init_delay)
-    submit_elapsed = time.perf_counter() - start_submit
-    describe("Immediately after actor create submit", [actor_ref])
-    print(f"Actor create submit overhead: {submit_elapsed*1e3:.2f} ms")
+def bench_actor_creation_concurrent(
+    label: str,
+    node_ids: List[str],
+    *,
+    num_actors: int,
+    init_delay: float,
+    work_delay: float,
+    actor_max_concurrency: int,
+):
+    print(f"\n=== [2] {label}: create {num_actors} actors concurrently across {', '.join(node_ids)} ===")
 
-    start_get = time.perf_counter()
-    actor = nanoray.get(actor_ref)
-    while isinstance(actor, ObjectRef):  # unwrap nested refs if stored indirectly
-        actor = nanoray.get(actor)
-    create_elapsed = time.perf_counter() - start_get
-    total_elapsed = time.perf_counter() - start_total
+    placements = [node_ids[i % len(node_ids)] for i in range(num_actors)]
 
-    print(f"Actor create get time: {create_elapsed:.2f}s (expected ~{init_delay:.1f}s)")
-    print(f"Actor create wall time: {total_elapsed:.2f}s")
-    return actor
+    t0 = time.perf_counter()
+    t_submit0 = time.perf_counter()
+
+    actor_refs = []
+    for i in range(num_actors):
+        nid = placements[i]
+        r = SlowActor.options(pinned_node_id=nid, max_concurrency=actor_max_concurrency).remote(
+            work_delay, init_delay=init_delay, blocking=False
+        )
+        actor_refs.append(r)
+
+    submit_elapsed = time.perf_counter() - t_submit0
+    print("Actor placement:")
+    for i, nid in enumerate(placements):
+        print(f"  actor {i} -> {nid} (init_delay={init_delay:.1f}s)")
+    _describe("Immediately after actor create submit", actor_refs)
+    print(f"Submit overhead: {submit_elapsed*1e3:.2f} ms")
+
+    t_drain0 = time.perf_counter()
+    produced = nanoray.drain()
+    drain_elapsed = time.perf_counter() - t_drain0
+
+    # actor_refs should not be None in your model, but normalize anyway
+    actor_refs2 = [r for r in actor_refs if r is not None] + produced
+
+    t_get0 = time.perf_counter()
+    actors = [_unwrap_actor_handle(nanoray.get(r)) for r in actor_refs2[:num_actors]]
+    get_elapsed = time.perf_counter() - t_get0
+
+    total_elapsed = time.perf_counter() - t0
+
+    print(f"Drain time: {drain_elapsed:.2f}s, Get time: {get_elapsed:.2f}s")
+    print(f"Actor create wall time: {total_elapsed:.2f}s (ideal-ish ~{init_delay:.1f}s + spawn/boot)")
+    return actors, total_elapsed
 
 
-def run_actor_method_case(label: str, actor, count: int, expected_delay: float):
-    print(f"\n=== {label} (actor methods) ===")
-    start_total = time.perf_counter()
-    start_calls = time.perf_counter()
-    refs = [actor.work.remote(i) for i in range(count)]
-    call_submit = time.perf_counter() - start_calls
-    describe("Immediately after actor method submit", refs)
-    print(f"Actor call submission overhead: {call_submit*1e3:.2f} ms")
+def bench_actor_calls_concurrent(
+    label: str,
+    actors: List,
+    *,
+    calls_per_actor: int,
+):
+    print(f"\n=== [3] {label}: actor calls concurrently (actors={len(actors)}, calls/actor={calls_per_actor}) ===")
 
-    refs = [r for r in refs if r is not None] + nanoray.drain()
-    values = [nanoray.get(r) for r in refs]
-    total_elapsed = time.perf_counter() - start_total
+    t0 = time.perf_counter()
+    t_submit0 = time.perf_counter()
 
-    print("Results:")
-    for v in values:
-        print("  ", v)
+    refs = []
+    idx = 0
+    for a_i, a in enumerate(actors):
+        for j in range(calls_per_actor):
+            refs.append(a.work.remote(idx, blocking=False))
+            idx += 1
 
-    if values:
-        expected = expected_delay
-    else:
-        expected = 0.0
-    print(f"Wall time: {total_elapsed:.2f}s (expected ~{expected:.1f}s)")
+    submit_elapsed = time.perf_counter() - t_submit0
+    _describe("Immediately after actor call submit", refs)
+    print(f"Submit overhead: {submit_elapsed*1e3:.2f} ms")
+
+    t_drain0 = time.perf_counter()
+    produced = nanoray.drain()
+    drain_elapsed = time.perf_counter() - t_drain0
+
+    refs2 = [r for r in refs if r is not None] + produced
+
+    t_get0 = time.perf_counter()
+    values = [nanoray.get(r) for r in refs2[: len(refs)]]
+    get_elapsed = time.perf_counter() - t_get0
+
+    total_elapsed = time.perf_counter() - t0
+
+    print(f"Drain time: {drain_elapsed:.2f}s, Get time: {get_elapsed:.2f}s")
+    print("Results (first 10):")
+    for v in values[:10]:
+        print(" ", v)
+    if len(values) > 10:
+        print(f"  ... ({len(values)-10} more)")
+    print(f"Actor calls wall time: {total_elapsed:.2f}s")
+    return total_elapsed
 
 
 def main():
@@ -129,25 +207,33 @@ def main():
     rpc_nodes = ["rpc-node-1", "rpc-node-2"]
     local_nodes = ["local-node-1", "local-node-2"]
 
-    run_task_case("RPC tasks", rpc_nodes, durations)
-    run_task_case("Local tasks", local_nodes, durations)
+    bench_tasks_concurrent("RPC", rpc_nodes, durations, max_concurrency=len(durations))
+    bench_tasks_concurrent("Local", local_nodes, durations, max_concurrency=len(durations))
 
-    actors = []
-    for node_id in rpc_nodes:
-        actors.append(
-            (f"RPC actor ({node_id})", run_actor_creation_case("RPC actor", node_id, init_delay=0.8, work_delay=0.6))
-        )
-    for node_id in local_nodes:
-        actors.append(
-            (
-                f"Local actor ({node_id})",
-                run_actor_creation_case("Local actor", node_id, init_delay=0.8, work_delay=0.6),
-            )
-        )
+    num_actors = 4
+    init_delay = 0.8
+    work_delay = 0.6
+    actor_max_concurrency = 8
 
-    for label, actor in actors:
-        run_actor_method_case(label, actor, count=2, expected_delay=0.6)
+    rpc_actors, _ = bench_actor_creation_concurrent(
+        "RPC",
+        rpc_nodes,
+        num_actors=num_actors,
+        init_delay=init_delay,
+        work_delay=work_delay,
+        actor_max_concurrency=actor_max_concurrency,
+    )
+    local_actors, _ = bench_actor_creation_concurrent(
+        "Local",
+        local_nodes,
+        num_actors=num_actors,
+        init_delay=init_delay,
+        work_delay=work_delay,
+        actor_max_concurrency=actor_max_concurrency,
+    )
 
+    bench_actor_calls_concurrent("RPC", rpc_actors, calls_per_actor=4)
+    bench_actor_calls_concurrent("Local", local_actors, calls_per_actor=4)
     nanoray.shutdown()
 
 
