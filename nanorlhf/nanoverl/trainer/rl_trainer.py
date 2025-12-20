@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
+from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
 from nanorlhf.nanoverl.configs.rl_config import RLConfig
 from nanorlhf.nanoverl.dataset.rl_dataset import RLDataset
 from nanorlhf.nanoverl.reward.reward_manager import RewardManager
@@ -69,17 +70,14 @@ class RLTrainer(BaseTrainer):
 
     def init_ray(self, config):
         nodes = {}
-        base_port = 9200
-
         for rank in range(self.actor_world_size):
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
                 cpus=4.0,
                 gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
-                port=base_port + rank,
+                port=NANORAY_BASE_PORT + rank,
             )
-
         for rank in range(self.rollout_world_size):
             rank = rank + self.actor_world_size
             nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
@@ -87,7 +85,7 @@ class RLTrainer(BaseTrainer):
                 gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
-                port=base_port + rank,
+                port=NANORAY_BASE_PORT + rank,
             )
 
         session = nanoray.init(nodes, default_node_id=f"actor-global_rank=0")
@@ -138,6 +136,11 @@ class RLTrainer(BaseTrainer):
         actors = models[: self.actor_world_size]
         return actors, rollouts
 
+    def sync_actor_to_rollout(self):
+        actor_object_refs = self.actor_critic_ref_worker_group.sync_actor_to_rollout()
+        rollout_object_refs = self.rollout_worker_group.sync_actor_to_rollout()
+        return nanoray.get(actor_object_refs + rollout_object_refs)
+
     def fit(self):
         for epoch in range(self.config.training.total_epochs):
             pbar = tqdm(
@@ -147,6 +150,17 @@ class RLTrainer(BaseTrainer):
             )
             for batch in pbar:
                 self.global_step += 1
+
+                pbar.set_postfix(global_step=self.global_step, status="synchronizing_actor_to_rollout")
+                sync_info = self.sync_actor_to_rollout()
+
+                self.log(
+                    {
+                        f"sync/num_tensors_synced_rank{n}": sync_info[n]["num_tensors_synced"]
+                        for n in range(len(sync_info))
+                    }
+                )
+
                 pbar.set_postfix(global_step=self.global_step, status="generating_responses")
                 total_tokens_repacked, response_tokens_unpacked = self.rollout_worker_group.generate(batch)
 

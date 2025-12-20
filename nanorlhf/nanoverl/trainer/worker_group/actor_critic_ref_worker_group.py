@@ -15,6 +15,7 @@ class ActorCriticRefWorkerGroup:
         )
 
         self.actor_data_parallel_ranks = []
+        self.actor_sender_local_ranks = []
         for actor_local_rank in range(self.actor_world_size):
             dp_rank, _, _ = MPU.get_local_ranks_from_global_rank(
                 actor_local_rank,
@@ -23,6 +24,8 @@ class ActorCriticRefWorkerGroup:
                 self.config.actor.pipeline_parallel_size,
             )
             self.actor_data_parallel_ranks.append(dp_rank)
+            if dp_rank == 0:
+                self.actor_sender_local_ranks.append(actor_local_rank)
 
     def make_experience(self, total_tokens_repacked, reward_scores):
         per_data_parallel_batches = []
@@ -84,3 +87,10 @@ class ActorCriticRefWorkerGroup:
             print(f"\n[SAVE] Saved checkpoint at step {global_step} to {save_dir}")
         else:
             print(f"\n[SAVE] Failed to save checkpoint at step {global_step} to {save_dir}")
+
+    def sync_actor_to_rollout(self):
+        object_refs = []
+        for actor_local_rank_dp0 in self.actor_sender_local_ranks:
+            object_ref = self.workers[actor_local_rank_dp0].sync_actor_to_rollout.remote(blocking=False)
+            object_refs.append(object_ref)
+        return object_refs

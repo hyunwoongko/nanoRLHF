@@ -128,3 +128,12 @@ class RolloutWorkerGroup:
 
         total_tokens_repacked = repack_sequences(total_tokens_repacked)
         return total_tokens_repacked, response_tokens_unpacked
+
+    def sync_actor_to_rollout(self):
+        object_refs = []
+        for data_parallel_rank in range(self.data_parallel_size):
+            for tensor_parallel_rank in range(self.tensor_parallel_size):
+                worker = self.workers[data_parallel_rank][tensor_parallel_rank]
+                object_ref = worker.sync_actor_to_rollout.remote(blocking=False)
+                object_refs.append(object_ref)
+        return object_refs

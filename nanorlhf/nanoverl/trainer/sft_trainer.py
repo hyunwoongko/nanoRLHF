@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
+from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
 from nanorlhf.nanoverl.trainer.base_trainer import BaseTrainer
@@ -61,7 +62,6 @@ class SFTTrainer(BaseTrainer):
 
     def init_ray(self, config):
         nodes = {}
-        base_port = 9200
         if self.global_world_size > 1:
             for rank in range(self.global_world_size):
                 nodes[f"node-{rank}"] = nanoray.NodeConfig(
@@ -69,10 +69,12 @@ class SFTTrainer(BaseTrainer):
                     gpus=1.0,
                     rpc=True,
                     host=config.model.host,
-                    port=base_port + rank,
+                    port=NANORAY_BASE_PORT + rank,
                 )
         else:
-            nodes["node-0"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.model.host, port=base_port)
+            nodes["node-0"] = nanoray.NodeConfig(
+                cpus=4.0, gpus=1.0, rpc=False, host=config.model.host, port=NANORAY_BASE_PORT
+            )
 
         session = nanoray.init(nodes, default_node_id="node-0")
         node_ids = list(session._workers.keys())

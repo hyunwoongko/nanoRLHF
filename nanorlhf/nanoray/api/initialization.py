@@ -16,6 +16,7 @@ from nanorlhf.nanoray.scheduler.policies import SchedulingPolicy, RoundRobin
 from nanorlhf.nanoray.scheduler.scheduler import WorkerLike
 
 logger = logging.getLogger(__name__)
+NANORAY_BASE_PORT = 9200
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,7 @@ class NodeConfig:
 
     rpc: bool = False
     host: str = "127.0.0.1"
-    port: Optional[int] = None
+    port: Optional[int] = NANORAY_BASE_PORT
     token: Optional[str] = None
 
 

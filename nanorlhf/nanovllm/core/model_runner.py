@@ -10,7 +10,6 @@ from nanorlhf.nanotron import TensorParallel, MPU, ParallelMode
 from nanorlhf.nanotron.distributed.collectives import Collectives
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
-import torch.distributed as dist
 
 
 @nanoray.actor
@@ -43,33 +42,27 @@ class ModelRunner:
             actor_data_parallel_size = actor_tensor_parallel_size = actor_pipeline_parallel_size = 0
             global_world_size = config.tensor_parallel_size * config.data_parallel_size
 
-        if global_world_size > 1:
-            self.mpu = MPU(
-                rank=rank,
-                local_rank=rank,
-                world_size=global_world_size,
-                local_world_size=global_world_size,
-                data_parallel_size=actor_data_parallel_size,
-                pipeline_parallel_size=actor_pipeline_parallel_size,
-                tensor_parallel_size=actor_tensor_parallel_size,
-                rollout_tensor_parallel_size=config.tensor_parallel_size,
-                rollout_data_parallel_size=config.data_parallel_size,
-                host=config.host if actor_config is None else actor_config.host,
-                port=config.port if actor_config is None else actor_config.port,
-                backend=config.backend if actor_config is None else actor_config.backend,
-                seed=config.seed if actor_config is None else actor_config.seed,
-            )
-            if config.tensor_parallel_size > 1:
-                self.model = TensorParallel(model, self.mpu, is_rollout=True)
-                self.model.parallelize()
-            else:
-                self.model = model.to(self.device)
-        else:
-            self.model = model.to(self.device)
-            self.mpu = None
+        self.mpu = MPU(
+            rank=rank,
+            local_rank=rank,
+            world_size=global_world_size,
+            local_world_size=global_world_size,
+            data_parallel_size=actor_data_parallel_size,
+            pipeline_parallel_size=actor_pipeline_parallel_size,
+            tensor_parallel_size=actor_tensor_parallel_size,
+            rollout_tensor_parallel_size=config.tensor_parallel_size,
+            rollout_data_parallel_size=config.data_parallel_size,
+            host=config.host if actor_config is None else actor_config.host,
+            port=config.port if actor_config is None else actor_config.port,
+            backend=config.backend if actor_config is None else actor_config.backend,
+            seed=config.seed if actor_config is None else actor_config.seed,
+        )
+
+        self.model = TensorParallel(model, self.mpu, is_rollout=True)
+        self.model.parallelize()
 
         self.is_first_tensor_parallel_rank = (self.tensor_parallel_size <= 1) or (
-            (self.mpu is not None and self.mpu.get_local_rank(ParallelMode.ROLLOUT_TENSOR) == 0)
+            (self.mpu.get_local_rank(ParallelMode.ROLLOUT_TENSOR) == 0)
         )
 
         # paged attention kernel patch

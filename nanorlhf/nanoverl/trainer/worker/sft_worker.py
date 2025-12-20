@@ -39,52 +39,46 @@ def initialize_model(config, rank):
     global_world_size = (
         config.model.data_parallel_size * config.model.tensor_parallel_size * config.model.pipeline_parallel_size
     )
+    assert rank < global_world_size, "rank must be < dp*tp*pp"
 
-    mpu = None
-    if global_world_size > 1:
-        assert rank < global_world_size, "rank must be < dp*tp*pp"
-        mpu = MPU(
-            rank=rank,
-            local_rank=rank,
-            world_size=global_world_size,
-            local_world_size=global_world_size,
-            host=config.model.host,
-            port=config.model.port,
-            data_parallel_size=config.model.data_parallel_size,
-            pipeline_parallel_size=config.model.pipeline_parallel_size,
-            tensor_parallel_size=config.model.tensor_parallel_size,
-            rollout_data_parallel_size=0,
-            rollout_tensor_parallel_size=0,
-            backend=config.model.backend,
-            seed=config.model.seed,
-        )
-        model = TensorParallel(
-            model,
-            mpu=mpu,
-        )
-        model = PipelineParallel(
-            model,
-            mpu=mpu,
-            micro_batch_size=config.data.train_micro_batch_size_per_gpu,
-            gradient_checkpointing_enable=config.model.gradient_checkpointing_enable,
-        )
-
-        accum_steps = max(
-            1,
-            config.data.train_batch_size
-            // (config.model.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
-        )
-        model, optimizer = DataParallel(
-            model,
-            mpu=mpu,
-            optimizer=optimizer,
-            zero_stage=config.model.zero_stage,
-            accum_steps=accum_steps,
-        )
-        model.parallelize()
-    else:
-        model.cuda()
-
+    mpu = MPU(
+        rank=rank,
+        local_rank=rank,
+        world_size=global_world_size,
+        local_world_size=global_world_size,
+        host=config.model.host,
+        port=config.model.port,
+        data_parallel_size=config.model.data_parallel_size,
+        pipeline_parallel_size=config.model.pipeline_parallel_size,
+        tensor_parallel_size=config.model.tensor_parallel_size,
+        rollout_data_parallel_size=0,
+        rollout_tensor_parallel_size=0,
+        backend=config.model.backend,
+        seed=config.model.seed,
+    )
+    model = TensorParallel(
+        model,
+        mpu=mpu,
+    )
+    model = PipelineParallel(
+        model,
+        mpu=mpu,
+        micro_batch_size=config.data.train_micro_batch_size_per_gpu,
+        gradient_checkpointing_enable=config.model.gradient_checkpointing_enable,
+    )
+    accum_steps = max(
+        1,
+        config.data.train_batch_size
+        // (config.model.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
+    )
+    model, optimizer = DataParallel(
+        model,
+        mpu=mpu,
+        optimizer=optimizer,
+        zero_stage=config.model.zero_stage,
+        accum_steps=accum_steps,
+    )
+    model.parallelize()
     model = patch_kernel(model)
     return model, mpu, optimizer
 

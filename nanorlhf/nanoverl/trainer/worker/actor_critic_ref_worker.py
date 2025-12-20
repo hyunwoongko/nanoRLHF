@@ -14,6 +14,7 @@ from nanorlhf.nanotron.core.tp.loss import VocabParallelCrossEntropyFunction
 from nanorlhf.nanoverl.utils.experience import Experience
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
+from nanorlhf.nanoverl.utils.sync_utils import ParameterSyncManager
 
 
 def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
@@ -61,51 +62,47 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
 
     assert global_world_size <= torch.cuda.device_count(), "Currently nanoRLHF doesn't support multi-node training"
 
-    if global_world_size > 1:
-        assert rank < actor_world_size, "rank must be < dp*tp*pp"
-        if mpu is None:
-            mpu = MPU(
-                rank=rank,
-                local_rank=rank,
-                world_size=global_world_size,
-                local_world_size=global_world_size,
-                host=config.actor.host,
-                port=config.actor.port,
-                data_parallel_size=config.actor.data_parallel_size,
-                pipeline_parallel_size=config.actor.pipeline_parallel_size,
-                tensor_parallel_size=config.actor.tensor_parallel_size,
-                rollout_data_parallel_size=config.rollout.data_parallel_size,
-                rollout_tensor_parallel_size=config.rollout.tensor_parallel_size,
-                backend=config.actor.backend,
-                seed=config.actor.seed,
-            )
+    assert rank < actor_world_size, "rank must be < dp*tp*pp"
+    if mpu is None:
+        mpu = MPU(
+            rank=rank,
+            local_rank=rank,
+            world_size=global_world_size,
+            local_world_size=global_world_size,
+            host=config.actor.host,
+            port=config.actor.port,
+            data_parallel_size=config.actor.data_parallel_size,
+            pipeline_parallel_size=config.actor.pipeline_parallel_size,
+            tensor_parallel_size=config.actor.tensor_parallel_size,
+            rollout_data_parallel_size=config.rollout.data_parallel_size,
+            rollout_tensor_parallel_size=config.rollout.tensor_parallel_size,
+            backend=config.actor.backend,
+            seed=config.actor.seed,
+        )
 
-        model = TensorParallel(
-            model,
-            mpu=mpu,
-        )
-        model = PipelineParallel(
-            model,
-            mpu=mpu,
-            micro_batch_size=config.data.train_micro_batch_size_per_gpu,
-            gradient_checkpointing_enable=config.actor.gradient_checkpointing_enable,
-        )
-        accum_steps = max(
-            1,
-            config.data.train_batch_size
-            // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
-        )
-        model, optimizer = DataParallel(
-            model,
-            mpu=mpu,
-            optimizer=optimizer,
-            zero_stage=0 if role == "ref" else config.actor.zero_stage,
-            accum_steps=accum_steps,
-        )
-        model.parallelize()
-    else:
-        model.cuda()
-
+    model = TensorParallel(
+        model,
+        mpu=mpu,
+    )
+    model = PipelineParallel(
+        model,
+        mpu=mpu,
+        micro_batch_size=config.data.train_micro_batch_size_per_gpu,
+        gradient_checkpointing_enable=config.actor.gradient_checkpointing_enable,
+    )
+    accum_steps = max(
+        1,
+        config.data.train_batch_size
+        // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
+    )
+    model, optimizer = DataParallel(
+        model,
+        mpu=mpu,
+        optimizer=optimizer,
+        zero_stage=0 if role == "ref" else config.actor.zero_stage,
+        accum_steps=accum_steps,
+    )
+    model.parallelize()
     model = patch_kernel(model)
     return model, optimizer, mpu
 
@@ -121,10 +118,12 @@ class ActorCriticRefWorker:
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)
 
         self.actor, self.actor_optimizer, self.mpu = initialize_model(config, rank, role="actor")
-        self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
         self.ref, _, _ = initialize_model(config, rank, mpu=self.mpu, role="ref")
         self.critic, self.critic_optimizer, _ = initialize_model(config, rank, mpu=self.mpu, role="critic")
+
+        self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
         self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_steps)
+        self.parameter_sync_manager = ParameterSyncManager(self.actor, self.mpu, self.config, is_rollout=False)
 
     def compute_token_logprobs(
         self,
@@ -164,9 +163,9 @@ class ActorCriticRefWorker:
         full = torch.zeros((batch_size, sequence_length), device=input_ids.device, dtype=torch.float32)
         full[:, 1:] = token_logprobs
 
-        # inter sequence tokens must not contribute to the loss
+        # inter sequence tokens must not contribute to the loss.
         full = full.masked_fill(position_ids == 0, 0.0)
-        # apply the loss mask provided from the dataset
+        # apply the loss mask provided from the dataset.
         full = full * loss_mask.to(dtype=full.dtype, device=full.device)
         return full
 
@@ -196,9 +195,9 @@ class ActorCriticRefWorker:
         else:
             values = raw_values
 
-        # inter sequence tokens must not contribute to the loss
+        # inter sequence tokens must not contribute to the loss.
         values = values.masked_fill(position_ids == 0, 0.0)
-        # don't need to apply loss mask because they will be masked in loss computation later
+        # don't need to apply loss mask because they will be masked in loss computation later.
         return values
 
     def assign_sequence_rewards_to_tokens(self, experience, reward_scores, num_sequences):
@@ -541,3 +540,6 @@ class ActorCriticRefWorker:
         if self.mpu is None or self.mpu.get_global_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         return {"ok": True, "save_dir": save_dir}
+
+    def sync_actor_to_rollout(self):
+        return self.parameter_sync_manager.sync_actor_to_rollout()

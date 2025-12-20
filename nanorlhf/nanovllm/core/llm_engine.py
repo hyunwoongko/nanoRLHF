@@ -6,6 +6,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
+from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.scheduler import Scheduler
 from nanorlhf.nanovllm.core.sequence import Sequence
@@ -35,15 +36,15 @@ class LLMEngine:
 
     def init_ray(self, config):
         nodes = {}
-        base_port = 9200
-
         if self.global_world_size > 1:
             for global_rank in range(self.global_world_size):
                 nodes[f"node-{global_rank}"] = nanoray.NodeConfig(
-                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=base_port + global_rank
+                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=NANORAY_BASE_PORT + global_rank
                 )
         else:
-            nodes["node-0"] = nanoray.NodeConfig(cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=base_port)
+            nodes["node-0"] = nanoray.NodeConfig(
+                cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=NANORAY_BASE_PORT
+            )
 
         session = nanoray.init(nodes, default_node_id="node-0")
         return list(session._workers.keys())

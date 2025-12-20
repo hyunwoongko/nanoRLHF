@@ -1,9 +1,9 @@
 from typing import List
 
 import torch
-from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
+from nanorlhf.nanoverl.utils.sync_utils import ParameterSyncManager
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
@@ -31,6 +31,9 @@ class RolloutWorker:
             enforce_eager=config.rollout.enforce_eager,
         )
         self.runner = ModelRunner.cls(rollout_config, rank, actor_config=config.actor)
+        self.parameter_sync_manager = ParameterSyncManager(
+            self.runner.model, self.runner.mpu, self.config, is_rollout=True
+        )
 
     def get_rollout_config(self):
         return self.runner.get_config()
@@ -38,3 +41,6 @@ class RolloutWorker:
     @torch.inference_mode()
     def generate(self, sequences: List[Sequence], is_prefill: bool) -> List[int]:
         return self.runner.run(sequences, is_prefill)
+
+    def sync_actor_to_rollout(self):
+        return self.parameter_sync_manager.sync_actor_to_rollout()

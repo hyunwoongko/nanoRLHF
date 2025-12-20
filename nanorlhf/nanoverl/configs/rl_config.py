@@ -136,10 +136,6 @@ class RLConfig:
                 f"valid_micro_batch_size_per_gpu={self.data.valid_micro_batch_size_per_gpu}."
             )
 
-        assert (
-            self.rollout.data_parallel_size > 0
-        ), f"rollout.data_parallel_size must be > 0, got {self.rollout.data_parallel_size}"
-
         assert self.data.train_batch_size % self.rollout.data_parallel_size == 0, (
             "train_batch_size must be divisible by rollout.data_parallel_size to avoid silently dropping sequences.\n"
             f"Got train_batch_size={self.data.train_batch_size}, rollout_dp={self.rollout.data_parallel_size}, "
