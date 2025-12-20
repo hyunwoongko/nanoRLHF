@@ -9,8 +9,8 @@ data:
   experience_staleness: 1
 
 actor:
-  model_name_or_path: "Qwen/Qwen3-1.7B"
-  tokenizer_name_or_path: "Qwen/Qwen3-1.7B"
+  model_name_or_path: "./checkpoints/math/sft/step_2109/merged/"
+  tokenizer_name_or_path: "./checkpoints/math/sft/step_2109/merged/"
   tensor_parallel_size: 2
   pipeline_parallel_size: 2
   data_parallel_size: 1
@@ -22,12 +22,12 @@ actor:
   gradient_checkpointing_enable: true
 
 rollout:
-  model_name_or_path: "Qwen/Qwen3-1.7B"
+  model_name_or_path: "./checkpoints/math/sft/step_2109/merged/"
   max_num_batched_tokens: 65536
   max_num_seqs: 1024
-  max_model_len: 2048
-  max_prompt_len: 512
-  max_response_len: 1536
+  max_model_len: 4096
+  max_prompt_len: 1024
+  max_response_len: 3072
   gpu_memory_utilization: 0.9
   kvcache_block_size: 256
   tensor_parallel_size: 2
@@ -62,7 +62,7 @@ training:
   default_local_dir: ./checkpoints
   project_name: math
   experiment_name: rl
-  total_epochs: 1
+  total_epochs: 3
   wandb: true
   seed: 42
   save_freq: 50
