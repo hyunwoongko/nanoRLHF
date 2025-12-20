@@ -1,6 +1,6 @@
 from math_verify import parse, verify
 
-from nanorlhf.evaluation.eval_utils import get_unnormalized_answer
+from nanorlhf.eval.eval_utils import get_unnormalized_answer
 
 
 def compute_score(prediction, reference):

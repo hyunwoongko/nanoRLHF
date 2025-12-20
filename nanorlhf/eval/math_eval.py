@@ -11,7 +11,7 @@ from argparse import ArgumentParser
 from math_verify import parse, verify
 from transformers import AutoTokenizer
 
-from nanorlhf.evaluation.eval_utils import get_unnormalized_answer
+from nanorlhf.eval.eval_utils import get_unnormalized_answer
 from nanorlhf.nanosets import load_dataset
 from nanorlhf.nanovllm import LLM, SamplingParams
 
