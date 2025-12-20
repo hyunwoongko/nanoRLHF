@@ -166,7 +166,7 @@ class RLTrainer(BaseTrainer):
             self.global_step += 1
             rollout_future, batch, pbar, epoch = batch_data_future
 
-            # wait for the previous batch to complete
+            # wait for the previous batch to complete rollout
             pbar.set_postfix(global_step=self.global_step, status="rollout_response")
             total_tokens_repacked, response_tokens_unpacked = rollout_future.result()
             # asynchronously generate the next batch while we compute rewards and loss on the current batch
