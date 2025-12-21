@@ -21,8 +21,8 @@ model:
   gradient_checkpointing_enable: true
 
 optim:
-  lr: 5e-5
-  min_lr: 5e-6
+  lr: 1e-5
+  min_lr: 1e-6
   lr_warmup_steps_ratio: 0.1
   lr_scheduler: cosine
   beta1: 0.9

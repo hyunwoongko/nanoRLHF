@@ -1,4 +1,3 @@
-import torch
 from torch.utils.data import Dataset
 
 from nanorlhf.nanosets import load_dataset
