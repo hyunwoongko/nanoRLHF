@@ -159,10 +159,10 @@ class ModelRunner:
                     break
 
     def prepare_block_tables(self, seqs):
-        if any(len(seq.block_table) == 0 for seq in seqs):
+        if any(len(seq.block_table) == 0 for sequence in seqs):
             return None
-        max_len = max(len(seq.block_table) for seq in seqs)
-        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
+        max_len = max(len(seq.block_table) for sequence in seqs)
+        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for sequence in seqs]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return block_tables
 
@@ -257,11 +257,11 @@ class ModelRunner:
         set_context(False, slot_mapping, context_lens, block_tables)
         return input_ids, position_ids, attention_mask
 
-    def sample(self, logits, seqs):
-        temperatures = [seq.temperature for seq in seqs]
+    def sample(self, logits, sequences):
+        temperatures = [sequence.temperature for sequence in sequences]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
 
-        top_ps = [seq.top_p for seq in seqs]
+        top_ps = [sequence.top_p for sequence in sequences]
         top_ps = torch.tensor(top_ps, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).clamp_(0.0, 1.0)
 
         greedy_mask = temperatures == 0.0
@@ -390,10 +390,10 @@ class ModelRunner:
         return batch_size
 
     @torch.inference_mode()
-    def run_decode_with_graph(self, seqs: List[Sequence]) -> torch.Tensor:
-        batch_size = len(seqs)
+    def run_decode_with_graph(self, sequences: List[Sequence]) -> torch.Tensor:
+        batch_size = len(sequences)
         batch_size_cap = self.select_batch_size_bucket(batch_size)
-        actual_batch_size = self.fill_decode_graph_vars(seqs, batch_size_cap)
+        actual_batch_size = self.fill_decode_graph_vars(sequences, batch_size_cap)
 
         graph = self.graphs[batch_size_cap]
         graph.replay()
@@ -403,11 +403,11 @@ class ModelRunner:
         return output
 
     @torch.inference_mode()
-    def run(self, seqs, is_prefill):
+    def run(self, sequences, is_prefill):
         try:
             if is_prefill:
                 # prefill
-                input_ids, position_ids, attention_mask = self.prepare_prefill(seqs)
+                input_ids, position_ids, attention_mask = self.prepare_prefill(sequences)
                 logits = self.model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -418,12 +418,12 @@ class ModelRunner:
                 logits_for_sampling = logits[0, last_pos, :]
             else:
                 # decode
-                if len(seqs) <= self.max_graph_batch_size and not self.config.enforce_eager:
+                if len(sequences) <= self.max_graph_batch_size and not self.config.enforce_eager:
                     # CUDA graph decode
-                    logits_for_sampling = self.run_decode_with_graph(seqs)
+                    logits_for_sampling = self.run_decode_with_graph(sequences)
                 else:
                     # fallback eager decode
-                    input_ids, position_ids, attention_mask = self.prepare_decode(seqs)
+                    input_ids, position_ids, attention_mask = self.prepare_decode(sequences)
                     input_ids = input_ids.unsqueeze(1)
                     position_ids = position_ids.unsqueeze(1)
                     attention_mask = attention_mask.unsqueeze(1)
@@ -440,7 +440,7 @@ class ModelRunner:
                 logits_for_sampling = collectives.all_gather(logits_for_sampling, dim=-1)
 
             if self.is_first_tensor_parallel_rank:
-                return self.sample(logits_for_sampling, seqs).tolist()
+                return self.sample(logits_for_sampling, sequences).tolist()
             return []
 
         finally:
