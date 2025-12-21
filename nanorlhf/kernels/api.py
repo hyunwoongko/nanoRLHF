@@ -9,8 +9,8 @@ def flash_attn_func(q, k, v, attention_mask=None, causal=True, softmax_scale=Non
     return FlashAttentionFunc.apply(q, k, v, attention_mask, causal, softmax_scale)
 
 
-def flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None, **kwargs):
-    return FlashAttnVarlenFunc.apply(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal, softmax_scale)
+def flash_attn_varlen_func(q, k, v, cu_seq_lens_q, cu_seq_lens_k, max_seq_len_q, max_seq_len_k, causal=True, softmax_scale=None, **kwargs):
+    return FlashAttnVarlenFunc.apply(q, k, v, cu_seq_lens_q, cu_seq_lens_k, max_seq_len_q, max_seq_len_k, causal, softmax_scale)
 
 
 def flash_attn_decode_func(q, k, v, split_k=None, causal=True, softmax_scale=None, block_size_q=16, block_size_k=16):
@@ -21,8 +21,8 @@ def rms_norm(x, weight, eps=1e-6):
     return FusedRMSNormFunc.apply(x, weight, eps)
 
 
-def pad_input(hidden_states, indices, batch, seqlen):
-    return _pad_input(hidden_states, indices, batch, seqlen)
+def pad_input(hidden_states, indices, batch, seq_len):
+    return _pad_input(hidden_states, indices, batch, seq_len)
 
 
 def unpad_input(hidden_states, attention_mask, unused_mask=None):

@@ -46,8 +46,8 @@ class NodeConfig:
 
 
 # Keep server handles so `shutdown()` can close them.
-_SERVERS: Dict[str, RpcServer] = {}
-_SERVER_THREADS: Dict[str, threading.Thread] = {}
+SERVERS: Dict[str, RpcServer] = {}
+SERVER_THREADS: Dict[str, threading.Thread] = {}
 
 
 def init(
@@ -127,16 +127,16 @@ def init(
             # If asked, start an RpcServer in a background thread and register endpoint.
             if cfg.rpc:
                 port = cfg.port if cfg.port is not None else 0
-                srv = RpcServer(nid, worker, host=cfg.host, port=port, token=cfg.token)
-                t = threading.Thread(target=srv.start, name=f"rpcd-{nid}", daemon=True)
-                t.start()
-                _SERVERS[nid] = srv
-                _SERVER_THREADS[nid] = t
+                rpc_server = RpcServer(nid, worker, host=cfg.host, port=port, token=cfg.token)
+                thread = threading.Thread(target=rpc_server.start, name=f"rpcd-{nid}", daemon=True)
+                thread.start()
+                SERVERS[nid] = rpc_server
+                SERVER_THREADS[nid] = thread
 
                 # Wait briefly until the HTTP server is bound, then read actual port
                 actual_port: Optional[int] = None
                 for _ in range(200):  # ~2s total
-                    httpd = getattr(srv, "_httpd", None)
+                    httpd = getattr(rpc_server, "_httpd", None)
                     if httpd is not None:
                         actual_port = int(getattr(httpd, "server_port"))
                         break
@@ -172,8 +172,8 @@ def init(
         local_workers=local_workers,
         default_node_id=default_node_id,
     )
-    sess._router = router
-    sess._rpc = rpc
+    sess.router = router
+    sess.rpc = rpc
     return sess
 
 
@@ -191,11 +191,11 @@ def shutdown():
     logger.info("Shutting down nanoray runtime")
 
     # Stop servers (best-effort)
-    for nid, srv in list(_SERVERS.items()):
+    for nid, srv in list(SERVERS.items()):
         try:
             srv.stop()
         except Exception:
             pass
-    _SERVERS.clear()
-    _SERVER_THREADS.clear()
+    SERVERS.clear()
+    SERVER_THREADS.clear()
 

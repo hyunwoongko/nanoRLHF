@@ -93,8 +93,8 @@ class StringArray(Array):
 
                 local_offsets: List[int] = []
                 for i in range(base_start, base_end + 1):
-                    off = unpack_int32(self.offsets, i)
-                    local_offsets.append(off - byte_start)
+                    offset = unpack_int32(self.offsets, i)
+                    local_offsets.append(offset - byte_start)
 
                 sub_offsets = pack_int32(local_offsets)
                 sub_validity = self.validity.slice(start, length) if self.validity else None

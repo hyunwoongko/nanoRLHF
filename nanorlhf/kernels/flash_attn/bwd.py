@@ -137,7 +137,7 @@ def flash_attn_kernel_bwd(
             padding_option="zero",
         )
 
-        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
+        scores = tl.dot(q.to(k.dtype), tl.trans(k), out_dtype=tl.float32) * softmax_scale
 
         if has_mask:
             mask_block_ptr = tl.make_block_ptr(

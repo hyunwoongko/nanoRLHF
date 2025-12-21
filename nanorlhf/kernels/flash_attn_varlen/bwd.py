@@ -154,7 +154,7 @@ def flash_attn_varlen_bwd_kernel(
             padding_option="zero",
         ).to(tl.float32)
 
-        scores = tl.dot(q, tl.trans(k), out_dtype=tl.float32) * softmax_scale
+        scores = tl.dot(q.to(k.dtype), tl.trans(k), out_dtype=tl.float32) * softmax_scale
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seqlen_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])

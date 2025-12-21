@@ -22,7 +22,7 @@ from nanorlhf.nanosets.table.table import Table
 
 MAGIC = b"NANO0"
 
-_TORCH_DTYPE_TO_STR = {
+TORCH_DTYPE_TO_STR = {
     torch.float32: "float32",
     torch.float64: "float64",
     torch.float16: "float16",
@@ -35,7 +35,7 @@ _TORCH_DTYPE_TO_STR = {
     torch.bool: "bool",
 }
 
-_STR_TO_TORCH_DTYPE = {v: k for k, v in _TORCH_DTYPE_TO_STR.items()}
+STR_TO_TORCH_DTYPE = {v: k for k, v in TORCH_DTYPE_TO_STR.items()}
 
 
 def write_table(fp, table: Table):
@@ -63,9 +63,9 @@ def write_table(fp, table: Table):
             return
 
         prototype = None
-        for t in base_tensors:
-            if t is not None:
-                prototype = t
+        for tensor in base_tensors:
+            if tensor is not None:
+                prototype = tensor
                 break
 
         if prototype is None:
@@ -78,22 +78,22 @@ def write_table(fp, table: Table):
         if prototype.device.type != "cpu":
             raise ValueError("TensorArray IPC currently supports only CPU tensors")
 
-        if prototype.dtype not in _TORCH_DTYPE_TO_STR:
+        if prototype.dtype not in TORCH_DTYPE_TO_STR:
             raise ValueError(f"Unsupported torch dtype for TensorArray IPC: {prototype.dtype}")
 
         scalar_dtype = prototype.dtype
-        scalar_name = _TORCH_DTYPE_TO_STR[scalar_dtype]
+        scalar_name = TORCH_DTYPE_TO_STR[scalar_dtype]
         elem_shape = list(prototype.shape)
         device = prototype.device
 
-        for t in base_tensors:
-            if t is None:
+        for tensor in base_tensors:
+            if tensor is None:
                 continue
-            if t.dtype != scalar_dtype:
+            if tensor.dtype != scalar_dtype:
                 raise ValueError("All tensors in TensorArray must have the same dtype for IPC")
-            if list(t.shape) != elem_shape:
+            if list(tensor.shape) != elem_shape:
                 raise ValueError("All tensors in TensorArray must have the same shape for IPC")
-            if t.device != device:
+            if tensor.device != device:
                 raise ValueError("All tensors in TensorArray must have the same device for IPC")
 
         meta["tensor_dtype"] = scalar_name
@@ -101,11 +101,11 @@ def write_table(fp, table: Table):
         meta["device"] = str(device)
 
         stacked_list = []
-        for t in base_tensors:
-            if t is None:
+        for tensor in base_tensors:
+            if tensor is None:
                 stacked_list.append(torch.zeros(elem_shape, dtype=scalar_dtype, device=device))
             else:
-                stacked_list.append(t.contiguous() if not t.is_contiguous() else t)
+                stacked_list.append(tensor.contiguous() if not tensor.is_contiguous() else tensor)
 
         big = torch.stack(stacked_list, dim=0).contiguous()
         raw_bytes = big.numpy().tobytes(order="C")
@@ -184,8 +184,8 @@ def write_table(fp, table: Table):
 
 
 def read_table(path: str) -> Table:
-    f = open(path, "rb")
-    mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    fp = open(path, "rb")
+    mm = mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ)
 
     try:
         if mm.read(len(MAGIC)) != MAGIC:
@@ -195,14 +195,14 @@ def read_table(path: str) -> Table:
         header_bytes = mm.read(len_header)
         header = json.loads(header_bytes.decode("utf-8"))
 
-        total = sum(b["length"] for b in header["buffers"])
+        total = sum(buffer["length"] for buffer in header["buffers"])
         data_start = mm.tell()
         base_view = memoryview(mm)[data_start : data_start + total]
 
         buf_views: List[Buffer] = []
-        for b in header["buffers"]:
-            start = b["offset"]
-            end = start + b["length"]
+        for buffer in header["buffers"]:
+            start = buffer["offset"]
+            end = start + buffer["length"]
             buf_views.append(Buffer.from_memoryview(base_view[start:end]))
 
         def meta_to_dtype(m):
@@ -221,10 +221,10 @@ def read_table(path: str) -> Table:
             if tensor_dtype_name is None:
                 raise ValueError("TensorArray IPC metadata missing tensor_dtype")
 
-            if tensor_dtype_name not in _STR_TO_TORCH_DTYPE:
+            if tensor_dtype_name not in STR_TO_TORCH_DTYPE:
                 raise ValueError(f"Unknown tensor dtype in IPC: {tensor_dtype_name}")
 
-            scalar_dtype = _STR_TO_TORCH_DTYPE[tensor_dtype_name]
+            scalar_dtype = STR_TO_TORCH_DTYPE[tensor_dtype_name]
             elem_shape = list(tensor_shape)
 
             values_buf = buf_views[values_idx]
@@ -294,13 +294,13 @@ def read_table(path: str) -> Table:
         )
         schema = Schema(fields)
         batches: List[RecordBatch] = []
-        for b in header["batches"]:
-            cols = [decode_array(col_meta) for col_meta in b["columns"]]
+        for buffer in header["batches"]:
+            cols = [decode_array(col_meta) for col_meta in buffer["columns"]]
             batches.append(RecordBatch(schema, cols))
 
         return Table(batches)
 
     except Exception:
         mm.close()
-        f.close()
+        fp.close()
         raise

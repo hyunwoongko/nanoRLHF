@@ -34,14 +34,14 @@ class MicroLossTensor(torch.Tensor):
 
     def backward(self, **kwargs):
         if not self.is_last_stage:
-            self._exec_recv_gradient(self.buffer_id)
+            self.exec_recv_gradient(self.buffer_id)
 
-        self._exec_backward_pass(self.buffer_id, **kwargs)
+        self.exec_backward_pass(self.buffer_id, **kwargs)
 
         if not self.is_first_stage:
-            self._exec_send_gradient(self.buffer_id)
+            self.exec_send_gradient(self.buffer_id)
 
-    def _exec_send_gradient(self, buffer_id: int):
+    def exec_send_gradient(self, buffer_id: int):
         assert len(self.buffer.inputs[buffer_id]) > 0, (
             "Input buffer of pipeline parallelized model is empty. "
             "You must call `loss.backward()` inside of micro batch for loop context."
@@ -53,14 +53,14 @@ class MicroLossTensor(torch.Tensor):
         gradient = self.buffer.grads[buffer_id]
         self.p2p.send(gradient, self.prev_stage)
 
-        self._free_buffers("inputs", buffer_id)
-        self._free_buffers("outputs", buffer_id)
-        self._free_buffers("grads", buffer_id)
+        self.free_buffers("inputs", buffer_id)
+        self.free_buffers("outputs", buffer_id)
+        self.free_buffers("grads", buffer_id)
 
-    def _exec_recv_gradient(self, buffer_id: int):
+    def exec_recv_gradient(self, buffer_id: int):
         self.buffer.grads[buffer_id] = self.p2p.recv(self.next_stage)
 
-    def _exec_backward_pass(self, buffer_id: int, **kwargs):
+    def exec_backward_pass(self, buffer_id: int, **kwargs):
         if self.is_last_stage:
             super().backward(**kwargs)
             return
@@ -84,7 +84,7 @@ class MicroLossTensor(torch.Tensor):
             grad_tensors=tuple(grads.values()),
         )
 
-    def _free_buffers(self, buffer_key: str, buffer_id: int):
+    def free_buffers(self, buffer_key: str, buffer_id: int):
         """
         Free a specific buffer slot.
 

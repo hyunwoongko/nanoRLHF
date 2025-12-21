@@ -4,11 +4,11 @@ import triton.language as tl
 
 @triton.jit
 def rmsnorm_kernel_bwd(
-    x_ptr,  # (M, N) input
-    w_ptr,  # (N,) weight
-    dy_ptr,  # (M, N) grad_output
-    dx_ptr,  # (M, N) grad_input
-    dw_ptr,  # (N,) grad_weight
+    x_ptr,
+    w_ptr,
+    dy_ptr,
+    dx_ptr,
+    dw_ptr,
     M,
     N,
     eps,

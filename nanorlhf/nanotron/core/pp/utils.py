@@ -92,16 +92,16 @@ def zero_grads(inputs):
         Any: The input structure with gradients zeroed out.
     """
 
-    def _zero_grad(x):
+    def zero_grad(x):
         if torch.is_tensor(x):
             if x.is_leaf and x.grad is not None:
                 x.grad.data.zero_()
         elif isinstance(x, dict):
             for v in x.values():
-                _zero_grad(v)
+                zero_grad(v)
         elif isinstance(x, Iterable):
             for v in x:
-                _zero_grad(v)
+                zero_grad(v)
 
-    _zero_grad(inputs)
+    zero_grad(inputs)
     return inputs

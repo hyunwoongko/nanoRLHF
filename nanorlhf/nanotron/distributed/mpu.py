@@ -315,13 +315,13 @@ class MPU:
             f"but got world_size = {world_size}."
         )
 
-        self._global_ranks = {}
-        self._local_ranks = {}
-        self._world_sizes = {}
-        self._groups = {}
-        self._cpu_groups = {}
-        self._ranks_in_group = {}
-        self._ranks_to_device = {}
+        self.global_ranks = {}
+        self.local_ranks = {}
+        self.world_sizes = {}
+        self.groups = {}
+        self.cpu_groups = {}
+        self.ranks_in_group = {}
+        self.ranks_to_device = {}
 
         self.data_parallel_size = data_parallel_size
         self.pipeline_parallel_size = pipeline_parallel_size
@@ -349,7 +349,7 @@ class MPU:
 
     # sanity check
     @staticmethod
-    def _check_parallel_mode(mode: ParallelMode) -> None:
+    def check_parallel_mode(mode: ParallelMode) -> None:
         if not isinstance(mode, ParallelMode):
             raise ValueError(f"Invalid parallel mode: {mode}. Expected one of {[m.value for m in ParallelMode]}.")
 
@@ -369,8 +369,8 @@ class MPU:
             >>> mpu.get_world_size(ParallelMode.DATA)
             4
         """
-        self._check_parallel_mode(mode)
-        return self._world_sizes[mode]
+        self.check_parallel_mode(mode)
+        return self.world_sizes[mode]
 
     def add_world_size(self, mode: ParallelMode, world_size: int):
         """
@@ -384,8 +384,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_world_size(ParallelMode.DATA, 4)
         """
-        self._check_parallel_mode(mode)
-        self._world_sizes[mode] = world_size
+        self.check_parallel_mode(mode)
+        self.world_sizes[mode] = world_size
 
     # local ranks
     def get_local_rank(self, mode: ParallelMode) -> int:
@@ -403,8 +403,8 @@ class MPU:
             >>> mpu.get_local_rank(ParallelMode.DATA)
             0
         """
-        self._check_parallel_mode(mode)
-        return self._local_ranks[mode]
+        self.check_parallel_mode(mode)
+        return self.local_ranks[mode]
 
     def add_local_rank(self, mode: ParallelMode, local_rank: int):
         """
@@ -418,8 +418,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_local_rank(ParallelMode.DATA, 0)
         """
-        self._check_parallel_mode(mode)
-        self._local_ranks[mode] = local_rank
+        self.check_parallel_mode(mode)
+        self.local_ranks[mode] = local_rank
 
     def get_local_ranks(self):
         """
@@ -438,7 +438,7 @@ class MPU:
                 ParallelMode.PIPELINE: 0,
             }
         """
-        return self._local_ranks
+        return self.local_ranks
 
     # global ranks
     def get_global_rank(self) -> int:
@@ -453,7 +453,7 @@ class MPU:
             >>> mpu.get_global_rank(ParallelMode.DATA)
             0
         """
-        return self._global_ranks[ParallelMode.GLOBAL]
+        return self.global_ranks[ParallelMode.GLOBAL]
 
     def add_global_rank(self, mode: ParallelMode, global_rank: int):
         """
@@ -467,8 +467,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_global_rank(ParallelMode.DATA, 0)
         """
-        self._check_parallel_mode(mode)
-        self._global_ranks[mode] = global_rank
+        self.check_parallel_mode(mode)
+        self.global_ranks[mode] = global_rank
 
     def get_global_ranks(self):
         """
@@ -487,7 +487,7 @@ class MPU:
                     ParallelMode.PIPELINE: 0,
                 }
         """
-        return self._global_ranks
+        return self.global_ranks
 
     def get_next_global_rank(self, mode: ParallelMode) -> int:
         """
@@ -503,7 +503,7 @@ class MPU:
             >>> mpu = ...
             >>> mpu.get_next_global_rank(ParallelMode.DATA)
         """
-        self._check_parallel_mode(mode)
+        self.check_parallel_mode(mode)
 
         local_rank = self.get_local_rank(mode)
         world_size = self.get_world_size(mode)
@@ -525,7 +525,7 @@ class MPU:
             >>> mpu = ...
             >>> mpu.get_prev_global_rank(ParallelMode.DATA)
         """
-        self._check_parallel_mode(mode)
+        self.check_parallel_mode(mode)
 
         local_rank = self.get_local_rank(mode)
         world_size = self.get_world_size(mode)
@@ -548,7 +548,7 @@ class MPU:
             >>> mpu.is_first_rank(ParallelMode.DATA)
             True
         """
-        self._check_parallel_mode(mode)
+        self.check_parallel_mode(mode)
         return self.get_local_rank(mode) == 0
 
     def is_last_rank(self, mode: ParallelMode):
@@ -566,7 +566,7 @@ class MPU:
             >>> mpu.is_last_rank(ParallelMode.DATA)
             False
         """
-        self._check_parallel_mode(mode)
+        self.check_parallel_mode(mode)
         return self.get_local_rank(mode) == self.get_world_size(mode) - 1
 
     # groups
@@ -585,8 +585,8 @@ class MPU:
             >>> mpu.get_group(ParallelMode.DATA)
             ProcessGroupNCCL
         """
-        self._check_parallel_mode(mode)
-        return self._groups.get(mode, None)
+        self.check_parallel_mode(mode)
+        return self.groups.get(mode, None)
 
     def add_group(self, mode: ParallelMode, group: Optional[torch.distributed.ProcessGroup]):
         """
@@ -601,8 +601,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_group(ParallelMode.DATA, process_group)
         """
-        self._check_parallel_mode(mode)
-        self._groups[mode] = group
+        self.check_parallel_mode(mode)
+        self.groups[mode] = group
 
     def get_cpu_group(self, mode: ParallelMode) -> Optional[dist.ProcessGroup]:
         """
@@ -619,8 +619,8 @@ class MPU:
             >>> mpu.get_cpu_group(ParallelMode.DATA)
             ProcessGroupGloo
         """
-        self._check_parallel_mode(mode)
-        return self._cpu_groups.get(mode, None)
+        self.check_parallel_mode(mode)
+        return self.cpu_groups.get(mode, None)
 
     def add_cpu_group(self, mode: ParallelMode, group: Optional[torch.distributed.ProcessGroup]):
         """
@@ -635,8 +635,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_cpu_group(ParallelMode.DATA, process_group)
         """
-        self._check_parallel_mode(mode)
-        self._cpu_groups[mode] = group
+        self.check_parallel_mode(mode)
+        self.cpu_groups[mode] = group
 
     # ranks in group
     def get_ranks_in_group(self, mode: ParallelMode) -> List[int]:
@@ -654,8 +654,8 @@ class MPU:
             >>> mpu.get_ranks_in_group(ParallelMode.DATA)
             [0, 4, 8, 12]
         """
-        self._check_parallel_mode(mode)
-        return self._ranks_in_group[mode]
+        self.check_parallel_mode(mode)
+        return self.ranks_in_group[mode]
 
     def add_ranks_in_group(self, mode: ParallelMode, ranks: List[int]):
         """
@@ -669,8 +669,8 @@ class MPU:
             >>> mpu = ...
             >>> mpu.add_ranks_in_group(ParallelMode.DATA, [0, 4, 8, 12])
         """
-        self._check_parallel_mode(mode)
-        self._ranks_in_group[mode] = ranks
+        self.check_parallel_mode(mode)
+        self.ranks_in_group[mode] = ranks
 
     def make_ranks_to_devices(self):
         """
@@ -689,7 +689,7 @@ class MPU:
 
         vals = []
         for mode in ordered_modes:
-            local_rank = self._local_ranks.get(mode, 0)
+            local_rank = self.local_ranks.get(mode, 0)
             vals.append(local_rank)
         rank_tensor = torch.tensor(vals, dtype=torch.long, device="cuda")
 
@@ -697,10 +697,10 @@ class MPU:
         gather_list = [torch.empty_like(rank_tensor) for _ in range(world)]
         dist.all_gather(gather_list, rank_tensor)
 
-        self._ranks_to_device.clear()
+        self.ranks_to_device.clear()
         for global_rank, rt in enumerate(gather_list):
             modes_and_ranks = tuple((mode, int(val)) for mode, val in zip(ordered_modes, rt.tolist()))
-            self._ranks_to_device[modes_and_ranks] = global_rank
+            self.ranks_to_device[modes_and_ranks] = global_rank
 
     def ranks2device(self, ranks: dict) -> Optional[int]:
         """
@@ -748,10 +748,10 @@ class MPU:
             if mode in ranks:
                 key.append((mode, ranks[mode]))
             else:
-                key.append((mode, self._local_ranks.get(mode, 0)))
+                key.append((mode, self.local_ranks.get(mode, 0)))
 
         key = tuple(key)
-        return self._ranks_to_device.get(key, None)
+        return self.ranks_to_device.get(key, None)
 
     # init distributed group
     def init_global_dist(
@@ -784,14 +784,19 @@ class MPU:
         """
         if not dist.is_initialized():
             init_method = f"tcp://{host}:{port}"
-            dist.init_process_group(rank=rank, world_size=world_size, backend=backend, init_method=init_method)
+            dist.init_process_group(
+                rank=rank,
+                world_size=world_size,
+                backend=backend,
+                init_method=init_method,
+            )
 
         ranks = list(range(world_size))
         cpu_group = dist.new_group(ranks, backend="gloo") if dist.get_backend() != "gloo" else None
-        self._register_dist(rank, world_size, None, cpu_group, ranks, ParallelMode.GLOBAL)
+        self.register_dist(rank, world_size, None, cpu_group, ranks, ParallelMode.GLOBAL)
         self.add_global_rank(ParallelMode.GLOBAL, rank)
 
-    def _register_dist(
+    def register_dist(
         self,
         local_rank: int,
         group_world_size: int,
@@ -855,7 +860,9 @@ class MPU:
                 DataParallelGroupInitializer(**rollout_initializer_param).init_dist_group(ParallelMode.ROLLOUT_DATA)
             )
             initializer_results.append(
-                TensorParallelGroupInitializer(**rollout_initializer_param).init_dist_group(ParallelMode.ROLLOUT_TENSOR)
+                TensorParallelGroupInitializer(**rollout_initializer_param).init_dist_group(
+                    ParallelMode.ROLLOUT_TENSOR
+                )
             )
 
         for initializer_result in initializer_results:
@@ -863,9 +870,9 @@ class MPU:
                 continue
             elif isinstance(initializer_result, list):
                 for res in initializer_result:
-                    self._register_dist(**res)
+                    self.register_dist(**res)
             else:
-                self._register_dist(**initializer_result)
+                self.register_dist(**initializer_result)
 
     def is_initialized(self, mode: ParallelMode) -> bool:
         """
@@ -882,17 +889,17 @@ class MPU:
             >>> mpu.is_initialized(ParallelMode.DATA)
             True
         """
-        self._check_parallel_mode(mode)
-        return mode in self._groups
+        self.check_parallel_mode(mode)
+        return mode in self.groups
 
     def destroy(self):
         """Destroy all the parallel groups"""
-        for mode, group in self._groups.items():
-            if mode is not ParallelMode.GLOBAL:
+        for mode, group in self.groups.items():
+            if mode is not ParallelMode.GLOBAL and group is not None:
                 dist.destroy_process_group(group)
 
         dist.destroy_process_group()
-        self._groups.clear()
+        self.groups.clear()
 
     def set_device(self, device_ordinal: Optional[int] = None):
         """
@@ -945,7 +952,7 @@ class MPU:
         if self.is_initialized(ParallelMode.DATA):
             add_seed(ParallelMode.DATA, seed)
         if self.is_initialized(ParallelMode.TENSOR):
-            pipeline_offset = self._local_ranks.get(ParallelMode.PIPELINE, 0)
+            pipeline_offset = self.local_ranks.get(ParallelMode.PIPELINE, 0)
             tp_rank = self.get_local_rank(ParallelMode.TENSOR)
             tp_rank_with_offset = tp_rank + pipeline_offset * 1024
             add_seed(ParallelMode.TENSOR, seed + tp_rank_with_offset)

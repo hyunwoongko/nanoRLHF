@@ -11,26 +11,19 @@ from argparse import ArgumentParser
 from math_verify import parse, verify
 from transformers import AutoTokenizer
 
-from nanorlhf.eval.eval_utils import get_unnormalized_answer
+from nanorlhf.eval.utils import get_unnormalized_answer
 from nanorlhf.nanosets import load_dataset
 from nanorlhf.nanovllm import LLM, SamplingParams
 
 
-def load_test_dataset(test):
-    data_path = f"./data/{test}/test.jsonl"
-    return load_dataset(data_path)
-
-
-def generate_model_answer(model, dataset, formatting_prompt):
-    sampling_params = SamplingParams(max_tokens=2048, temperature=1.0, top_p=1.0)
-    tokenizer = AutoTokenizer.from_pretrained(model)
-    llm = LLM(model)
+def generate(llm, tokenizer, sampling_params, dataset, formatting_prompt):
+    if formatting_prompt is not None:
+        formatting_prompt = json.load(open(formatting_prompt, "r"))["prompt"]
 
     prompts = []
     for idx in range(len(dataset)):
         sample = dataset[idx]
         if formatting_prompt is not None:
-            formatting_prompt = json.load(open(formatting_prompt, "r")).prompt
             prompt = formatting_prompt.format(sample['problem'])
         else:
             prompt = sample["problem"]
@@ -43,7 +36,7 @@ def generate_model_answer(model, dataset, formatting_prompt):
     return outputs
 
 
-def evaluate_model_answer(model_outputs, dataset):
+def evaluate(model_outputs, dataset):
     accuracy = 0
     model_outputs_for_saving = []
     for idx in range(len(dataset)):
@@ -75,13 +68,14 @@ def evaluate_model_answer(model_outputs, dataset):
     return evaluation_result, model_outputs_for_saving
 
 
-def evaluate(args):
+def main(args, llm, sampling_params, tokenizer):
     print("Loading test dataset...")
-    dataset = load_test_dataset(args.test)
+    dataset = load_dataset(f"./data/{args.test}/test.jsonl")
     print("Generating model answers...")
-    model_outputs = generate_model_answer(args.model, dataset, args.formatting_prompt)
+
+    model_outputs = generate(llm, tokenizer, sampling_params, dataset, args.formatting_prompt)
     print("Evaluating model answers...")
-    eval_output, model_outputs_for_saving = evaluate_model_answer(model_outputs, dataset)
+    eval_output, model_outputs_for_saving = evaluate(model_outputs, dataset)
     print(f"Evaluation result: {eval_output}")
 
     eval_result_dir = os.path.join(args.model, "eval", args.test)
@@ -107,7 +101,11 @@ if __name__ == '__main__':
     parser.add_argument("--formatting_prompt", type=str, default=None, help="Path to the formatting prompt file.")
     args = parser.parse_args()
 
+    llm = LLM(args.model)
+    sampling_params = SamplingParams(max_tokens=2048, temperature=0.0)
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+
     datasets = args.test.split(",")
     for test_data in datasets:
         args.test = test_data
-        evaluate(args)
+        main(args, llm, sampling_params, tokenizer)

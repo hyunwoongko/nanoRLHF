@@ -23,29 +23,29 @@ class Bitmap:
             )
             self.buffer = buffer  # for zero-copy initialization
 
-    def _check_bound(self, i: int) -> None:
+    def check_bound(self, i: int) -> None:
         if not (0 <= i < self.num_bits):
             raise IndexError(f"Bitmap index {i} out of range [0, {self.num_bits})")
 
-    def _absolute_bit(self, i: int) -> int:
+    def absolute_bit(self, i: int) -> int:
         return self.bit_offset + i
 
     def __len__(self):
         return self.num_bits
 
     def __getitem__(self, key: int):
-        self._check_bound(key)
-        abs_bit = self._absolute_bit(key)
+        self.check_bound(key)
+        abs_bit = self.absolute_bit(key)
         byte, bit = divmod(abs_bit, 8)
         b = self.buffer.data[byte]
         check = b & (1 << bit)
         return check != 0
 
     def __setitem__(self, key: int, value: Union[int, bool]):
-        self._check_bound(key)
+        self.check_bound(key)
         assert isinstance(value, (int, bool)), f"Bitmap value must be int or bool, got {type(value)}"
 
-        abs_bit = self._absolute_bit(key)
+        abs_bit = self.absolute_bit(key)
         byte, bit = divmod(abs_bit, 8)
         b = self.buffer.data[byte]
         packed = (b | (1 << bit)) if bool(value) else (b & ~(1 << bit) & 0xFF)

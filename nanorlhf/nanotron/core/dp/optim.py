@@ -37,15 +37,15 @@ class ZeroOptimizer:
         raise NotImplementedError
 
 
-def _build_owner_map_from_model(model: Optional[nn.Module], world_size: int):
+def build_owner_map_from_model(model: Optional[nn.Module], world_size: int):
     if model is None:
         return {}
     mapping = {}
     idx = 0
-    for p in model.parameters():
-        if p is None or not p.requires_grad:
+    for param in model.parameters():
+        if param is None or not param.requires_grad:
             continue
-        mapping[id(p)] = idx % world_size
+        mapping[id(param)] = idx % world_size
         idx += 1
     return mapping
 
@@ -54,22 +54,22 @@ class ZeroOptimizerStage1(ZeroOptimizer):
 
     def __init__(self, base_optim: torch.optim.Optimizer, mpu: MPU, model: Optional[nn.Module] = None):
         super().__init__(base_optim, mpu)
-        self._param_owner = _build_owner_map_from_model(model, self.world_size)
+        self._param_owner = build_owner_map_from_model(model, self.world_size)
         self._owned_param_ids = set()
 
         if self._param_owner:
-            for pg in self.base.param_groups:
-                for p in pg["params"]:
-                    if p is None:
+            for param_group in self.base.param_groups:
+                for param in param_group["params"]:
+                    if param is None:
                         continue
-                    owner = self._param_owner.get(id(p), None)
+                    owner = self._param_owner.get(id(param), None)
                     if owner is not None and owner == self.rank:
-                        self._owned_param_ids.add(id(p))
+                        self._owned_param_ids.add(id(param))
         else:
-            for pg in self.base.param_groups:
-                for idx, p in enumerate(pg["params"]):
-                    if p is not None and (idx % self.world_size) == self.rank:
-                        self._owned_param_ids.add(id(p))
+            for param_group in self.base.param_groups:
+                for idx, param in enumerate(param_group["params"]):
+                    if param is not None and (idx % self.world_size) == self.rank:
+                        self._owned_param_ids.add(id(param))
 
     def _get_owner_group_rank(self, p: nn.Parameter, local_idx: int) -> int:
         if self._param_owner:
@@ -81,27 +81,27 @@ class ZeroOptimizerStage1(ZeroOptimizer):
         masked_params: List[nn.Parameter] = []
         masked_grads: List[torch.Tensor] = []
 
-        for pg in self.base.param_groups:
-            for p in pg["params"]:
-                if p is None or p.grad is None:
+        for param_group in self.base.param_groups:
+            for param in param_group["params"]:
+                if param is None or param.grad is None:
                     continue
-                if id(p) not in self._owned_param_ids:
-                    masked_params.append(p)
-                    masked_grads.append(p.grad)
-                    p.grad = None
+                if id(param) not in self._owned_param_ids:
+                    masked_params.append(param)
+                    masked_grads.append(param.grad)
+                    param.grad = None
 
         loss = self.base.step(closure=closure) if closure is not None else self.base.step()
 
-        for pg in self.base.param_groups:
-            for local_idx, p in enumerate(pg["params"]):
-                if p is None:
+        for param_group in self.base.param_groups:
+            for local_idx, param in enumerate(param_group["params"]):
+                if param is None:
                     continue
-                owner_group_rank = self._get_owner_group_rank(p, local_idx)
+                owner_group_rank = self._get_owner_group_rank(param, local_idx)
                 owner_global_rank = dist.get_global_rank(self.group, owner_group_rank)
-                dist.broadcast(p.data, src=owner_global_rank, group=self.group)
+                dist.broadcast(param.data, src=owner_global_rank, group=self.group)
 
-        for p, g in zip(masked_params, masked_grads):
-            p.grad = g
+        for param, grad in zip(masked_params, masked_grads):
+            param.grad = grad
 
         return loss
 
@@ -134,9 +134,9 @@ class ZeroOptimizerStage3(ZeroOptimizer):
         flat_full = torch.zeros(self.total_numel, dtype=dtype, device=device)
         offset = 0
         for meta in self.param_metas:
-            p = meta.param
+            param = meta.param
             n = meta.numel
-            flat_full[offset : offset + n] = p.data.detach().reshape(-1).to(device=device, dtype=dtype)
+            flat_full[offset : offset + n] = param.data.detach().reshape(-1).to(device=device, dtype=dtype)
             offset += n
 
         local = torch.zeros(self.shard_size, dtype=dtype, device=device)
@@ -147,8 +147,8 @@ class ZeroOptimizerStage3(ZeroOptimizer):
 
         self.flat_param = nn.Parameter(local, requires_grad=True)
 
-        for pg in self.base.param_groups:
-            pg["params"] = [self.flat_param]
+        for param_group in self.base.param_groups:
+            param_group["params"] = [self.flat_param]
         self.base.state = {}
 
         for meta in self.param_metas:

@@ -80,6 +80,8 @@ class ParallelizationWrapper(ABC):
 
     def parallelize(self):
         if hasattr(self.model, "__nanotron_wrappers__"):
+            # sorting wrappers to fix parallelization order
+            # higher priority wrappers are applied first
             self.model.__nanotron_wrappers__ = OrderedDict(
                 sorted(
                     self.model.__nanotron_wrappers__.items(),
@@ -94,11 +96,11 @@ class ParallelizationWrapper(ABC):
                     wrapper._parallelize()
                     setattr(self.model, "forward", wrapper._forward)
 
-                if hasattr(wrapper, "_convert_tensor_to_micro_loss"):
+                if hasattr(wrapper, "convert_tensor_to_micro_loss"):
                     setattr(
                         self.model,
                         "convert_tensor_to_micro_loss",
-                        wrapper._convert_tensor_to_micro_loss,
+                        wrapper.convert_tensor_to_micro_loss,
                     )
 
         for parameter in self.model.parameters():
@@ -204,6 +206,20 @@ class ParallelizationWrapper(ABC):
         delattr(self.model, "__nanotron_wrappers__")
         if hasattr(self.model, "convert_tensor_to_micro_loss"):
             delattr(self.model, "convert_tensor_to_micro_loss")
+
+
+class NoParallelWrapper(ParallelizationWrapper):
+    def __init__(self, model: nn.Module, mpu: MPU):
+        super().__init__(model, mpu, parallelization_priority=99)
+
+    def _forward(self, *args, **kwargs):
+        return self.model_forward(*args, **kwargs)
+
+    def _parallelize(self):
+        pass
+
+    def _deparallelize(self):
+        pass
 
 
 def register_wrapper(module: nn.Module, mode: ParallelMode, wrapper: ParallelizationWrapper):

@@ -1,11 +1,11 @@
 import torch
 
 
-def load_kv_from_cache_prefill(context, cu_seqlens_k, key_cache, value_cache, num_heads, dim):
+def load_kv_from_cache_prefill(context, cu_seq_lens_k, key_cache, value_cache, num_heads, dim):
     assert context.block_tables is not None
 
     device = key_cache.device
-    cu_k = cu_seqlens_k.to(device)
+    cu_k = cu_seq_lens_k.to(device)
     block_tables = context.block_tables.to(device)
 
     b = cu_k.numel() - 1

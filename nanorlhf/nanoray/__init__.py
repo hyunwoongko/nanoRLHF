@@ -3,6 +3,7 @@ from nanorlhf.nanoray.api.initialization import (
     shutdown,
     NodeConfig,
 )
+from nanorlhf.nanoray.api.remote import remote
 from nanorlhf.nanoray.api.session import (
     get,
     put,
@@ -13,9 +14,3 @@ from nanorlhf.nanoray.api.session import (
     PlacementStrategy,
     Bundle,
 )
-from nanorlhf.nanoray.api.remote import (
-    remote,
-    actor,
-)
-
-

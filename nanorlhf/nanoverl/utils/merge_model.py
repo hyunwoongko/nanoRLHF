@@ -11,11 +11,12 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from nanorlhf import nanoray
+from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
 from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 
 
-@nanoray.actor
+@nanoray.remote
 class ModelMerger:
     def __init__(self, config, rank, model_parallel_world_size):
         if config.model.zero_stage == 3:
@@ -69,19 +70,18 @@ def merge_model(args):
         model_parallel_world_size = config.model.tensor_parallel_size * config.model.pipeline_parallel_size
 
     nodes = {}
-    base_port = 9200
     for global_rank in range(model_parallel_world_size):
         nodes[f"node-{global_rank + 1}"] = nanoray.NodeConfig(
             cpus=4.0,
             gpus=1.0,
             rpc=True,
             host=config.model.host,
-            port=base_port + global_rank,
+            port=NANORAY_BASE_PORT + global_rank,
         )
 
     print("Initialize nanoray session...")
     session = nanoray.init(nodes, default_node_id="node-1")
-    node_ids = list(session._workers.keys())
+    node_ids = list(session.workers.keys())
     if len(node_ids) < model_parallel_world_size:
         raise RuntimeError(
             "`nanoray` was initialized with fewer nodes than `model_parallel_world_size`; "

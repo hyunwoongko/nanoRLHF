@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Generic, Optional, Tuple, TypeVar, Union
 
-from nanorlhf.nanoray.core.placement import PlacementGroup
 from nanorlhf.nanoray.core.runtime_env import RuntimeEnv
 from nanorlhf.nanoray.utils import new_task_id
 

@@ -39,7 +39,7 @@ class ProcessGroupInitializer(ABC):
         self.pipeline_parallel_size = pipeline_parallel_size
         self.tensor_parallel_size = tensor_parallel_size
 
-    def _to_global_ranks(self, local_ranks):
+    def to_global_ranks(self, local_ranks):
         return [self.group_rank_offset + r for r in local_ranks]
 
     @abstractmethod
@@ -65,7 +65,7 @@ class DataParallelGroupInitializer(ProcessGroupInitializer):
 
         for i in range(self.num_data_parallel_group):
             local_ranks = [i + j * self.num_data_parallel_group for j in range(self.data_parallel_size)]
-            ranks = self._to_global_ranks(local_ranks)
+            ranks = self.to_global_ranks(local_ranks)
 
             group = dist.new_group(ranks)
             group_cpu = dist.new_group(ranks, backend="gloo") if dist.get_backend() != "gloo" else group
@@ -113,7 +113,7 @@ class PipelineParallelGroupInitializer(ProcessGroupInitializer):
                         self.pipeline_stage_size,
                     )
                 )
-                pipe_ranks = self._to_global_ranks(local_pipe_ranks)
+                pipe_ranks = self.to_global_ranks(local_pipe_ranks)
 
                 group = dist.new_group(pipe_ranks)
                 group_cpu = dist.new_group(pipe_ranks, backend="gloo") if dist.get_backend() != "gloo" else group
@@ -149,7 +149,7 @@ class TensorParallelGroupInitializer(ProcessGroupInitializer):
 
         for i in range(self.num_tensor_parallel_group):
             local_ranks = [i * self.tensor_parallel_size + j for j in range(self.tensor_parallel_size)]
-            ranks = self._to_global_ranks(local_ranks)
+            ranks = self.to_global_ranks(local_ranks)
 
             group = dist.new_group(ranks)
             group_cpu = dist.new_group(ranks, backend="gloo") if dist.get_backend() != "gloo" else group
@@ -193,7 +193,7 @@ class TiedEmbeddingGroupInitializer(ProcessGroupInitializer):
                         self.pipeline_stage_size,
                     )
                 )
-                pipe_ranks = self._to_global_ranks(local_pipe_ranks)
+                pipe_ranks = self.to_global_ranks(local_pipe_ranks)
 
                 if len(pipe_ranks) == 1:
                     embedding_ranks = pipe_ranks

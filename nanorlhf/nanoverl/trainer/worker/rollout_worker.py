@@ -9,7 +9,7 @@ from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
-@nanoray.actor
+@nanoray.remote
 class RolloutWorker:
     def __init__(self, config, rank: int):
         self.config = config

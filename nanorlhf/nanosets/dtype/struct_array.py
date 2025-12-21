@@ -11,15 +11,6 @@ from nanorlhf.nanosets.utils import normalize_index
 
 
 class StructArray(Array):
-    """
-    Row-wise struct array.
-
-    - 각 row는 dict(str -> value)로 표현 가능
-    - 내부 저장:
-        - field_names: List[str]
-        - children: List[Array]   (각 필드별 column array)
-        - validity: Bitmap or None (row가 통째로 null인지 여부)
-    """
 
     def __init__(
         self,
@@ -70,11 +61,11 @@ class StructArray(Array):
             if self.is_null(key):
                 return None
 
-            i = normalize_index(key, self.length)
+            normalized_idx = normalize_index(key, self.length)
 
             row: Dict[str, Any] = {}
             for name, child in zip(self.field_names, self.children):
-                row[name] = child[i]
+                row[name] = child[normalized_idx]
             return row
 
         if isinstance(key, slice):
@@ -151,7 +142,7 @@ class StructArrayBuilder(ArrayBuilder):
         self.field_names = field_names
         self.child_builders = child_builders
         self.strict_keys = strict_keys
-        self._name_to_index: Dict[str, int] = {name: i for i, name in enumerate(field_names)}
+        self.name_to_index: Dict[str, int] = {name: i for i, name in enumerate(field_names)}
 
         self.validity: List[int] = []
         self.length: int = 0
@@ -171,7 +162,7 @@ class StructArrayBuilder(ArrayBuilder):
 
         if self.strict_keys:
             for key in row.keys():
-                if key not in self._name_to_index:
+                if key not in self.name_to_index:
                     raise KeyError(f"Unexpected field name in struct row: {key!r}")
 
         self.validity.append(1)

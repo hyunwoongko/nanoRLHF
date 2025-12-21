@@ -5,6 +5,9 @@ from dataclasses import dataclass
 class Buffer:
     data: memoryview
 
+    def __len__(self) -> int:
+        return len(self.data)
+
     @classmethod
     def from_bytearray(cls, data: bytearray):
         return cls(memoryview(data))
@@ -18,9 +21,6 @@ class Buffer:
 
     def to_memoryview(self) -> memoryview:
         return self.data
-
-    def __len__(self) -> int:
-        return len(self.data)
 
     def slice(self, offset: int, length: int) -> "Buffer":
         if offset < 0 or length < 0 or offset + length > len(self.data):

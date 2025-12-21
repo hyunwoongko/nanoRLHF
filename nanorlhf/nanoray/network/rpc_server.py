@@ -11,7 +11,7 @@ from nanorlhf.nanoray.core.task import Task
 from nanorlhf.nanoray.runtime.worker import Worker
 
 
-class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """
     Handle requests in a separate thread.
 
@@ -79,7 +79,7 @@ class RpcServer:
         self.host = host
         self.port = int(port)
         self._token = token
-        self._httpd: Optional[_ThreadingHTTPServer] = None
+        self._httpd: Optional[ThreadingHTTPServer] = None
 
     def start(self):
         """
@@ -92,7 +92,7 @@ class RpcServer:
                 the server to respond to shut down requests promptly.
         """
         handler_class = self._make_handler()
-        self._httpd = _ThreadingHTTPServer((self.host, self.port), handler_class)
+        self._httpd = ThreadingHTTPServer((self.host, self.port), handler_class)
         self._httpd.worker = self.worker
         self._httpd.node_id = self.node_id
         self._httpd.token = self._token

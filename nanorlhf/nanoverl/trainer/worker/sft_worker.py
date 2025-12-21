@@ -83,7 +83,7 @@ def initialize_model(config, rank):
     return model, mpu, optimizer
 
 
-@nanoray.actor
+@nanoray.remote
 class SFTWorker:
     def __init__(self, config, rank, total_steps: int):
         self.config = config
@@ -114,7 +114,7 @@ class SFTWorker:
         if self.config.model.pipeline_parallel_size > 1:
             pp_wrapper = self.model.__nanotron_wrappers__[ParallelMode.PIPELINE]
             pp_wrapper.micro_batch_size = micro_batch_size
-            micro_batches = pp_wrapper._split_packed_batches(batch)
+            micro_batches = pp_wrapper.split_packed_batches(batch)
             micro_batch_iterator = enumerate(self.model(**batch))
         else:
             micro_batches = [split_packed_batch(batch, i, num_of_micro_batches) for i in range(num_of_micro_batches)]

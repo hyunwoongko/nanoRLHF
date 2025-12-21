@@ -37,7 +37,7 @@ class RuntimeEnv:
         # snapshots
         old_environ = os.environ.copy()
         old_cwd = os.getcwd()
-        old_pythonpath = os.environ.get("PYTHONPATH", "")
+        old_python_path = os.environ.get("PYTHONPATH", "")
 
         try:
             # env vars
@@ -47,7 +47,7 @@ class RuntimeEnv:
             # python path
             if self.python_path:
                 prefix = os.pathsep.join(self.python_path)
-                os.environ["PYTHONPATH"] = prefix + (os.pathsep + old_pythonpath if old_pythonpath else "")
+                os.environ["PYTHONPATH"] = prefix + (os.pathsep + old_python_path if old_python_path else "")
 
             # cwd
             if self.cwd:
@@ -61,7 +61,7 @@ class RuntimeEnv:
             if self.cwd:
                 os.chdir(old_cwd)
             # ensure PYTHONPATH mirrors snapshot (covered by environ restore but explicit)
-            if old_pythonpath:
-                os.environ["PYTHONPATH"] = old_pythonpath
+            if old_python_path:
+                os.environ["PYTHONPATH"] = old_python_path
             else:
                 os.environ.pop("PYTHONPATH", None)

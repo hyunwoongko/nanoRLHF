@@ -47,7 +47,7 @@ class LLMEngine:
             )
 
         session = nanoray.init(nodes, default_node_id="node-0")
-        return list(session._workers.keys())
+        return list(session.workers.keys())
 
     def create_model(self, config: NanoVLLMConfig):
         object_refs = []
@@ -102,7 +102,7 @@ class LLMEngine:
             scheduler.postprocess(sequences, token_ids)
 
             outputs = [
-                (seq.seq_id, seq.completion_token_ids, seq.finish_reason) for seq in sequences if seq.is_finished
+                (seq.sequence_id, seq.completion_token_ids, seq.finish_reason) for seq in sequences if seq.is_finished
             ]
             all_outputs.extend(outputs)
 

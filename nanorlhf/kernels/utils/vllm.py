@@ -7,8 +7,8 @@ from transformers.modeling_flash_attention_utils import fa_peft_integration_chec
 from nanorlhf.kernels import flash_attn_varlen_func
 from nanorlhf.kernels.flash_attn_decode.ops import flash_attn_decode_paged
 from nanorlhf.kernels.kvcache.load import load_kv_from_cache_prefill
-from nanorlhf.kernels.kvcache.store import store_kv_to_cache_kernel
-from nanorlhf.kernels.utils.huggingface import _maybe_repeat_kv, _get_target_dtype
+from nanorlhf.kernels.kvcache.store import store_kv_to_cache
+from nanorlhf.kernels.utils.huggingface import maybe_repeat_kv, get_target_dtype
 
 
 @dataclass
@@ -17,10 +17,10 @@ class Context:
     slot_mapping: Optional[torch.Tensor] = None
     context_lens: Optional[torch.Tensor] = None
     block_tables: Optional[torch.Tensor] = None
-    cu_seqlens_q: Optional[torch.Tensor] = None
-    cu_seqlens_k: Optional[torch.Tensor] = None
-    max_seqlen_q: Optional[int] = None
-    max_seqlen_k: Optional[int] = None
+    cu_seq_lens_q: Optional[torch.Tensor] = None
+    cu_seq_lens_k: Optional[torch.Tensor] = None
+    max_seq_len_q: Optional[int] = None
+    max_seq_len_k: Optional[int] = None
 
 
 GLOBAL_CONTEXT = Context()
@@ -35,10 +35,10 @@ def set_context(
     slot_mapping=None,
     context_lens=None,
     block_tables=None,
-    cu_seqlens_q=None,
-    cu_seqlens_k=None,
-    max_seqlen_q=None,
-    max_seqlen_k=None,
+    cu_seq_lens_q=None,
+    cu_seq_lens_k=None,
+    max_seq_len_q=None,
+    max_seq_len_k=None,
 ):
     global GLOBAL_CONTEXT
     GLOBAL_CONTEXT = Context(
@@ -46,10 +46,10 @@ def set_context(
         slot_mapping=slot_mapping,
         context_lens=context_lens,
         block_tables=block_tables,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k=cu_seqlens_k,
-        max_seqlen_q=max_seqlen_q,
-        max_seqlen_k=max_seqlen_k,
+        cu_seq_lens_q=cu_seq_lens_q,
+        cu_seq_lens_k=cu_seq_lens_k,
+        max_seq_len_q=max_seq_len_q,
+        max_seq_len_k=max_seq_len_k,
     )
 
 
@@ -58,10 +58,10 @@ def reset_context():
     GLOBAL_CONTEXT = Context()
 
 
-def store_kv_to_cache(context, key_states_not_repeated, value_states_not_repeated, key_cache, value_cache):
+def store_cache(context, key_states_not_repeated, value_states_not_repeated, key_cache, value_cache):
     if context.is_prefill:
-        assert context.cu_seqlens_q is not None
-        store_kv_to_cache_kernel(
+        assert context.cu_seq_lens_q is not None
+        store_kv_to_cache(
             key_states_not_repeated=key_states_not_repeated,
             value_states_not_repeated=value_states_not_repeated,
             key_cache=key_cache,
@@ -71,7 +71,7 @@ def store_kv_to_cache(context, key_states_not_repeated, value_states_not_repeate
     else:
         k_for_cache = key_states_not_repeated[:, -1:, :, :]
         v_for_cache = value_states_not_repeated[:, -1:, :, :]
-        store_kv_to_cache_kernel(
+        store_kv_to_cache(
             key_states_not_repeated=k_for_cache,
             value_states_not_repeated=v_for_cache,
             key_cache=key_cache,
@@ -91,17 +91,17 @@ def compute_prefill(
     scaling,
     is_causal,
 ):
-    assert context.cu_seqlens_q is not None and context.cu_seqlens_k is not None
-    assert context.max_seqlen_q is not None and context.max_seqlen_k is not None
+    assert context.cu_seq_lens_q is not None and context.cu_seq_lens_k is not None
+    assert context.max_seq_len_q is not None and context.max_seq_len_k is not None
 
     device = query_states.device
-    cu_q = context.cu_seqlens_q.to(device=device, dtype=torch.int32)
-    cu_k = context.cu_seqlens_k.to(device=device, dtype=torch.int32)
-    max_q = int(context.max_seqlen_q)
-    max_k = int(context.max_seqlen_k)
+    cu_seq_lens_q = context.cu_seq_lens_q.to(device=device, dtype=torch.int32)
+    cu_seq_lens_k = context.cu_seq_lens_k.to(device=device, dtype=torch.int32)
+    max_seq_len_q = int(context.max_seq_len_q)
+    max_seq_len_k = int(context.max_seq_len_k)
 
-    total_q = int(cu_q[-1].item())
-    total_k = int(cu_k[-1].item())
+    total_q = int(cu_seq_lens_q[-1].item())
+    total_k = int(cu_seq_lens_k[-1].item())
     if context.block_tables is None:
         assert total_k == total_q, f"no-cache prefill expects total_k==total_q, got {total_k} vs {total_q}"
 
@@ -113,7 +113,7 @@ def compute_prefill(
     if context.block_tables is not None:
         k_bh, v_bh = load_kv_from_cache_prefill(
             context=context,
-            cu_seqlens_k=cu_k,
+            cu_seq_lens_k=cu_seq_lens_k,
             key_cache=key_cache,
             value_cache=value_cache,
             num_heads=num_heads,
@@ -123,22 +123,22 @@ def compute_prefill(
         k_bh = key_states.reshape(-1, num_heads, dim).contiguous()
         v_bh = value_states.reshape(-1, num_heads, dim).contiguous()
 
-    out = flash_attn_varlen_func(
+    output = flash_attn_varlen_func(
         q,
         k_bh,
         v_bh,
-        cu_seqlens_q=cu_q,
-        cu_seqlens_k=cu_k,
-        max_seqlen_q=max_q,
-        max_seqlen_k=max_k,
+        cu_seq_lens_q=cu_seq_lens_q,
+        cu_seq_lens_k=cu_seq_lens_k,
+        max_seq_len_q=max_seq_len_q,
+        max_seq_len_k=max_seq_len_k,
         softmax_scale=scaling,
         causal=is_causal,
     )
-    if isinstance(out, tuple):
-        out = out[0]
+    if isinstance(output, tuple):
+        output = output[0]
 
-    out = out.view(1, -1, out.size(-2), out.size(-1))
-    return out, None
+    output = output.view(1, -1, output.size(-2), output.size(-1))
+    return output, None
 
 
 def compute_decode(
@@ -147,17 +147,17 @@ def compute_decode(
     key_cache,
     value_cache,
     bsz,
-    seqlen_q,
+    seq_len_q,
     num_heads,
     dim,
     scaling,
     is_causal,
 ):
-    assert seqlen_q == 1
+    assert seq_len_q == 1
     assert context.block_tables is not None
     assert context.context_lens is not None
 
-    q_bh = query_states.permute(0, 2, 1, 3).reshape(bsz * num_heads, seqlen_q, dim).contiguous()
+    q_bh = query_states.permute(0, 2, 1, 3).reshape(bsz * num_heads, seq_len_q, dim).contiguous()
 
     num_blocks, block_size, kv_heads, dim_cache = key_cache.shape
     assert dim_cache == dim
@@ -169,7 +169,7 @@ def compute_decode(
     block_tables = context.block_tables.to(device=key_cache.device, dtype=torch.int32)
     context_lens = context.context_lens.to(device=key_cache.device, dtype=torch.int32)
 
-    out_bh = flash_attn_decode_paged(
+    output = flash_attn_decode_paged(
         q_bh=q_bh,
         k_slots=k_slots,
         v_slots=v_slots,
@@ -181,8 +181,8 @@ def compute_decode(
         softmax_scale=scaling,
         kv_block_size=block_size,
     )
-    out = out_bh.view(bsz, num_heads, seqlen_q, dim)
-    return out, None
+    output = output.view(bsz, num_heads, seq_len_q, dim)
+    return output, None
 
 
 @torch.no_grad()
@@ -211,12 +211,12 @@ def paged_flash_attention_forward(
             "Please check your input shapes or use SDPA instead."
         )
 
-    bsz, num_heads, seqlen_q, dim = query.shape
+    bsz, num_heads, seq_len_q, dim = query.shape
     query_states = query.transpose(1, 2)
     key_states = key.transpose(1, 2)
     value_states = value.transpose(1, 2)
 
-    target_dtype = _get_target_dtype(query_states, module)
+    target_dtype = get_target_dtype(query_states, module)
     is_causal = is_causal if is_causal is not None else module.is_causal
 
     query_states, key_states, value_states = fa_peft_integration_check(
@@ -225,7 +225,7 @@ def paged_flash_attention_forward(
 
     key_states_not_repeated = key.transpose(1, 2)
     value_states_not_repeated = value.transpose(1, 2)
-    query_states, key_states, value_states = _maybe_repeat_kv(query_states, key_states, value_states)
+    query_states, key_states, value_states = maybe_repeat_kv(query_states, key_states, value_states)
 
     if scaling is None:
         scaling = 1.0 / (query_states.size(-1) ** 0.5)
@@ -237,7 +237,7 @@ def paged_flash_attention_forward(
 
     key_cache, value_cache = module.key_cache, module.value_cache
     if context.slot_mapping is not None and context.slot_mapping.numel() > 0:
-        store_kv_to_cache(
+        store_cache(
             context=context,
             key_states_not_repeated=key_states_not_repeated,
             value_states_not_repeated=value_states_not_repeated,
@@ -264,7 +264,7 @@ def paged_flash_attention_forward(
             key_cache=key_cache,
             value_cache=value_cache,
             bsz=bsz,
-            seqlen_q=seqlen_q,
+            seq_len_q=seq_len_q,
             num_heads=num_heads,
             dim=dim,
             scaling=scaling,

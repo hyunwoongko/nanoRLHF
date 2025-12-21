@@ -5,7 +5,7 @@ from nanorlhf import nanoray
 from nanorlhf.nanoray.core.object_ref import ObjectRef
 
 
-@nanoray.remote()
+@nanoray.remote
 def heavy_sleep(duration: float, value: int) -> str:
     import time as _time
 
@@ -13,7 +13,7 @@ def heavy_sleep(duration: float, value: int) -> str:
     return f"task {value} finished after {duration:.1f}s"
 
 
-@nanoray.actor
+@nanoray.remote
 class SlowActor:
     def __init__(self, work_delay: float, init_delay: float = 0.0):
         import time as _time

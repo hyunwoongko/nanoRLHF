@@ -26,13 +26,13 @@ class Scheduler:
 
     def schedule(self):
         scheduled_seqs = []
-        num_seqs = 0
+        num_sequences = 0
         num_batched_tokens = 0
-        while self.waiting and num_seqs < self.max_num_seqs:
+        while self.waiting and num_sequences < self.max_num_seqs:
             seq = self.waiting[0]
             if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
                 break
-            num_seqs += 1
+            num_sequences += 1
             self.block_manager.allocate(seq)
             num_batched_tokens += len(seq) - seq.num_cached_tokens
             seq.status = SequenceStatus.RUNNING
@@ -42,7 +42,7 @@ class Scheduler:
         if scheduled_seqs:
             return scheduled_seqs, True
 
-        while self.running and num_seqs < self.max_num_seqs:
+        while self.running and num_sequences < self.max_num_seqs:
             seq = self.running.popleft()
             while not self.block_manager.can_append(seq):
                 if self.running:
@@ -51,35 +51,35 @@ class Scheduler:
                     self.preempt(seq)
                     break
             else:
-                num_seqs += 1
+                num_sequences += 1
                 self.block_manager.may_append(seq)
                 scheduled_seqs.append(seq)
         assert scheduled_seqs
         self.running.extendleft(reversed(scheduled_seqs))
         return scheduled_seqs, False
 
-    def preempt(self, seq):
+    def preempt(self, sequence):
         # pause the sequence and deallocate its blocks.
         # but this sequence has higher priority than other waiting sequences,
         # so we put it to the front of the waiting queue. (waiting.appendleft)
-        seq.status = SequenceStatus.WAITING
-        self.block_manager.deallocate(seq)
-        self.waiting.appendleft(seq)
+        sequence.status = SequenceStatus.WAITING
+        self.block_manager.deallocate(sequence)
+        self.waiting.appendleft(sequence)
 
-    def postprocess(self, seqs, generated_token_ids):
+    def postprocess(self, sequences, generated_token_ids):
         # add newly generated tokens to sequences
-        for seq, generated_token_id in zip(seqs, generated_token_ids):
-            seq.append_token(generated_token_id)
+        for sequence, generated_token_id in zip(sequences, generated_token_ids):
+            sequence.append_token(generated_token_id)
             finished = False
-            if not seq.ignore_eos and generated_token_id == self.eos:
+            if not sequence.ignore_eos and generated_token_id == self.eos:
                 # if the generated token is eos token, we finish this sequence.
-                seq.finish_reason = FinishReason.STOP
+                sequence.finish_reason = FinishReason.STOP
                 finished = True
-            elif seq.num_completion_tokens >= seq.max_tokens:
+            elif sequence.num_completion_tokens >= sequence.max_tokens:
                 # and if the sequence reaches max_tokens, we also finish it.
-                seq.finish_reason = FinishReason.LENGTH
+                sequence.finish_reason = FinishReason.LENGTH
                 finished = True
             if finished:
-                seq.status = SequenceStatus.FINISHED
-                self.block_manager.deallocate(seq)
-                self.running.remove(seq)
+                sequence.status = SequenceStatus.FINISHED
+                self.block_manager.deallocate(sequence)
+                self.running.remove(sequence)

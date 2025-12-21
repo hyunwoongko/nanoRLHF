@@ -138,13 +138,13 @@ class ListArray(Array):
         )
 
     def to_list(self) -> List[Optional[list]]:
-        out: List[Optional[list]] = []
+        outputs: List[Optional[list]] = []
         for i in range(self.length):
             if self.is_null(i):
-                out.append(None)
+                outputs.append(None)
             else:
-                out.append(self[i])
-        return out
+                outputs.append(self[i])
+        return outputs
 
     @classmethod
     def from_list(cls, data: List[Optional[Iterable[Any]]]) -> "ListArray":

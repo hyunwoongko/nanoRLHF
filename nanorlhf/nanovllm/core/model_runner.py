@@ -12,7 +12,7 @@ from nanorlhf.nanovllm.core.sequence import Sequence
 from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
-@nanoray.actor
+@nanoray.remote
 class ModelRunner:
     def __init__(self, config: NanoVLLMConfig, rank: int, actor_config=None):
         self.config = config
@@ -26,7 +26,9 @@ class ModelRunner:
         self.tensor_parallel_size = int(config.tensor_parallel_size)
 
         model = AutoModelForCausalLM.from_pretrained(
-            config.model, torch_dtype=getattr(config.hf_config, "torch_dtype", torch.float16)
+            config.model,
+            trust_remote_code=True,
+            torch_dtype=torch.bfloat16,
         )
 
         if actor_config is not None:
@@ -108,9 +110,9 @@ class ModelRunner:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         max_num_batched_tokens, max_model_len = self.config.max_num_batched_tokens, self.config.max_model_len
-        num_seqs = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
-        seqs = [Sequence([0] * max_model_len) for _ in range(num_seqs)]
-        self.run(seqs, True)
+        num_sequences = min(max_num_batched_tokens // max_model_len, self.config.max_num_seqs)
+        sequences = [Sequence([0] * max_model_len) for _ in range(num_sequences)]
+        self.run(sequences, True)
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
@@ -130,7 +132,7 @@ class ModelRunner:
         if head_dim is None:
             head_dim = hf_config.hidden_size // hf_config.num_attention_heads
 
-        dtype = getattr(hf_config, "torch_dtype", torch.float16)
+        dtype = getattr(hf_config, "torch_dtype", torch.bfloat16)
         itemsize = torch.tensor([], dtype=dtype).dtype.itemsize
         block_bytes = 2 * hf_config.num_hidden_layers * config.kvcache_block_size * num_kv_heads * head_dim * itemsize
 
@@ -164,55 +166,55 @@ class ModelRunner:
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return block_tables
 
-    def prepare_prefill(self, seqs):
-        lengths = [len(s) for s in seqs]
-        seqlens_q = []
-        seqlens_k = []
+    def prepare_prefill(self, sequences):
+        lengths = [len(s) for s in sequences]
+        seq_lens_q = []
+        seq_lens_k = []
         packed_ids = []
-        packed_pos = []
+        packed_positions = []
         slot_mapping = []
-        block_tables = self.prepare_block_tables(seqs)
+        block_tables = self.prepare_block_tables(sequences)
 
-        for seq in seqs:
-            length = len(seq)
-            prefix = int(seq.num_cached_tokens)
+        for sequence in sequences:
+            length = len(sequence)
+            prefix = int(sequence.num_cached_tokens)
             assert 0 <= prefix <= length
 
-            suffix_ids = list(seq.token_ids[prefix:length])
-            suffix_len = len(suffix_ids)
-            assert suffix_len > 0, "suffix_len must be > 0 for prefill"
+            suffix_ids = list(sequence.token_ids[prefix:length])
+            suffix_length = len(suffix_ids)
+            assert suffix_length > 0, "suffix_len must be > 0 for prefill"
 
             packed_ids.extend(suffix_ids)
-            packed_pos.extend(range(prefix, length))
-            seqlens_q.append(suffix_len)
-            seqlens_k.append(length)
+            packed_positions.extend(range(prefix, length))
+            seq_lens_q.append(suffix_length)
+            seq_lens_k.append(length)
 
             if block_tables is not None:
-                assert len(seq.block_table) > 0, "block_tables is not None but seq.block_table is empty"
-                for pos in range(prefix, length):
-                    block_idx = pos // self.block_size
-                    assert block_idx < len(seq.block_table)
-                    page_id = seq.block_table[block_idx]
-                    offset = pos % self.block_size
+                assert len(sequence.block_table) > 0, "block_tables is not None but seq.block_table is empty"
+                for position in range(prefix, length):
+                    block_idx = position // self.block_size
+                    assert block_idx < len(sequence.block_table)
+                    page_id = sequence.block_table[block_idx]
+                    offset = position % self.block_size
                     slot_mapping.append(page_id * self.block_size + offset)
 
         if block_tables is None:
-            seqlens_k = seqlens_q[:]
+            seq_lens_k = seq_lens_q[:]
 
-        cu_q = [0]
-        cu_k = [0]
-        for lq in seqlens_q:
-            cu_q.append(cu_q[-1] + lq)
-        for lk in seqlens_k:
-            cu_k.append(cu_k[-1] + lk)
+        cu_seq_lens_q = [0]
+        cu_seq_lens_k = [0]
+        for q_length in seq_lens_q:
+            cu_seq_lens_q.append(cu_seq_lens_q[-1] + q_length)
+        for k_length in seq_lens_k:
+            cu_seq_lens_k.append(cu_seq_lens_k[-1] + k_length)
 
-        cu_seqlens_q = torch.tensor(cu_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_k = torch.tensor(cu_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        max_seqlen_q = int(max(seqlens_q))
-        max_seqlen_k = int(max(seqlens_k))
+        cu_seq_lens_q = torch.tensor(cu_seq_lens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        cu_seq_lens_k = torch.tensor(cu_seq_lens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        max_seq_len_q = int(max(seq_lens_q))
+        max_seq_len_k = int(max(seq_lens_k))
 
         input_ids = torch.tensor([packed_ids], dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        position_ids = torch.tensor([packed_pos], dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
+        position_ids = torch.tensor([packed_positions], dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         attention_mask = None
 
         if len(slot_mapping) == 0:
@@ -226,27 +228,27 @@ class ModelRunner:
             slot_mapping=slot_mapping,
             context_lens=context_lens,
             block_tables=block_tables,
-            cu_seqlens_q=cu_seqlens_q,
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_q=max_seqlen_q,
-            max_seqlen_k=max_seqlen_k,
+            cu_seq_lens_q=cu_seq_lens_q,
+            cu_seq_lens_k=cu_seq_lens_k,
+            max_seq_len_q=max_seq_len_q,
+            max_seq_len_k=max_seq_len_k,
         )
         return input_ids, position_ids, attention_mask
 
-    def prepare_decode(self, seqs):
+    def prepare_decode(self, sequences):
         input_ids, position_ids = [], []
         slot_mapping, context_lens = [], []
 
-        for seq in seqs:
-            assert len(seq.block_table) > 0, "decode requires allocated block_table"
-            length = len(seq)
-            input_ids.append(seq.last_token)
+        for sequence in sequences:
+            assert len(sequence.block_table) > 0, "decode requires allocated block_table"
+            length = len(sequence)
+            input_ids.append(sequence.last_token)
             position_ids.append(length - 1)
             context_lens.append(length)
             offset_in_block = (length - 1) % self.block_size
-            slot_mapping.append(seq.block_table[-1] * self.block_size + offset_in_block)
+            slot_mapping.append(sequence.block_table[-1] * self.block_size + offset_in_block)
 
-        block_tables = self.prepare_block_tables(seqs)
+        block_tables = self.prepare_block_tables(sequences)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         position_ids = torch.tensor(position_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
         attention_mask = torch.ones_like(input_ids, dtype=torch.int64).cuda(non_blocking=True)
@@ -256,25 +258,40 @@ class ModelRunner:
         return input_ids, position_ids, attention_mask
 
     def sample(self, logits, seqs):
-        temperatures = [seq.temperature + 1e-12 for seq in seqs]
+        temperatures = [seq.temperature for seq in seqs]
         temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
 
         top_ps = [seq.top_p for seq in seqs]
         top_ps = torch.tensor(top_ps, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).clamp_(0.0, 1.0)
 
-        logits = logits.float().div_(temperatures.unsqueeze(dim=1))
-        sorted_logits, sorted_indices = torch.sort(logits, dim=-1, descending=True)
-        sorted_probs = torch.softmax(sorted_logits, dim=-1)
-        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        greedy_mask = temperatures == 0.0
+        output_token_ids = torch.empty((logits.size(0),), device=logits.device, dtype=torch.long)
 
-        remove_mask = cumulative_probs > top_ps.unsqueeze(dim=1)
-        remove_mask[:, 0] = False
+        if greedy_mask.any():
+            output_token_ids[greedy_mask] = logits[greedy_mask].argmax(dim=-1)
 
-        sorted_logits = sorted_logits.masked_fill(remove_mask, float("-inf"))
-        filtered_logits = torch.empty_like(logits)
-        filtered_logits.scatter_(dim=1, index=sorted_indices, src=sorted_logits)
-        probs = torch.softmax(filtered_logits, dim=-1)
-        return probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
+        if (~greedy_mask).any():
+            logits_sampling = logits[~greedy_mask].float()
+            top_ps_sampling = top_ps[~greedy_mask]
+
+            logits_sampling = logits_sampling.float().div_(temperatures.unsqueeze(dim=1))
+            sorted_logits, sorted_indices = torch.sort(logits_sampling, dim=-1, descending=True)
+            sorted_probs = torch.softmax(sorted_logits, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+
+            remove_mask = cumulative_probs > top_ps_sampling.unsqueeze(dim=1)
+            remove_mask[:, 0] = False
+
+            sorted_logits = sorted_logits.masked_fill(remove_mask, float("-inf"))
+            filtered_logits = torch.empty_like(logits_sampling)
+            filtered_logits.scatter_(dim=1, index=sorted_indices, src=sorted_logits)
+            probs = torch.softmax(filtered_logits, dim=-1)
+
+            # Gumbel-max trick: argmax(probs / Exp(1)) == categorical(probs)
+            sampled_token_ids = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
+            output_token_ids[~greedy_mask] = sampled_token_ids
+
+        return output_token_ids
 
     @torch.inference_mode()
     def capture_decode_cudagraphs(self):
@@ -294,16 +311,13 @@ class ModelRunner:
             last_logits = torch.empty(
                 (batch_size_cap, vocab_size // self.tensor_parallel_size),
                 device=self.device,
-                dtype=getattr(hf_config, "torch_dtype", torch.float16),
+                dtype=torch.bfloat16,
             )
 
             # warm up with eager mode
             set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
             _ = self.model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=False,
+                input_ids=input_ids, attention_mask=attention_mask, position_ids=position_ids, use_cache=False
             ).logits
             reset_context()
             torch.cuda.synchronize()
@@ -335,15 +349,15 @@ class ModelRunner:
             }
             torch.cuda.synchronize()
 
-    def fill_decode_graph_vars(self, seqs: List[Sequence], bs_cap: int):
-        vars = self.graph_vars[bs_cap]
-        batch_size = len(seqs)
+    def fill_decode_graph_vars(self, sequences: List[Sequence], bs_cap: int):
+        graph_vars = self.graph_vars[bs_cap]
+        batch_size = len(sequences)
 
-        input_ids = vars["input_ids"]
-        position_ids = vars["position_ids"]
-        slot_mapping = vars["slot_mapping"]
-        context_lens = vars["context_lens"]
-        block_tables = vars["block_tables"]
+        input_ids = graph_vars["input_ids"]
+        position_ids = graph_vars["position_ids"]
+        slot_mapping = graph_vars["slot_mapping"]
+        context_lens = graph_vars["context_lens"]
+        block_tables = graph_vars["block_tables"]
 
         block_tables.fill_(-1)
         slot_mapping.fill_(-1)
@@ -351,16 +365,16 @@ class ModelRunner:
         input_ids.zero_()
         position_ids.zero_()
 
-        for i, seq in enumerate(seqs):
-            assert len(seq.block_table) > 0, "decode requires allocated block_table"
-            length = len(seq)
+        for i, sequence in enumerate(sequences):
+            assert len(sequence.block_table) > 0, "decode requires allocated block_table"
+            length = len(sequence)
 
-            input_ids[i, 0] = int(seq.last_token)
+            input_ids[i, 0] = int(sequence.last_token)
             position_ids[i, 0] = int(length - 1)
             context_lens[i] = int(length)
             offset_in_block = (length - 1) % self.block_size
-            slot_mapping[i] = int(seq.block_table[-1] * self.block_size + offset_in_block)
-            block_table = seq.block_table
+            slot_mapping[i] = int(sequence.block_table[-1] * self.block_size + offset_in_block)
+            block_table = sequence.block_table
             num_blocks = min(len(block_table), self.max_num_blocks)
             if num_blocks > 0:
                 for j in range(num_blocks):
@@ -400,7 +414,7 @@ class ModelRunner:
                     position_ids=position_ids,
                     use_cache=False,
                 ).logits
-                last_pos = get_context().cu_seqlens_q[1:].to(logits.device, dtype=torch.int64) - 1
+                last_pos = get_context().cu_seq_lens_q[1:].to(logits.device, dtype=torch.int64) - 1
                 logits_for_sampling = logits[0, last_pos, :]
             else:
                 # decode

@@ -3,17 +3,16 @@ import time
 import pytest
 
 import nanorlhf.nanoray as nanoray
-from nanorlhf.nanoray.core.actor import actor
 from nanorlhf.nanoray.api.initialization import NodeConfig
 
 
-@nanoray.remote()
+@nanoray.remote
 def sleep_and_double(x: int, delay: float = 0.05):
     time.sleep(delay)
     return x * 2
 
 
-@actor
+@nanoray.remote
 class Accumulator:
     def __init__(self):
         self.total = 0

@@ -31,13 +31,13 @@ class Session:
 
     Attributes:
         scheduler (Scheduler): The scheduler instance.
-        _workers (Dict[str, WorkerLike]): All workers (local + remote proxies).
-        _local_workers (Dict[str, WorkerLike]): Only local workers (expose `.store`).
-        _default_node_id (str): Default node id for `put()` or caching.
-        _driver_store (Optional[ObjectStore]): Fallback cache when there is no local worker.
-        _router (Optional[Router]): Router for object routing (may be None).
-        _rpc (Optional[RpcClient]): Rpc client for remote fetch (may be None).
-        _aliases (Dict[str, str]): Mapping remote object_id -> local cached object_id.
+        workers (Dict[str, WorkerLike]): All workers (local + remote proxies).
+        local_workers (Dict[str, WorkerLike]): Only local workers (expose `.store`).
+        default_node_id (str): Default node id for `put()` or caching.
+        driver_store (Optional[ObjectStore]): Fallback cache when there is no local worker.
+        router (Optional[Router]): Router for object routing (maybe None).
+        rpc (Optional[RpcClient]): Rpc client for remote fetch (maybe None).
+        aliases (Dict[str, str]): Mapping remote object_id -> local cached object_id.
 
     Examples:
         >>> # Minimal single-node session (local only)
@@ -73,49 +73,48 @@ class Session:
         nodes: Dict[str, Tuple[WorkerLike, Dict[str, Any]]],
         local_workers: Dict[str, WorkerLike] = None,
         default_node_id: Optional[str] = None,
-        *,
         router: Optional[Router] = None,
         rpc: Optional[RpcClient] = None,
     ):
         self.scheduler = Scheduler(policy=policy, nodes=nodes)
 
         # All workers (local + remote proxies)
-        self._workers: Dict[str, WorkerLike] = {nid: w for nid, (w, _) in nodes.items()}
+        self.workers: Dict[str, WorkerLike] = {nid: w for nid, (w, _) in nodes.items()}
 
         # Only local workers (those exposing a `.store` attribute)
-        self._local_workers: Dict[str, WorkerLike] = local_workers
+        self.local_workers: Dict[str, WorkerLike] = local_workers
 
         # Default node id resolution and driver cache setup
-        if self._local_workers:
-            self._default_node_id = (
-                default_node_id if (default_node_id in self._local_workers) else next(iter(self._local_workers))
+        if self.local_workers:
+            self.default_node_id = (
+                default_node_id if (default_node_id in self.local_workers) else next(iter(self.local_workers))
             )
-            self._driver_store: Optional[ObjectStore] = None
+            self.driver_store: Optional[ObjectStore] = None
         else:
             # No local workers: pick any known id for identification
-            self._default_node_id = (
-                default_node_id if (default_node_id in self._workers) else next(iter(self._workers))
+            self.default_node_id = (
+                default_node_id if (default_node_id in self.workers) else next(iter(self.workers))
             )
             # Driver-side cache for remote fetches
-            self._driver_store = ObjectStore("__driver__")
+            self.driver_store = ObjectStore("__driver__")
 
-        self._router = router
-        self._rpc = rpc
+        self.router = router
+        self.rpc = rpc
 
         # Remote object_id -> local cached object_id
-        self._aliases: Dict[str, str] = {}
+        self.aliases: Dict[str, str] = {}
 
-    def _cache_store(self) -> ObjectStore:
+    def cache_store(self) -> ObjectStore:
         """
         Return the store used to cache fetched objects locally.
 
         Returns:
             ObjectStore: Default local worker's store if present, otherwise the driver store.
         """
-        if self._local_workers:
-            return getattr(self._local_workers[self._default_node_id], "store")
-        assert self._driver_store is not None
-        return self._driver_store
+        if self.local_workers:
+            return getattr(self.local_workers[self.default_node_id], "store")
+        assert self.driver_store is not None
+        return self.driver_store
 
     def submit(self, task: Task, blocking=False) -> Optional[ObjectRef]:
         """
@@ -198,11 +197,11 @@ class Session:
                 For remote-only experiments, it is useful to still put values
                 deterministically into the driver cache (e.g., for small config blobs).
         """
-        if self._local_workers:
-            nid = node_id if (node_id in self._local_workers) else self._default_node_id
-            worker = self._local_workers[nid]
+        if self.local_workers:
+            nid = node_id if (node_id in self.local_workers) else self.default_node_id
+            worker = self.local_workers[nid]
             return worker.store.put(value)  # type: ignore[attr-defined]
-        return self._cache_store().put(value)
+        return self.cache_store().put(value)
 
     def _get(self, ref: Optional[ObjectRef]) -> Any:
         """
@@ -246,20 +245,20 @@ class Session:
 
         def _try_local_lookup() -> Optional[Any]:
             # 1) alias cache fast-path
-            local_id = self._aliases.get(ref.object_id)
+            local_id = self.aliases.get(ref.object_id)
             if local_id is not None:
-                store = self._cache_store()
+                store = self.cache_store()
                 if store.has(local_id):
                     return store.get(ObjectRef(object_id=local_id, owner_node_id=getattr(store, "node_id", None)))
 
             # 2) owner-first (when owner is local)
-            if ref.owner_node_id and (ref.owner_node_id in self._local_workers):
-                store = getattr(self._local_workers[ref.owner_node_id], "store")
+            if ref.owner_node_id and (ref.owner_node_id in self.local_workers):
+                store = getattr(self.local_workers[ref.owner_node_id], "store")
                 if store.has(ref.object_id):
                     return store.get(ref)
 
             # 3) scan local workers
-            for w in self._local_workers.values():
+            for w in self.local_workers.values():
                 store = getattr(w, "store")
                 if store.has(ref.object_id):
                     return store.get(ref)
@@ -282,14 +281,14 @@ class Session:
             return val
 
         # 5) remote fetch (requires router+rpc)
-        if self._router is not None and self._rpc is not None:
-            owner_id = self._router.route_object(ref) or ref.owner_node_id
+        if self.router is not None and self.rpc is not None:
+            owner_id = self.router.route_object(ref) or ref.owner_node_id
             if owner_id is None:
                 raise RuntimeError("No owner information available for remote get().")
-            payload = self._rpc.get_object(owner_id, ref.object_id)
-            cache = self._cache_store()
+            payload = self.rpc.get_object(owner_id, ref.object_id)
+            cache = self.cache_store()
             local_ref = cache.put_bytes(payload)  # new local id
-            self._aliases[ref.object_id] = local_ref.object_id
+            self.aliases[ref.object_id] = local_ref.object_id
             return cache.get(local_ref)
 
         raise RuntimeError(
@@ -370,7 +369,7 @@ class Session:
         self.scheduler.unregister_placement_group(pg_id)
 
 
-_GLOBAL_SESSION: Optional[Session] = None
+GLOBAL_SESSION: Optional[Session] = None
 
 
 def init_session(
@@ -403,14 +402,14 @@ def init_session(
         ... }
         >>> _ = init_session(RoundRobin(), nodes, default_node_id="A")
     """
-    global _GLOBAL_SESSION
-    _GLOBAL_SESSION = Session(
+    global GLOBAL_SESSION
+    GLOBAL_SESSION = Session(
         policy=policy,
         nodes=nodes,
         local_workers=local_workers,
         default_node_id=default_node_id,
     )
-    return _GLOBAL_SESSION
+    return GLOBAL_SESSION
 
 
 def get_session() -> Session:
@@ -426,9 +425,9 @@ def get_session() -> Session:
     Examples:
         >>> _ = get_session()  # doctest: +ELLIPSIS
     """
-    if _GLOBAL_SESSION is None:
+    if GLOBAL_SESSION is None:
         raise RuntimeError("Global session is not initialized. Call `init_session(...)` first.")
-    return _GLOBAL_SESSION
+    return GLOBAL_SESSION
 
 
 def get(ref: Union[ObjectRef, List[ObjectRef]]) -> Union[Any, List[Any]]:

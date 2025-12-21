@@ -4,7 +4,7 @@ import triton.language as tl
 
 
 @triton.jit
-def _store_kv_to_cache_kernel(
+def store_kv_to_cache_kernel(
     new_k_ptr,
     new_v_ptr,
     cache_k_ptr,
@@ -21,30 +21,30 @@ def _store_kv_to_cache_kernel(
     dim: tl.constexpr,
     block_size_d: tl.constexpr,
 ):
-    tok = tl.program_id(0)
+    token = tl.program_id(0)
     head = tl.program_id(1)
-    if tok >= num_tokens or head >= kv_heads:
+    if token >= num_tokens or head >= kv_heads:
         return
 
-    slot_idx = tl.load(slot_mapping_ptr + tok)
+    slot_idx = tl.load(slot_mapping_ptr + token)
     offs_d = tl.arange(0, block_size_d)
     mask_d = offs_d < dim
     valid_slot = slot_idx >= 0
 
-    new_k_row = new_k_ptr + tok * stride_new_tok + head * stride_new_head
-    new_v_row = new_v_ptr + tok * stride_new_tok + head * stride_new_head
-    k_vals = tl.load(new_k_row + offs_d * stride_new_d, mask=mask_d, other=0.0)
-    v_vals = tl.load(new_v_row + offs_d * stride_new_d, mask=mask_d, other=0.0)
+    new_k_row = new_k_ptr + token * stride_new_tok + head * stride_new_head
+    new_v_row = new_v_ptr + token * stride_new_tok + head * stride_new_head
+    k_values = tl.load(new_k_row + offs_d * stride_new_d, mask=mask_d, other=0.0)
+    v_values = tl.load(new_v_row + offs_d * stride_new_d, mask=mask_d, other=0.0)
 
     cache_k_row = cache_k_ptr + slot_idx * stride_cache_slot + head * stride_cache_head
     cache_v_row = cache_v_ptr + slot_idx * stride_cache_slot + head * stride_cache_head
 
     store_mask = mask_d & valid_slot
-    tl.store(cache_k_row + offs_d * stride_cache_d, k_vals, mask=store_mask)
-    tl.store(cache_v_row + offs_d * stride_cache_d, v_vals, mask=store_mask)
+    tl.store(cache_k_row + offs_d * stride_cache_d, k_values, mask=store_mask)
+    tl.store(cache_v_row + offs_d * stride_cache_d, v_values, mask=store_mask)
 
 
-def store_kv_to_cache_kernel(key_states_not_repeated, value_states_not_repeated, key_cache, value_cache, slot_mapping):
+def store_kv_to_cache(key_states_not_repeated, value_states_not_repeated, key_cache, value_cache, slot_mapping):
     if not (key_cache.numel() and value_cache.numel()) or slot_mapping is None or slot_mapping.numel() == 0:
         return
 
@@ -76,7 +76,7 @@ def store_kv_to_cache_kernel(key_states_not_repeated, value_states_not_repeated,
         block_size_d *= 2
 
     grid = (num_tokens, kv_heads)
-    _store_kv_to_cache_kernel[grid](
+    store_kv_to_cache_kernel[grid](
         key_flat,
         value_flat,
         k_slots,

@@ -117,7 +117,7 @@ class SeedManager:
 
 
 # Global seed manager instance
-_SEED_MANAGER = SeedManager()
+GLOBAL_SEED_MANAGER = SeedManager()
 
 
 # Helper functions to interact with the global seed manager
@@ -128,7 +128,7 @@ def get_seeds():
     Returns:
         dict: A dictionary mapping ParallelMode to their respective seeds.
     """
-    return _SEED_MANAGER.seeds
+    return GLOBAL_SEED_MANAGER.seeds
 
 
 def get_states(copy: bool = False):
@@ -141,7 +141,7 @@ def get_states(copy: bool = False):
     Returns:
         dict: A dictionary mapping ParallelMode to their respective RNG states.
     """
-    states = _SEED_MANAGER.seed_states
+    states = GLOBAL_SEED_MANAGER.seed_states
 
     if copy:
         new_states = dict()
@@ -150,7 +150,7 @@ def get_states(copy: bool = False):
             new_states[mode] = state.clone()
         return new_states
     else:
-        return _SEED_MANAGER.seed_states
+        return GLOBAL_SEED_MANAGER.seed_states
 
 
 def get_current_mode():
@@ -160,7 +160,7 @@ def get_current_mode():
     Returns:
         ParallelMode: The current parallel mode, or None if not set.
     """
-    return _SEED_MANAGER.current_mode
+    return GLOBAL_SEED_MANAGER.current_mode
 
 
 def add_seed(mode: ParallelMode, seed: int, overwrite: bool = False):
@@ -172,7 +172,7 @@ def add_seed(mode: ParallelMode, seed: int, overwrite: bool = False):
         seed (int): The seed value to set.
         overwrite (bool): Whether to overwrite an existing seed for the mode. Default is False.
     """
-    _SEED_MANAGER.add_seed(mode, seed, overwrite)
+    GLOBAL_SEED_MANAGER.add_seed(mode, seed, overwrite)
 
 
 def set_mode(mode: ParallelMode):
@@ -182,7 +182,7 @@ def set_mode(mode: ParallelMode):
     Args:
         mode (ParallelMode): The parallel mode to switch to.
     """
-    _SEED_MANAGER.set_mode(mode)
+    GLOBAL_SEED_MANAGER.set_mode(mode)
 
 
 def set_seed_states(mode: ParallelMode, state: Tensor):
@@ -193,7 +193,7 @@ def set_seed_states(mode: ParallelMode, state: Tensor):
         mode (ParallelMode): The parallel mode to set the state for.
         state (Tensor): The RNG state tensor to set.
     """
-    _SEED_MANAGER.set_state(mode, state)
+    GLOBAL_SEED_MANAGER.set_state(mode, state)
 
 
 def sync_states():
@@ -213,13 +213,13 @@ def seed(mode: ParallelMode):
     Args:
         mode (ParallelMode): The parallel mode to switch to temporarily.
     """
-    prev = _SEED_MANAGER.current_mode
-    _SEED_MANAGER.set_mode(mode)
+    prev = GLOBAL_SEED_MANAGER.current_mode
+    GLOBAL_SEED_MANAGER.set_mode(mode)
     try:
         yield
     finally:
         if prev is not None:
-            _SEED_MANAGER.set_mode(prev)
+            GLOBAL_SEED_MANAGER.set_mode(prev)
 
 
 def with_seed(func, mode: ParallelMode):
@@ -237,16 +237,16 @@ def with_seed(func, mode: ParallelMode):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         # switch mode
-        current_mode = _SEED_MANAGER.current_mode
-        _SEED_MANAGER.set_mode(mode)
+        current_mode = GLOBAL_SEED_MANAGER.current_mode
+        GLOBAL_SEED_MANAGER.set_mode(mode)
 
         # exec func
-        out = func(*args, **kwargs)
+        output = func(*args, **kwargs)
 
         # recover state
-        _SEED_MANAGER.set_mode(current_mode)
+        GLOBAL_SEED_MANAGER.set_mode(current_mode)
 
-        return out
+        return output
 
     return wrapper
 
@@ -255,4 +255,4 @@ def reset_seeds():
     """
     Reset the global seed manager, clearing all modes, seeds, and states.
     """
-    _SEED_MANAGER.reset()
+    GLOBAL_SEED_MANAGER.reset()

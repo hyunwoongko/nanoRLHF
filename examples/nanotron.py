@@ -16,18 +16,18 @@ import datasets
 import torch
 import torch.distributed as dist
 from torch.optim import AdamW
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, Dataset
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-from nanorlhf.nanosets import Dataset
+
 from nanorlhf.nanotron import MPU, ParallelMode, TensorParallel, PipelineParallel, DataParallel
 
 
 class CausalLMDataset(Dataset):
     def __init__(self, rows: List[str], tokenizer: AutoTokenizer, max_length: int):
         self.rows = rows
-        self.tok = tokenizer
+        self.tokenizer = tokenizer
         self.max_length = max_length
 
     def __len__(self):
@@ -35,7 +35,7 @@ class CausalLMDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         text = self.rows[idx]
-        enc = self.tok(
+        encoded = self.tokenizer(  # noqa
             text,
             add_special_tokens=False,
             truncation=True,
@@ -43,8 +43,8 @@ class CausalLMDataset(Dataset):
             padding="max_length",
             return_tensors="pt",
         )
-        input_ids = enc["input_ids"].squeeze(0)
-        attention_mask = enc["attention_mask"].squeeze(0)
+        input_ids = encoded["input_ids"].squeeze(0)
+        attention_mask = encoded["attention_mask"].squeeze(0)
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
 
@@ -187,7 +187,7 @@ if __name__ == '__main__':
 
         # create data loader
         if args.data_parallel_size > 1:
-            shuffle_by_loader = False
+            shuffle = False
             sampler = DistributedSampler(
                 dataset,
                 num_replicas=mpu.get_world_size(ParallelMode.DATA),
@@ -195,13 +195,13 @@ if __name__ == '__main__':
                 shuffle=True,
             )
         else:
-            shuffle_by_loader = True
+            shuffle = True
             sampler = None
 
         loader = DataLoader(
             dataset,
             batch_size=args.batch_size,
-            shuffle=shuffle_by_loader,
+            shuffle=shuffle,
             pin_memory=True,
             drop_last=True,
             sampler=sampler,

@@ -48,7 +48,7 @@ class ModuleSnapshotGenerator:
         self.snapshot: Optional[ModuleSnapshot] = None
         self._module_orig_forward = module.forward
 
-    def _pick_hidden_state_param(
+    def pick_hidden_state_param(
         self,
         bound_args: Dict[str, Any],
         out_tensor: torch.Tensor,
@@ -70,7 +70,7 @@ class ModuleSnapshotGenerator:
                 return name
         return None
 
-    def _wrapper(self, *args, **kwargs) -> Any:
+    def wrapper(self, *args, **kwargs) -> Any:
         """
         Wrapper for the module's forward method to capture inputs and outputs.
 
@@ -83,7 +83,7 @@ class ModuleSnapshotGenerator:
             raise RuntimeError("`ModuleSnapshotGenerator` expected the first output to be a tensor.")
 
         _kwargs = to_kwargs(self._module_orig_forward, args, kwargs)
-        param_name = self._pick_hidden_state_param(_kwargs, hidden_states)
+        param_name = self.pick_hidden_state_param(_kwargs, hidden_states)
         if param_name is None:
             raise RuntimeError("`ModuleSnapshotGenerator` could not identify the hidden state parameter.")
 
@@ -96,11 +96,11 @@ class ModuleSnapshotGenerator:
             "Early stopping after capturing module snapshot to avoid unnecessary computation."
         )
 
-    def _install(self):
+    def install(self):
         """Install the wrapper to the module's forward method."""
-        self.module.forward = self._wrapper
+        self.module.forward = self.wrapper
 
-    def _uninstall(self):
+    def uninstall(self):
         """Uninstall the wrapper and restore the original forward method."""
         self.module.forward = self._module_orig_forward
 
@@ -116,11 +116,11 @@ class ModuleSnapshotGenerator:
             ModuleSnapshot: The captured snapshot of the module's inputs and outputs.
         """
         try:
-            self._install()
+            self.install()
             _ = model.__nanotron_forward__(**inputs)
         except EarlyStop:
             pass
         finally:
-            self._uninstall()
+            self.uninstall()
 
         return self.snapshot

@@ -32,39 +32,39 @@ class ZeroGradReducer(ABC):
         self._accum_counter = 0
         self._fwd_started = False
 
-        self._attach_model_hooks()
+        self.attach_model_hooks()
 
     @abstractmethod
-    def _model_bwd_post_hook(self):
+    def model_bwd_post_hook(self):
         raise NotImplementedError
 
-    def _attach_model_hooks(self):
-        def _on_model_fwd_pre(_m: nn.Module, _in: Sequence[Any]):
+    def attach_model_hooks(self):
+        def on_model_fwd_pre(_m: nn.Module, _in: Sequence[Any]):
             self._fwd_started = True
 
-        def _on_model_bwd_post(_m: nn.Module, _gin, _gout):
+        def on_model_bwd_post(_m: nn.Module, _gin, _gout):
             if not self._fwd_started:
                 return
             self._fwd_started = False
             self._accum_counter += 1
             if (self._accum_counter % self._accum_steps) == 0:
-                self._model_bwd_post_hook()
+                self.model_bwd_post_hook()
 
-        self.model.register_forward_pre_hook(_on_model_fwd_pre)
-        self.model.register_full_backward_hook(_on_model_bwd_post)
+        self.model.register_forward_pre_hook(on_model_fwd_pre)
+        self.model.register_full_backward_hook(on_model_bwd_post)
 
 
 class ZeroGradReducerStage0(ZeroGradReducer):
 
-    _DEFAULT_BUCKET_SIZE_BYTES = 25 * 1024 * 1024
+    DEFAULT_BUCKET_SIZE_BYTES = 25 * 1024 * 1024
 
     def __init__(self, model: nn.Module, mpu: MPU, accum_steps: int = 1):
         super().__init__(model, mpu, zero_stage=0, accum_steps=accum_steps)
-        self.bucket_size_bytes = int(self._DEFAULT_BUCKET_SIZE_BYTES)
+        self.bucket_size_bytes = int(self.DEFAULT_BUCKET_SIZE_BYTES)
         self._buckets: List[dict] = []
-        self._build_buckets()
+        self.build_buckets()
 
-    def _build_buckets(self):
+    def build_buckets(self):
         if len(self.params) == 0:
             self._buckets = []
             return
@@ -78,7 +78,7 @@ class ZeroGradReducerStage0(ZeroGradReducer):
         cur_dtype = self.params[0].dtype
         cur_device = self.params[0].device
 
-        def _flush_bucket():
+        def flush_bucket():
             nonlocal cur_params, cur_offsets, cur_numel, cur_bytes, cur_dtype, cur_device
             if not cur_params:
                 return
@@ -95,30 +95,30 @@ class ZeroGradReducerStage0(ZeroGradReducer):
             cur_numel = 0
             cur_bytes = 0
 
-        for p in self.params:
-            if p is None or (not p.requires_grad):
+        for param in self.params:
+            if param is None or (not param.requires_grad):
                 continue
 
-            if p.dtype != cur_dtype or p.device != cur_device:
-                _flush_bucket()
-                cur_dtype = p.dtype
-                cur_device = p.device
+            if param.dtype != cur_dtype or param.device != cur_device:
+                flush_bucket()
+                cur_dtype = param.dtype
+                cur_device = param.device
 
-            p_numel = p.numel()
-            p_bytes = p_numel * p.element_size()
+            p_numel = param.numel()
+            p_bytes = p_numel * param.element_size()
 
             if cur_params and (cur_bytes + p_bytes > self.bucket_size_bytes):
-                _flush_bucket()
+                flush_bucket()
 
             cur_offsets.append(cur_numel)
-            cur_params.append(p)
+            cur_params.append(param)
             cur_numel += p_numel
             cur_bytes += p_bytes
 
-        _flush_bucket()
+        flush_bucket()
         self._buckets = buckets
 
-    def _model_bwd_post_hook(self):
+    def model_bwd_post_hook(self):
         if self.world_size == 1:
             return
         if not self._buckets:
@@ -160,22 +160,22 @@ class ZeroGradReducerStage2(ZeroGradReducer):
         super().__init__(model, mpu, zero_stage=2, accum_steps=accum_steps)
         self.owners: List[int] = [idx % self.world_size for idx, _ in enumerate(self.params)]
 
-    def _model_bwd_post_hook(self):
+    def model_bwd_post_hook(self):
         if self.world_size == 1:
             return
 
-        for idx, p in enumerate(self.params):
-            if p.grad is None:
+        for idx, param in enumerate(self.params):
+            if param.grad is None:
                 continue
 
             owner_group_rank = self.owners[idx]
             owner_global_rank = dist.get_global_rank(self.group, owner_group_rank)
-            dist.reduce(p.grad, dst=owner_global_rank, group=self.group)
+            dist.reduce(param.grad, dst=owner_global_rank, group=self.group)
 
             if self.rank == owner_group_rank:
-                p.grad.div_(self.world_size)
+                param.grad.div_(self.world_size)
             else:
-                p.grad = None
+                param.grad = None
 
 
 class ZeroGradReducerStage3(ZeroGradReducer):
@@ -211,7 +211,7 @@ class ZeroGradReducerStage3(ZeroGradReducer):
             dtype=dtype,
         )
 
-    def _model_bwd_post_hook(self):
+    def model_bwd_post_hook(self):
         device = self.flat_param.device
         dtype = self.flat_param.dtype
 
@@ -219,13 +219,13 @@ class ZeroGradReducerStage3(ZeroGradReducer):
         full_buf.zero_()
 
         for meta, offset in zip(self.param_metas, self._offsets):
-            p = meta.param
-            if p.grad is None:
+            param = meta.param
+            if param.grad is None:
                 continue
-            g = p.grad.detach().to(device=device, dtype=dtype).reshape(-1)
-            assert g.numel() == meta.numel, "grad numel != meta.numel"
-            full_buf[offset : offset + meta.numel].copy_(g)
-            p.grad = None
+            grad = param.grad.detach().to(device=device, dtype=dtype).reshape(-1)
+            assert grad.numel() == meta.numel, "grad numel != meta.numel"
+            full_buf[offset : offset + meta.numel].copy_(grad)
+            param.grad = None
 
         if self.flat_param.grad is None or self.flat_param.grad.numel() != self.shard_size:
             shard_grad = torch.zeros(self.shard_size, device=device, dtype=dtype)

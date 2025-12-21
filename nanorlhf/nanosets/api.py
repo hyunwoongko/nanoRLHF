@@ -42,7 +42,6 @@ class Dataset:
     def from_list(
         cls,
         rows: List[Optional[Dict[str, Any]]],
-        *,
         strict_keys: bool = False,
         batch_size: Optional[int] = DEFAULT_BATCH_SIZE,
     ) -> "Dataset":
@@ -95,11 +94,11 @@ class Dataset:
     ) -> "Dataset":
         new_batches: List[RecordBatch] = []
         if not batched:
-            for b in self._table.batches:
-                rows = b.to_list()
+            for batch in self._table.batches:
+                rows = batch.to_list()
                 out_rows: List[Optional[Dict[str, Any]]] = []
-                for r in rows:
-                    out_rows.append(function(r))
+                for row in rows:
+                    out_rows.append(function(row))
                 new_batches.append(RecordBatch.from_list(out_rows))
         else:
             actual_bs = batch_size if batch_size is not None and batch_size > 0 else None
@@ -117,10 +116,10 @@ class Dataset:
                 new_batches.append(RecordBatch.from_list(mapped))
                 buffer = []
 
-            for b in self._table.batches:
-                rows = b.to_list()
-                for r in rows:
-                    buffer.append(r)
+            for batch in self._table.batches:
+                rows = batch.to_list()
+                for row in rows:
+                    buffer.append(row)
                     flush(False)
             flush(True)
         return Dataset(Table.from_batches(new_batches))
@@ -132,16 +131,16 @@ class Dataset:
     ) -> "Dataset":
         new_batches: List[RecordBatch] = []
         buffer: List[Optional[Dict[str, Any]]] = []
-        bs = batch_size if batch_size is not None and batch_size > 0 else None
+        bsz = batch_size if batch_size is not None and batch_size > 0 else None
 
-        for b in self._table.batches:
-            rows = b.to_list()
-            for r in rows:
-                if r is None:
+        for batch in self._table.batches:
+            rows = batch.to_list()
+            for row in rows:
+                if row is None:
                     continue
-                if predicate(r):
-                    buffer.append(r)
-                    if bs is not None and len(buffer) >= bs:
+                if predicate(row):
+                    buffer.append(row)
+                    if bsz is not None and len(buffer) >= bsz:
                         new_batches.append(RecordBatch.from_list(buffer))
                         buffer = []
 

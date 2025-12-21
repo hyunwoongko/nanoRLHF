@@ -4,12 +4,12 @@ import cloudpickle
 import torch
 import zstandard as zstd
 
-_MAGIC = b"NRAY1"
-_ALG_NONE = b"NONE"  # 4 bytes
-_ALG_ZSTD = b"ZSTD"  # 4 bytes
+MAGIC = b"NRAY1"
+ALG_NONE = b"NONE"  # 4 bytes
+ALG_ZSTD = b"ZSTD"  # 4 bytes
 
 
-def _is_cuda_tensor(x: Any) -> bool:
+def is_cuda_tensor(x: Any) -> bool:
     """
     Check if x is a CUDA tensor.
 
@@ -22,7 +22,7 @@ def _is_cuda_tensor(x: Any) -> bool:
     return isinstance(x, torch.Tensor) and x.is_cuda
 
 
-def _to_cpu(obj: Any) -> Any:
+def to_cpu(obj: Any) -> Any:
     """
     Recursively move all CUDA tensors in obj to CPU.
 
@@ -32,12 +32,12 @@ def _to_cpu(obj: Any) -> Any:
     Returns:
         Any: Object with all CUDA tensors moved to CPU
     """
-    if _is_cuda_tensor(obj):
+    if is_cuda_tensor(obj):
         return obj.cpu()
     elif isinstance(obj, Mapping):
-        return {k: _to_cpu(v) for k, v in obj.items()}
+        return {k: to_cpu(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
-        return type(obj)(_to_cpu(v) for v in obj)
+        return type(obj)(to_cpu(v) for v in obj)
     else:
         return obj
 
@@ -75,7 +75,7 @@ def dumps(
         Q. Does `tensor_to_cpu` mutate the original object?
             No. We build a CPU-normalized copy for tensors (container types are rebuilt).
     """
-    target = _to_cpu(obj) if tensor_to_cpu else obj
+    target = to_cpu(obj) if tensor_to_cpu else obj
     raw = cloudpickle.dumps(target)
 
     use_zstd = (
@@ -86,9 +86,9 @@ def dumps(
     if use_zstd:
         cctx = zstd.ZstdCompressor(level=int(zstd_level))
         comp = cctx.compress(raw)
-        return _MAGIC + _ALG_ZSTD + comp
+        return MAGIC + ALG_ZSTD + comp
     else:
-        return _MAGIC + _ALG_NONE + raw
+        return MAGIC + ALG_NONE + raw
 
 
 def loads(buf: bytes) -> Any:
@@ -104,15 +104,15 @@ def loads(buf: bytes) -> Any:
     Raises:
         ValueError: If header is malformed or algorithm is unknown.
     """
-    if not buf.startswith(_MAGIC):
+    if not buf.startswith(MAGIC):
         return cloudpickle.loads(buf)
 
-    alg = buf[len(_MAGIC): len(_MAGIC) + 4]
-    body = buf[len(_MAGIC) + 4:]
+    alg = buf[len(MAGIC): len(MAGIC) + 4]
+    body = buf[len(MAGIC) + 4:]
 
-    if alg == _ALG_NONE:
+    if alg == ALG_NONE:
         return cloudpickle.loads(body)
-    if alg == _ALG_ZSTD:
+    if alg == ALG_ZSTD:
         dctx = zstd.ZstdDecompressor()
         raw = dctx.decompress(body)
         return cloudpickle.loads(raw)

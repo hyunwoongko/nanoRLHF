@@ -35,17 +35,17 @@ def run_layer(
     hidden_states = inputs[input_param_name]
     if gradient_checkpointing_enable:
 
-        def fn(hs, **kw):
-            return layer(**{input_param_name: hs, **kw})
+        def fn(hs, **kwargs):
+            return layer(**{input_param_name: hs, **kwargs})
 
-        kw = {k: v for k, v in inputs.items() if k != input_param_name}
-        out = checkpoint(fn, hidden_states, **kw, use_reentrant=False)
+        kwargs = {k: v for k, v in inputs.items() if k != input_param_name}
+        output = checkpoint(fn, hidden_states, **kwargs, use_reentrant=False)
     else:
-        out = layer(**inputs)
+        output = layer(**inputs)
 
-    if isinstance(out, (list, tuple)):
-        out = out[0]
-    return out
+    if isinstance(output, (list, tuple)):
+        output = output[0]
+    return output
 
 
 def get_output_type(model: nn.Module):
@@ -85,7 +85,13 @@ def post_process_hf_model(
         output_type = get_output_type(model)
         if output_type == TokenClassifierOutput:
             return output_type(logits=logits, hidden_states=last_hidden_state)
-        return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
+        elif output_type == QuestionAnsweringModelOutput:
+            start_logits, end_logits = logits.split(1, dim=-1)
+            start_logits = start_logits.squeeze(-1).contiguous()
+            end_logits = end_logits.squeeze(-1).contiguous()
+            return output_type(start_logits=start_logits, end_logits=end_logits, hidden_states=last_hidden_state)
+        else:
+            return output_type(logits=logits, hidden_states=last_hidden_state, past_key_values=past_key_values)
 
     if is_causal_lm(model):
         labels = nn.functional.pad(labels, (0, 1), value=-100)

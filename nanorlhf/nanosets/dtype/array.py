@@ -26,22 +26,22 @@ class Array(ABC):
     def is_contiguous(self):
         return self.indices is None
 
-    def is_null(self, i: int) -> bool:
+    def is_null(self, idx: int) -> bool:
         if self.validity is None:
             return False
 
-        i = normalize_index(i, self.length)
+        normalized_idx = normalize_index(idx, self.length)
         if self.is_contiguous():
-            return not self.validity[i]
+            return not self.validity[normalized_idx]
 
-        base_i = unpack_int32(self.indices, i)
-        return not self.validity[base_i]
+        base_idx = unpack_int32(self.indices, normalized_idx)
+        return not self.validity[base_idx]
 
-    def base_index(self, i: int) -> int:
-        i = normalize_index(i, self.length)
+    def base_index(self, idx: int) -> int:
+        normalized_idx = normalize_index(idx, self.length)
         if self.is_contiguous():
-            return i
-        return unpack_int32(self.indices, i)
+            return normalized_idx
+        return unpack_int32(self.indices, normalized_idx)
 
     def __len__(self):
         return self.length

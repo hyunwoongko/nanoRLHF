@@ -36,7 +36,7 @@ def file_barrier(name: str, rank: int, world_size: int, barrier_dir: str, timeou
         time.sleep(0.05)
 
 
-@nanoray.actor
+@nanoray.remote
 class TPShard:
     def __init__(self, rank: int, world_size: int, barrier_dir: str, hidden_size: int = 8, init_delay: float = 0.2):
         import numpy as _np

@@ -67,7 +67,7 @@ class SFTTrainer(BaseTrainer):
             )
 
         session = nanoray.init(nodes, default_node_id="node-0")
-        node_ids = list(session._workers.keys())
+        node_ids = list(session.workers.keys())
         if len(node_ids) < self.global_world_size:
             raise RuntimeError(
                 "`nanoray` was initialized with fewer nodes than `global_world_size`; "

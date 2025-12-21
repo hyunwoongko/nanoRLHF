@@ -37,13 +37,13 @@ class TensorArray(Array):
 
     def __getitem__(self, key):
         if isinstance(key, int):
-            i = normalize_index(key, self.length)
-            if self.is_null(i):
+            normalized_idx = normalize_index(key, self.length)
+            if self.is_null(normalized_idx):
                 return None
-            base_i = self.base_index(i)
-            if not (0 <= base_i < self.base_length):
-                raise IndexError(f"base index {base_i} out of range [0, {self.base_length})")
-            return self._tensors[base_i]
+            base_idx = self.base_index(normalized_idx)
+            if not (0 <= base_idx < self.base_length):
+                raise IndexError(f"base index {base_idx} out of range [0, {self.base_length})")
+            return self._tensors[base_idx]
 
         if isinstance(key, slice):
             start, stop, step = key.indices(self.length)

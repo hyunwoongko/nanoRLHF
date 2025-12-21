@@ -15,7 +15,7 @@ class TPBroadcastFunction(torch.autograd.Function):
         return inputs
 
     @staticmethod
-    def backward(ctx: Any, grad: torch.Tensor):
+    def backward(ctx: Any, grad: torch.Tensor):  # noqa
         return ctx.collectives.all_reduce(grad), None, None
 
 
@@ -27,7 +27,7 @@ class TPAllReduceFunction(torch.autograd.Function):
         return collectives.all_reduce(inputs)
 
     @staticmethod
-    def backward(ctx: Any, grad: torch.Tensor):
+    def backward(ctx: Any, grad: torch.Tensor):  # noqa
         return grad, None, None
 
 
@@ -39,7 +39,7 @@ class TPAllGatherFunction(torch.autograd.Function):
         return ctx.collectives.all_gather(inputs, dim=dim)
 
     @staticmethod
-    def backward(ctx: Any, grad: torch.Tensor):
+    def backward(ctx: Any, grad: torch.Tensor):  # noqa
         return ctx.collectives.scatter(grad, dim=ctx.dim), None, None, None
 
 
@@ -51,7 +51,7 @@ class TPScatterFunction(torch.autograd.Function):
         return ctx.collectives.scatter(inputs, dim=dim)
 
     @staticmethod
-    def backward(ctx: Any, grad: torch.Tensor):
+    def backward(ctx: Any, grad: torch.Tensor):  # noqa
         return ctx.collectives.all_gather(grad, dim=ctx.dim), None, None, None
 
 

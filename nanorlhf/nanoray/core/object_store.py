@@ -49,8 +49,8 @@ class ObjectStore:
             node_id (str): Identifier of the node owning this store.
         """
         self.node_id = node_id
-        self._store: Dict[str, Any] = {}
-        self._sizes: Dict[str, int] = {}
+        self.store: Dict[str, Any] = {}
+        self.sizes: Dict[str, int] = {}
 
     def __len__(self) -> int:
         """
@@ -66,7 +66,7 @@ class ObjectStore:
             >>> len(store)
             2
         """
-        return len(self._store)
+        return len(self.store)
 
     def has(self, ref_or_id: Any) -> bool:
         """
@@ -85,7 +85,7 @@ class ObjectStore:
             (True, True)
         """
         oid = ref_or_id.object_id if isinstance(ref_or_id, ObjectRef) else str(ref_or_id)
-        return oid in self._store
+        return oid in self.store
 
     def put(self, value: Any) -> ObjectRef:
         """
@@ -112,11 +112,11 @@ class ObjectStore:
                 - Return an `ObjectRef(object_id=id, owner_node_id=this_node)`.
         """
         object_id = f"obj-{uuid.uuid4().hex[:8]}"
-        self._store[object_id] = value
+        self.store[object_id] = value
         # NOTE: we DO NOT compute size here to avoid double-serialization cost.
         return ObjectRef(object_id=object_id, owner_node_id=self.node_id, size_bytes=None)
 
-    def put_future(self, fut: Future, *, object_id: Optional[str] = None) -> ObjectRef:
+    def put_future(self, future: Future, object_id: Optional[str] = None) -> ObjectRef:
         """
         Insert a ``Future`` into the store and return an ``ObjectRef`` immediately.
 
@@ -125,7 +125,7 @@ class ObjectStore:
         so subsequent reads are fast and do not re-wait the future.
 
         Args:
-            fut (Future): Future whose ``result()`` yields the value to store.
+            future (Future): Future whose ``result()`` yields the value to store.
             object_id (Optional[str]): Optional stable object id. If omitted, a
                 new id is generated.
 
@@ -134,18 +134,18 @@ class ObjectStore:
         """
 
         oid = object_id or f"obj-{uuid.uuid4().hex[:8]}"
-        self._store[oid] = fut
+        self.store[oid] = future
 
-        def _materialize(f: Future):
+        def materialize(f: Future):
             if f.cancelled():
                 return
             try:
                 value = f.result()
-                self._store[oid] = value
+                self.store[oid] = value
             except Exception as exc:  # pragma: no cover - stored as-is
-                self._store[oid] = exc
+                self.store[oid] = exc
 
-        fut.add_done_callback(_materialize)
+        future.add_done_callback(materialize)
         return ObjectRef(object_id=oid, owner_node_id=self.node_id, size_bytes=None)
 
     def get(self, ref: ObjectRef) -> Any:
@@ -168,16 +168,16 @@ class ObjectStore:
             >>> store.get(r)
             99
         """
-        if ref.object_id not in self._store:
+        if ref.object_id not in self.store:
             raise KeyError(f"Object not found locally: {ref.object_id}")
 
-        val = self._store[ref.object_id]
-        if isinstance(val, Future):
-            val = val.result()
-            self._store[ref.object_id] = val
-        if isinstance(val, Exception):
-            raise val
-        return val
+        value = self.store[ref.object_id]
+        if isinstance(value, Future):
+            value = value.result()
+            self.store[ref.object_id] = value
+        if isinstance(value, Exception):
+            raise value
+        return value
 
     def get_bytes(self, object_id: str) -> bytes:
         """
@@ -194,18 +194,18 @@ class ObjectStore:
                 - This is a low-level API for networking layers to fetch raw bytes.
                 - Most users should use `get(ref)` which handles deserialization.
         """
-        if object_id not in self._store:
+        if object_id not in self.store:
             raise KeyError(f"Object not found locally: {object_id}")
 
-        val = self._store[object_id]
-        if isinstance(val, Future):
-            val = val.result()
-            self._store[object_id] = val
-        if isinstance(val, Exception):
-            raise val
+        value = self.store[object_id]
+        if isinstance(value, Future):
+            value = value.result()
+            self.store[object_id] = value
+        if isinstance(value, Exception):
+            raise value
 
-        payload = dumps(val)
-        self._sizes[object_id] = len(payload)
+        payload = dumps(value)
+        self.sizes[object_id] = len(payload)
         return payload
 
     def put_bytes(self, payload: bytes) -> ObjectRef:
@@ -228,7 +228,7 @@ class ObjectStore:
         """
         value = loads(payload)
         ref = self.put(value)
-        self._sizes[ref.object_id] = len(payload)
+        self.sizes[ref.object_id] = len(payload)
         return ObjectRef(object_id=ref.object_id, owner_node_id=self.node_id, size_bytes=len(payload))
 
     def get_size(self, object_id: str) -> Optional[int]:
@@ -241,7 +241,7 @@ class ObjectStore:
         Returns:
             Optional[int]: Size in bytes if known, else None.
         """
-        return self._sizes.get(object_id)
+        return self.sizes.get(object_id)
 
     def delete(self, object_id: str) -> None:
         """
@@ -250,4 +250,4 @@ class ObjectStore:
         Args:
             object_id (str): Id to remove.
         """
-        self._store.pop(object_id, None)
+        self.store.pop(object_id, None)

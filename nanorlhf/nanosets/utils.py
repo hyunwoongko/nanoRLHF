@@ -23,10 +23,10 @@ def is_bool_seq(seq) -> bool:
     if isinstance(seq, (str, bytes, bytearray)):
         return False
     try:
-        for v in seq:
-            if v is None:
+        for item in seq:
+            if item is None:
                 continue
-            if not isinstance(v, bool):
+            if not isinstance(item, bool):
                 return False
         return True
     except TypeError:
@@ -40,8 +40,8 @@ def unpack_int32(buffer: Buffer, position: int) -> int:
 def pack_int32(indices: Sequence[int]) -> Buffer:
     byte_array = bytearray(len(indices) * 4)
     offset = 0
-    for i in indices:
-        struct.pack_into("<i", byte_array, offset, int(i))
+    for idx in indices:
+        struct.pack_into("<i", byte_array, offset, int(idx))
         offset += 4
     return Buffer.from_bytearray(byte_array)
 

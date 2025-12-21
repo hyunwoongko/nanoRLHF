@@ -55,12 +55,12 @@ class ParallelizableModuleMixin:
         if hasattr(module, "mode"):
             del module.mode
 
-        for key, val in kwargs.items():
-            if val is None:
+        for key, value in kwargs.items():
+            if value is None:
                 if hasattr(module, key):
                     delattr(module, key)
             else:
-                setattr(module, key, val)
+                setattr(module, key, value)
 
         return module
 
@@ -157,13 +157,13 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
             f"vocab_end_idx={self.vocab_end_idx}"
         )
 
-    def forward(self, input: torch.Tensor):
+    def forward(self, inputs: torch.Tensor):
         if self.world_size > 1:
-            input_mask = (input < self.vocab_start_idx) | (input > self.vocab_end_idx)
-            masked_input = input.clone() - self.vocab_start_idx
+            input_mask = (inputs < self.vocab_start_idx) | (inputs > self.vocab_end_idx)
+            masked_input = inputs.clone() - self.vocab_start_idx
             masked_input[input_mask] = 0
         else:
-            masked_input = input
+            masked_input = inputs
 
         output_parallel = F.embedding(
             masked_input,
@@ -176,7 +176,7 @@ class VocabParallelEmbedding(nn.Embedding, ParallelizableModuleMixin):
         )
 
         if self.world_size > 1:
-            output_parallel[input_mask, :] = 0.0
+            output_parallel[input_mask, :] = 0.0  # noqa
 
         return tp_all_reduce(output_parallel, self.mpu, self.mode)
 
@@ -209,11 +209,11 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         )
 
     @staticmethod
-    def _has_bias(module):
+    def has_bias(module):
         return hasattr(module, "bias") and module.bias is not None and module.bias.dim() >= 1
 
     @classmethod
-    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
+    def scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
         attention_type = plan.attention_type
         rank = mpu.get_local_rank(mode)
@@ -231,7 +231,7 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         return tensor
 
     @classmethod
-    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
+    def gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
         world_size = mpu.get_world_size(mode)
         attention_type = plan.attention_type
@@ -259,9 +259,9 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
                 module.weight.data = module.weight.data.t()
 
             if scatter_tensor is True:
-                module.weight = cls._scatter_tensor(plan, mpu, mode, "weight")
-                if cls._has_bias(module):
-                    module.bias = cls._scatter_tensor(plan, mpu, mode, "bias")
+                module.weight = cls.scatter_tensor(plan, mpu, mode, "weight")
+                if cls.has_bias(module):
+                    module.bias = cls.scatter_tensor(plan, mpu, mode, "bias")
                 tag_module(module, mode, rank)
 
         return cls.convert_to_parallel_module(
@@ -278,9 +278,9 @@ class ColumnParallelLinear(nn.Linear, ParallelizableModuleMixin):
         module = plan.module
         with torch.no_grad():
             if gather_tensor is True:
-                module.weight = cls._gather_tensor(plan, mpu, mode, "weight")
-                if cls._has_bias(module):
-                    module.bias = cls._gather_tensor(plan, mpu, mode, "bias")
+                module.weight = cls.gather_tensor(plan, mpu, mode, "weight")
+                if cls.has_bias(module):
+                    module.bias = cls.gather_tensor(plan, mpu, mode, "bias")
 
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
@@ -348,7 +348,7 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         )
 
     @classmethod
-    def _scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
+    def scatter_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
         rank = mpu.get_local_rank(mode)
         world_size = mpu.get_world_size(mode)
@@ -358,7 +358,7 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         return tensor
 
     @classmethod
-    def _gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
+    def gather_tensor(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode, tensor_type: str):
         tensor = getattr(plan.module, tensor_type)
         world_size = mpu.get_world_size(mode)
 
@@ -377,7 +377,7 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
         with torch.no_grad():
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
-            module.weight = cls._scatter_tensor(plan, mpu, mode, "weight")
+            module.weight = cls.scatter_tensor(plan, mpu, mode, "weight")
 
         return cls.convert_to_parallel_module(
             plan=plan,
@@ -392,7 +392,7 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
     def deparallelize(cls, plan: ModuleParallelPlan, mpu: MPU, mode: ParallelMode):
         module = plan.module
         with torch.no_grad():
-            module.weight = cls._gather_tensor(plan, mpu, mode, "weight")
+            module.weight = cls.gather_tensor(plan, mpu, mode, "weight")
             if not plan.is_reversed:
                 module.weight.data = module.weight.data.t()
 
@@ -406,11 +406,11 @@ class RowParallelLinear(nn.Linear, ParallelizableModuleMixin):
     def extra_repr(self) -> str:
         return f"in_features={self.in_features}, out_features={self.out_features}"
 
-    def forward(self, input: torch.Tensor):
+    def forward(self, inputs: torch.Tensor):
         if not self.parallel_input:
-            input = tp_scatter(input, dim=-1, mpu=self.mpu, mode=self.mode)
+            inputs = tp_scatter(inputs, dim=-1, mpu=self.mpu, mode=self.mode)
 
-        outputs = F.linear(input, self.weight, bias=None)
+        outputs = F.linear(inputs, self.weight, bias=None)
         outputs = tp_all_reduce(outputs, self.mpu, self.mode)
 
         if self.bias is not None:

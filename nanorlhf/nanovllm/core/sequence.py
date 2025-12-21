@@ -31,7 +31,7 @@ class Sequence:
     block_size = KVCACHE_BLOCK_SIZE
 
     def __init__(self, token_ids, sampling_params=SamplingParams()):
-        self.seq_id = next(Sequence.counter)
+        self.sequence_id = next(Sequence.counter)
         self.status = SequenceStatus.WAITING
         self.token_ids = copy(token_ids)
         self.last_token = token_ids[-1] if len(token_ids) > 0 else None

@@ -20,6 +20,7 @@ def patch_kernel(model, use_paged_attention=False):
 
     if attn_impl not in modeling_utils.ALL_ATTENTION_FUNCTIONS:
         modeling_utils.ALL_ATTENTION_FUNCTIONS._global_mapping[attn_impl] = attn_func
+    if attn_impl not in masking_utils.ALL_MASK_ATTENTION_FUNCTIONS:
         masking_utils.ALL_MASK_ATTENTION_FUNCTIONS._global_mapping[attn_impl] = mask_func
     if hasattr(model.config, "_attn_implementation"):
         model.config._attn_implementation = attn_impl

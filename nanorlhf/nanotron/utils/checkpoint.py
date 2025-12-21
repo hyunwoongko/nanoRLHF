@@ -12,14 +12,14 @@ from nanorlhf.nanotron.distributed.mpu import MPU
 logger = getLogger(__name__)
 
 
-def _get_any_param_dtype(model: nn.Module) -> torch.dtype:
-    for p in model.parameters():
-        if p is not None:
-            return p.dtype
+def get_any_param_dtype(model: nn.Module) -> torch.dtype:
+    for param in model.parameters():
+        if param is not None:
+            return param.dtype
     return torch.float32
 
 
-def _load_zero3_flat_param(model, state_dict):
+def load_zero3_flat_param(model, state_dict):
     reducer = getattr(model, "__nanotron_zero_reducer__", None)
     if reducer is None:
         raise RuntimeError("from_parallelized(ZeRO-3): __nanotron_zero_reducer__ not found on model")
@@ -45,7 +45,7 @@ def _load_zero3_flat_param(model, state_dict):
         )
 
 
-def _save_parallelized_with_merge(
+def save_parallelized_with_merge(
     self,
     mpu: MPU,
     save_directory: Union[str, os.PathLike],
@@ -100,7 +100,7 @@ def _save_parallelized_with_merge(
                 raise RuntimeError("save_parallelized(ZeRO-3): __nanotron_zero_reducer__.flat_param not found")
             flat_param = reducer.flat_param.detach().cpu()
             state_dict_zero3 = {"flat_param": flat_param}
-            _load_zero3_flat_param(model_to_save, state_dict_zero3)
+            load_zero3_flat_param(model_to_save, state_dict_zero3)
 
         model_to_save.deparallelize()
         state_dict_merged = model_to_save.state_dict()
@@ -108,7 +108,7 @@ def _save_parallelized_with_merge(
         raise RuntimeError("save_parallelized_with_merge: __nanotron_wrappers__ not found on model")
 
     if hasattr(model_to_save, "config"):
-        dtype = _get_any_param_dtype(model_to_save)
+        dtype = get_any_param_dtype(model_to_save)
         model_to_save.config.torch_dtype = str(dtype).split(".")[-1]
         model_to_save.config.architectures = [model_to_save.__class__.__name__]
         if save_config and tp_rank == 0 and pp_rank == 0 and dp_rank == 0:
@@ -127,7 +127,7 @@ def _save_parallelized_with_merge(
         logger.info(f"[merge] Model weights saved in {output_model_file}")
 
 
-def _save_parallelized_without_merge(
+def save_parallelized_without_merge(
     self,
     mpu: MPU,
     save_directory: Union[str, os.PathLike],
@@ -142,12 +142,12 @@ def _save_parallelized_without_merge(
     tp_world_size = mpu.get_world_size(ParallelMode.TENSOR)
     pp_world_size = mpu.get_world_size(ParallelMode.PIPELINE)
 
-    zero_stg = 0
+    zero_stage = 0
     if hasattr(self, "__nanotron_zero_reducer__"):
-        zero_stg = self.__nanotron_zero_reducer__.zero_stage
+        zero_stage = self.__nanotron_zero_reducer__.zero_stage
 
     if hasattr(self, "config"):
-        dtype = _get_any_param_dtype(self)
+        dtype = get_any_param_dtype(self)
         self.config.torch_dtype = str(dtype).split(".")[-1]
         self.config.architectures = [self.__class__.__name__]
         if save_config and tp_rank == 0 and pp_rank == 0 and dp_rank == 0:
@@ -161,7 +161,7 @@ def _save_parallelized_without_merge(
 
     output_model_file = None
 
-    if zero_stg == 3:
+    if zero_stage == 3:
         reducer = getattr(self, "__nanotron_zero_reducer__", None)
         if reducer is None or not hasattr(reducer, "flat_param"):
             raise RuntimeError("save_parallelized(ZeRO-3): __nanotron_zero_reducer__.flat_param not found")
@@ -182,7 +182,7 @@ def _save_parallelized_without_merge(
         logger.info(f"[shard] Model weights saved in {output_model_file}")
 
 
-def _raise_if_rollout_model(self):
+def raise_if_rollout_model(self):
     found_rollout_group = False
     if hasattr(self, "__nanotron_wrappers__"):
         for parallel_mode, wrapper in self.__nanotron_wrappers__.items():
@@ -211,10 +211,10 @@ def save_parallelized(
             raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
 
         os.makedirs(save_directory, exist_ok=True)
-        _raise_if_rollout_model(self)
+        raise_if_rollout_model(self)
 
         if merge_checkpoints:
-            _save_parallelized_with_merge(
+            save_parallelized_with_merge(
                 self,
                 mpu=mpu,
                 save_directory=save_directory,
@@ -223,7 +223,7 @@ def save_parallelized(
                 save_function=save_function,
             )
         else:
-            _save_parallelized_without_merge(
+            save_parallelized_without_merge(
                 self,
                 mpu=mpu,
                 save_directory=save_directory,
@@ -247,7 +247,7 @@ def from_parallelized(
     with torch.no_grad():
         if not os.path.isdir(load_directory):
             raise NotADirectoryError(f"directory named {load_directory} is not valid.")
-        _raise_if_rollout_model(self)
+        raise_if_rollout_model(self)
 
         tp_rank = mpu.get_local_rank(ParallelMode.TENSOR)
         pp_rank = mpu.get_local_rank(ParallelMode.PIPELINE)
@@ -257,13 +257,13 @@ def from_parallelized(
         pp_world_size = mpu.get_world_size(ParallelMode.PIPELINE)
         dp_world_size = mpu.get_world_size(ParallelMode.DATA)
 
-        zero_stg = 0
+        zero_stage = 0
         if hasattr(self, "__nanotron_zero_reducer__"):
-            zero_stg = getattr(self.__nanotron_zero_reducer__, "zero_stage", 0)
+            zero_stage = getattr(self.__nanotron_zero_reducer__, "zero_stage", 0)
 
         if tp_world_size > 1 or pp_world_size > 1:
             weights_name = f"pytorch_model_tp{tp_rank}_pp{pp_rank}.bin"
-        elif dp_world_size > 1 and zero_stg == 3:
+        elif dp_world_size > 1 and zero_stage == 3:
             weights_name = f"pytorch_model_zero3_dp{dp_rank}.bin"
         else:
             weights_name = "pytorch_model.bin"
@@ -278,9 +278,9 @@ def from_parallelized(
         if getattr(self, "_keys_to_ignore_on_save", None) is not None:
             state_dict = {k: v for k, v in state_dict.items() if k not in self._keys_to_ignore_on_save}
 
-        if zero_stg != 3:
+        if zero_stage != 3:
             self.load_state_dict(state_dict, strict=strict)
         else:
-            _load_zero3_flat_param(self, state_dict)
+            load_zero3_flat_param(self, state_dict)
 
         logger.info("All model parameters loaded successfully from checkpoint.")

@@ -21,12 +21,12 @@ class RpcClient:
     """
 
     def __init__(self, registry: NodeRegistry, timeout_s: float = 10.0, retries: int = 3):
-        self._reg = registry
-        self._timeout = float(timeout_s)
-        self._retries = max(1, int(retries))
-        self._executor = ThreadPoolExecutor()
+        self.registry = registry
+        self.timeout = float(timeout_s)
+        self.retries = max(1, int(retries))
+        self.executor = ThreadPoolExecutor()
 
-    def _request(self, node_id: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    def request(self, node_id: str, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         """
         Internal: send a JSON-RPC request to a node.
 
@@ -38,11 +38,11 @@ class RpcClient:
         Returns:
             Dict[str, Any]: JSON-deserialized response body
         """
-        address, token = self._reg.get(node_id)
+        address, token = self.registry.get(node_id)
         url = f"{address}{path}"
         data = json.dumps(body).encode("utf-8")
 
-        req = request.Request(
+        _request = request.Request(
             url=url,
             data=data,
             headers={
@@ -51,14 +51,14 @@ class RpcClient:
             },
         )
         if token:
-            req.add_header("Authorization", f"Bearer {token}")
+            _request.add_header("Authorization", f"Bearer {token}")
 
-        last_exc: Optional[Exception] = None
+        last_exception: Optional[Exception] = None
 
-        for _ in range(self._retries):
+        for _ in range(self.retries):
             try:
-                with request.urlopen(req, timeout=self._timeout) as resp:
-                    raw = resp.read()
+                with request.urlopen(_request, timeout=self.timeout) as response:
+                    raw = response.read()
                     return json.loads(raw)
             except error.HTTPError as e:
                 try:
@@ -66,19 +66,19 @@ class RpcClient:
                     body_txt = e.read().decode("utf-8", errors="replace")
                     return json.loads(body_txt)
                 except Exception:
-                    last_exc = RuntimeError(f"{e} (no JSON body)")
+                    last_exception = RuntimeError(f"{e} (no JSON body)")
                     continue
             except Exception as e:
-                last_exc = e
+                last_exception = e
                 continue
 
-        raise RuntimeError(f"RPC request failed to {url}: {last_exc}")
+        raise RuntimeError(f"RPC request failed to {url}: {last_exception}")
 
-    def _request_async(self, node_id: str, path: str, body: Dict[str, Any]) -> Future:
+    def async_request(self, node_id: str, path: str, body: Dict[str, Any]) -> Future:
         """
         Fire-and-forget wrapper that executes `_request` in a thread pool.
         """
-        return self._executor.submit(self._request, node_id, path, body)
+        return self.executor.submit(self.request, node_id, path, body)
 
     def get_object(self, node_id: str, object_id: str) -> bytes:
         """
@@ -91,18 +91,18 @@ class RpcClient:
         Returns:
             bytes: Raw object bytes
         """
-        res = self._request_async(
+        response = self.async_request(
             node_id=node_id,
             path="/rpc/get_object",
             body={"object_id": object_id},
         ).result()
 
-        if not res.get("ok"):
-            err = res.get("error", {})
-            msg = err.get("message", err)
-            tb = err.get("traceback", "")
-            raise RuntimeError(f"Remote get_object failed: {msg}\n{tb}")
-        return base64.b64decode(res["payload_b64"])
+        if not response.get("ok"):
+            _error = response.get("error", {})
+            message = _error.get("message", _error)
+            traceback = _error.get("traceback", "")
+            raise RuntimeError(f"Remote get_object failed: {message}\n{traceback}")
+        return base64.b64decode(response["payload_b64"])
 
     def execute_task(self, node_id: str, task: Task) -> ObjectRef:
         """
@@ -117,21 +117,21 @@ class RpcClient:
         """
         blob = dumps(task)
 
-        res = self._request_async(
+        response = self.async_request(
             node_id=node_id,
             path="/rpc/execute_task",
             body={"task_b64": base64.b64encode(blob).decode("ascii")},
         ).result()
 
-        if not res.get("ok"):
-            err = res.get("error", {})
-            msg = err.get("message", err)
-            tb = err.get("traceback", "")
-            raise RuntimeError(f"Remote execute_task failed: {msg}\n--- Remote Traceback ---\n{tb}")
+        if not response.get("ok"):
+            _error = response.get("error", {})
+            message = _error.get("message", _error)
+            traceback = _error.get("traceback", "")
+            raise RuntimeError(f"Remote execute_task failed: {message}\n--- Remote Traceback ---\n{traceback}")
 
-        ref_info = res["ref"]
+        ref = response["ref"]
         return ObjectRef(
-            object_id=ref_info["object_id"],
-            owner_node_id=ref_info["owner_node_id"],
-            size_bytes=ref_info.get("size_bytes"),
+            object_id=ref["object_id"],
+            owner_node_id=ref["owner_node_id"],
+            size_bytes=ref.get("size_bytes"),
         )

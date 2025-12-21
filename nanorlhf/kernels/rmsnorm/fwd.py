@@ -4,9 +4,9 @@ import triton.language as tl
 
 @triton.jit
 def rmsnorm_kernel_fwd(
-    x_ptr,  # (M, N)
-    w_ptr,  # (N,)
-    y_ptr,  # (M, N)
+    x_ptr,
+    w_ptr,
+    y_ptr,
     M,
     N,
     eps,

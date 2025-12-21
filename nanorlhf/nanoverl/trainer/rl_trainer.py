@@ -79,7 +79,7 @@ class RLTrainer(BaseTrainer):
             )
 
         session = nanoray.init(nodes, default_node_id=f"actor-global_rank=0")
-        node_ids = list(session._workers.keys())
+        node_ids = list(session.workers.keys())
         if len(node_ids) < self.global_world_size:
             raise RuntimeError(
                 "`nanoray` was initialized with fewer nodes than `global_world_size`; "
@@ -161,18 +161,18 @@ class RLTrainer(BaseTrainer):
         continuous_iterator = self.create_continuous_iterator()
         # generate the first batch before entering the training loop
         batch_data_future = self.async_generate_next_batch(continuous_iterator)
-
+        mean_reward = 0
         while batch_data_future is not None:
             self.global_step += 1
             rollout_future, batch, pbar, epoch = batch_data_future
 
             # wait for the previous batch to complete rollout
-            pbar.set_postfix(global_step=self.global_step, status="rollout_response")
+            pbar.set_postfix(global_step=self.global_step, status="waiting_for_rollout", reward=mean_reward)
             total_tokens_repacked, response_tokens_unpacked = rollout_future.result()
             # asynchronously generate the next batch while we compute rewards and loss on the current batch
             batch_data_future = self.async_generate_next_batch(continuous_iterator)
 
-            pbar.set_postfix(global_step=self.global_step, status="computing_rewards")
+            pbar.set_postfix(global_step=self.global_step, status="computing_rewards", reward=mean_reward)
             reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
             mean_reward = sum(reward_scores) / len(reward_scores)
 

@@ -39,7 +39,7 @@ class BlockManager:
         h.update(np.array(token_ids).tobytes())
         return h.intdigest()
 
-    def _allocate_block(self, block_id):
+    def allocate_block(self, block_id):
         # get a block by block_id from free_block_ids, move it to used_block_ids,
         # and set its ref_count to 1 (this means it is being used by one sequence)
         block = self.blocks[block_id]
@@ -49,7 +49,7 @@ class BlockManager:
         self.used_block_ids.add(block_id)
         return self.blocks[block_id]
 
-    def _deallocate_block(self, block_id):
+    def deallocate_block(self, block_id):
         # release a block by block_id which is no longer used by any sequence,
         # so we remove it from used_block_ids and add it back to free_block_ids again.
         assert self.blocks[block_id].ref_count == 0
@@ -87,7 +87,7 @@ class BlockManager:
             if cache_miss:
                 # we get a block id from free_block_ids and assign it to this block
                 block_id = self.free_block_ids[0]
-                block = self._allocate_block(block_id)
+                block = self.allocate_block(block_id)
             else:
                 # if this is full block:
                 seq.num_cached_tokens += self.block_size
@@ -97,7 +97,7 @@ class BlockManager:
                     block.ref_count += 1
                 else:
                     # otherwise, we allocate it.
-                    block = self._allocate_block(block_id)
+                    block = self.allocate_block(block_id)
             if h != -1:
                 # if the hash value is valid, we update the hash_to_block_id mapping
                 block.update(h, token_ids)
@@ -111,7 +111,7 @@ class BlockManager:
             block.ref_count -= 1
             if block.ref_count == 0:
                 # if no sequence is using this block, we can deallocate it
-                self._deallocate_block(block_id)
+                self.deallocate_block(block_id)
         seq.num_cached_tokens = 0
         seq.block_table.clear()
 
@@ -131,7 +131,7 @@ class BlockManager:
             # just starting a new block
             assert last_block.hash != -1
             block_id = self.free_block_ids[0]
-            self._allocate_block(block_id)
+            self.allocate_block(block_id)
             block_table.append(block_id)
         elif num_tokens_in_last_block == 0:
             # last block is full, need to allocate a new block

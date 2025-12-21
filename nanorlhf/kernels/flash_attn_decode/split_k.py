@@ -4,16 +4,34 @@ import triton.language as tl
 
 @triton.jit
 def flash_attn_decode_kernel_split_k_paged(
-    q_ptr, k_cache_ptr, v_cache_ptr,
-    block_tables_ptr, context_lens_ptr,
-    ez_dot_v_ptr, max_q_ptr, ez_sum_ptr,
+    q_ptr,
+    k_cache_ptr,
+    v_cache_ptr,
+    block_tables_ptr,
+    context_lens_ptr,
+    ez_dot_v_ptr,
+    max_q_ptr,
+    ez_sum_ptr,
     seq_len_q,
-    stride_q_bh, stride_q_seq, stride_q_dim,
-    stride_cache_slot, stride_cache_head, stride_cache_dim,
-    stride_bt_b, stride_bt_blk, stride_cl_b,
-    stride_ez_dot_v_bh, stride_ez_dot_v_split, stride_ez_dot_v_seq, stride_ez_dot_v_dim,
-    stride_max_q_bh, stride_max_q_split, stride_max_q_seq,
-    stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq,
+    stride_q_bh,
+    stride_q_seq,
+    stride_q_dim,
+    stride_cache_slot,
+    stride_cache_head,
+    stride_cache_dim,
+    stride_bt_b,
+    stride_bt_blk,
+    stride_cl_b,
+    stride_ez_dot_v_bh,
+    stride_ez_dot_v_split,
+    stride_ez_dot_v_seq,
+    stride_ez_dot_v_dim,
+    stride_max_q_bh,
+    stride_max_q_split,
+    stride_max_q_seq,
+    stride_ez_sum_bh,
+    stride_ez_sum_split,
+    stride_ez_sum_seq,
     softmax_scale,
     block_n_per_split,
     kv_block_size: tl.constexpr,
@@ -78,16 +96,20 @@ def flash_attn_decode_kernel_split_k_paged(
         )
         tl.store(ez_dot_v_block_ptr, ez_dot_v)
 
-        max_q_block_ptr = max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
-        ez_sum_block_ptr = ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+        max_q_block_ptr = (
+            max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
+        )
+        ez_sum_block_ptr = (
+            ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+        )
         tl.store(max_q_block_ptr, max_q, mask=q_mask)
         tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
         return
 
     for kv_start in range(k_low, k_high, block_size_k):
         kv_idx = kv_start + offs_k
-
         kv_mask = kv_idx < k_high
+
         block_idx = kv_idx // kv_block_size
         block_off = kv_idx - block_idx * kv_block_size
 
@@ -98,13 +120,17 @@ def flash_attn_decode_kernel_split_k_paged(
         slot = page_id * kv_block_size + block_off
         d = tl.arange(0, dim)
 
-        k_ptrs = k_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
-        v_ptrs = v_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        k_ptrs = (
+            k_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        )
+        v_ptrs = (
+            v_cache_ptr + slot[:, None] * stride_cache_slot + kv_h * stride_cache_head + d[None, :] * stride_cache_dim
+        )
 
         k_tile = tl.load(k_ptrs, mask=kv_mask[:, None], other=0.0)
         v_tile = tl.load(v_ptrs, mask=kv_mask[:, None], other=0.0)
 
-        scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
+        scores = tl.dot(q.to(k_tile.dtype), tl.trans(k_tile)) * softmax_scale
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
@@ -136,7 +162,9 @@ def flash_attn_decode_kernel_split_k_paged(
     tl.store(ez_dot_v_block_ptr, ez_dot_v)
 
     max_q_block_ptr = max_q_ptr + pid_bh * stride_max_q_bh + pid_split * stride_max_q_split + offs_q * stride_max_q_seq
-    ez_sum_block_ptr = ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+    ez_sum_block_ptr = (
+        ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split * stride_ez_sum_split + offs_q * stride_ez_sum_seq
+    )
     tl.store(max_q_block_ptr, max_q, mask=q_mask)
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
 
@@ -144,15 +172,33 @@ def flash_attn_decode_kernel_split_k_paged(
 # deprecated, kept for reference.
 @triton.jit
 def flash_attn_decode_kernel_split_k(
-    q_ptr, k_ptr, v_ptr, ez_dot_v_ptr,
-    max_q_ptr, ez_sum_ptr,
-    seq_len_q, seq_len_k,
-    stride_q_bh, stride_q_seq, stride_q_dim,
-    stride_k_bh, stride_k_seq, stride_k_dim,
-    stride_v_bh, stride_v_seq, stride_v_dim,
-    stride_ez_dot_v_bh, stride_ez_dot_v_split, stride_ez_dot_v_seq, stride_ez_dot_v_dim,
-    stride_max_q_bh, stride_max_q_split, stride_max_q_seq,
-    stride_ez_sum_bh, stride_ez_sum_split, stride_ez_sum_seq,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    ez_dot_v_ptr,
+    max_q_ptr,
+    ez_sum_ptr,
+    seq_len_q,
+    seq_len_k,
+    stride_q_bh,
+    stride_q_seq,
+    stride_q_dim,
+    stride_k_bh,
+    stride_k_seq,
+    stride_k_dim,
+    stride_v_bh,
+    stride_v_seq,
+    stride_v_dim,
+    stride_ez_dot_v_bh,
+    stride_ez_dot_v_split,
+    stride_ez_dot_v_seq,
+    stride_ez_dot_v_dim,
+    stride_max_q_bh,
+    stride_max_q_split,
+    stride_max_q_seq,
+    stride_ez_sum_bh,
+    stride_ez_sum_split,
+    stride_ez_sum_seq,
     softmax_scale,
     block_n_per_split,
     causal: tl.constexpr,
@@ -227,7 +273,7 @@ def flash_attn_decode_kernel_split_k(
             padding_option="zero",
         )
 
-        scores = tl.dot(q, tl.trans(k_tile)) * softmax_scale
+        scores = tl.dot(q.to(k_tile.dtype), tl.trans(k_tile)) * softmax_scale
 
         kv_idx = kv_start + offs_k
         kv_mask = kv_idx < k_high
@@ -236,7 +282,7 @@ def flash_attn_decode_kernel_split_k(
 
         if causal:
             offset = seq_len_k - seq_len_q
-            q_pos = (offset + offs_q[:, None])
+            q_pos = offset + offs_q[:, None]
             kv_pos = kv_idx[None, :]
             causal_mask = kv_pos > q_pos
             mask = base_mask | causal_mask
@@ -251,9 +297,7 @@ def flash_attn_decode_kernel_split_k(
 
         current_ez = tl.exp(scores - new_max_q[:, None])
         ez_sum = ez_sum * rescale + tl.sum(current_ez, axis=1)
-        ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(
-            current_ez.to(v_tile.dtype), v_tile, out_dtype=tl.float32
-        )
+        ez_dot_v = ez_dot_v * rescale[:, None] + tl.dot(current_ez.to(v_tile.dtype), v_tile, out_dtype=tl.float32)
         max_q = new_max_q
 
     # we save ez_dot_v and ez_sum separately and do the division in the reduce-k kernel.
@@ -269,17 +313,10 @@ def flash_attn_decode_kernel_split_k(
     tl.store(ez_dot_v_block_ptr, ez_dot_v)
 
     max_q_block_ptr = (
-        max_q_ptr
-        + pid_bh * stride_max_q_bh
-        + pid_split_k * stride_max_q_split
-        + offs_q * stride_max_q_seq
+        max_q_ptr + pid_bh * stride_max_q_bh + pid_split_k * stride_max_q_split + offs_q * stride_max_q_seq
     )
     ez_sum_block_ptr = (
-        ez_sum_ptr
-        + pid_bh * stride_ez_sum_bh
-        + pid_split_k * stride_ez_sum_split
-        + offs_q * stride_ez_sum_seq
+        ez_sum_ptr + pid_bh * stride_ez_sum_bh + pid_split_k * stride_ez_sum_split + offs_q * stride_ez_sum_seq
     )
     tl.store(max_q_block_ptr, max_q, mask=q_mask)
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
-

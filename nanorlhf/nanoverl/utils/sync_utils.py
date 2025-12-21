@@ -111,7 +111,6 @@ class ParameterSyncManager:
             for pipeline_parallel_rank in range(self.actor_pipeline_parallel_size)
         }
 
-        # stage별로 모듈 순서를 고정하고, 모듈 내부는 name 정렬로 고정
         for pipeline_parallel_rank in range(self.actor_pipeline_parallel_size):
             modules = self.modules_for_pipeline_stage(pipeline_parallel_rank)
 
@@ -145,7 +144,7 @@ class ParameterSyncManager:
 
         return stage_objects
 
-    def broadcast_inplace(self, tensor: torch.Tensor, src: int, group: dist.ProcessGroup):
+    def broadcast(self, tensor: torch.Tensor, src: int, group: dist.ProcessGroup):
         if not tensor.is_contiguous():
             tmp = tensor.contiguous()
             dist.broadcast(tmp, src=src, group=group)
@@ -157,25 +156,25 @@ class ParameterSyncManager:
         num_tensors_synced = 0
 
         if self.is_rollout:
-            my_data_parallel_rank = self.mpu.get_local_rank(ParallelMode.ROLLOUT_DATA)
-            my_tensor_parallel_rank = self.mpu.get_local_rank(ParallelMode.ROLLOUT_TENSOR)
-            my_pipeline_parallel_rank = 0
+            current_data_parallel_rank = self.mpu.get_local_rank(ParallelMode.ROLLOUT_DATA)
+            current_tensor_parallel_rank = self.mpu.get_local_rank(ParallelMode.ROLLOUT_TENSOR)
+            current_pipeline_parallel_rank = 0
         else:
-            my_data_parallel_rank = self.mpu.get_local_rank(ParallelMode.DATA)
-            my_tensor_parallel_rank = self.mpu.get_local_rank(ParallelMode.TENSOR)
-            my_pipeline_parallel_rank = self.mpu.get_local_rank(ParallelMode.PIPELINE)
+            current_data_parallel_rank = self.mpu.get_local_rank(ParallelMode.DATA)
+            current_tensor_parallel_rank = self.mpu.get_local_rank(ParallelMode.TENSOR)
+            current_pipeline_parallel_rank = self.mpu.get_local_rank(ParallelMode.PIPELINE)
 
         for tensor_parallel_rank in range(self.actor_tensor_parallel_size):
             for pipeline_parallel_rank in range(self.actor_pipeline_parallel_size):
                 if self.is_rollout:
-                    if my_tensor_parallel_rank != tensor_parallel_rank:
+                    if tensor_parallel_rank != current_tensor_parallel_rank:
                         continue
                 else:
-                    if my_data_parallel_rank != 0:
+                    if current_data_parallel_rank != 0:
                         continue
-                    if my_tensor_parallel_rank != tensor_parallel_rank:
+                    if tensor_parallel_rank != current_tensor_parallel_rank:
                         continue
-                    if my_pipeline_parallel_rank != pipeline_parallel_rank:
+                    if pipeline_parallel_rank != current_pipeline_parallel_rank:
                         continue
 
                 group = self.sync_groups[(tensor_parallel_rank, pipeline_parallel_rank)]
@@ -183,14 +182,14 @@ class ParameterSyncManager:
                 tensors = self.stage_objects[(tensor_parallel_rank, pipeline_parallel_rank)]
 
                 count = torch.tensor([len(tensors)], device=torch.cuda.current_device(), dtype=torch.int32)
-                self.broadcast_inplace(count, src=src, group=group)
+                self.broadcast(count, src=src, group=group)
                 count = int(count.item())
 
                 if count != len(tensors):
                     raise RuntimeError(f"sync tensor count mismatch: expected={count}, got={len(tensors)}")
 
                 for tensor in tensors:
-                    self.broadcast_inplace(tensor, src=src, group=group)
+                    self.broadcast(tensor, src=src, group=group)
 
                 num_tensors_synced += len(tensors)
 

@@ -67,28 +67,28 @@ class Scheduler:
     ):
         self.policy = policy
         self.nodes = nodes
-        self._workers: Dict[str, WorkerLike] = {}
-        self._state: Dict[str, NodeState] = {}
+        self.workers: Dict[str, WorkerLike] = {}
+        self.state: Dict[str, NodeState] = {}
 
         order: List[str] = []
         for nid, (worker, cap) in nodes.items():
-            self._workers[nid] = worker
-            self._state[nid] = NodeState(
+            self.workers[nid] = worker
+            self.state[nid] = NodeState(
                 total_cpus=cap.get("cpus", 1.0),
                 total_gpus=cap.get("gpus", 0.0),
                 total_custom=cap.get("resources", {}),
             )
             order.append(nid)
 
-        self._order = order
+        self.order = order
         self.policy.set_node_order(order)
 
-        self._q: List[Tuple[int, Task]] = []  # (seq, task)
-        self._seq = 0
+        self.queue: List[Tuple[int, Task]] = []  # (seq, task)
+        self.seq = 0
 
         # placement groups
-        self._pgs: Dict[str, PlacementGroup] = {}
-        self._pg_assign: Dict[str, Dict[object, str]] = {}
+        self.placement_groups: Dict[str, PlacementGroup] = {}
+        self.placement_group_assignment: Dict[str, Dict[object, str]] = {}
 
     def submit(self, task: Task) -> Optional[ObjectRef]:
         """
@@ -101,11 +101,11 @@ class Scheduler:
         Returns:
             Optional[ObjectRef]: Result reference if placed now, else `None`.
         """
-        ref = self._try_place(task)
+        ref = self.try_place(task)
         if ref is not None:
             return ref
-        heapq.heappush(self._q, (self._seq, task))
-        self._seq += 1
+        heapq.heappush(self.queue, (self.seq, task))
+        self.seq += 1
         return None
 
     def drain(self) -> List[ObjectRef]:
@@ -149,22 +149,22 @@ class Scheduler:
         produced: List[ObjectRef] = []
         progressed = True
 
-        while self._q and progressed:
+        while self.queue and progressed:
             progressed = False
             pending: List[Tuple[int, Task]] = []
-            while self._q:
-                seq, task = heapq.heappop(self._q)
-                ref = self._try_place(task)
+            while self.queue:
+                seq, task = heapq.heappop(self.queue)
+                ref = self.try_place(task)
                 if ref is None:
                     pending.append((seq, task))
                 else:
                     produced.append(ref)
                     progressed = True
             for item in pending:
-                heapq.heappush(self._q, item)
+                heapq.heappush(self.queue, item)
         return produced
 
-    def _eligible_nodes(self, task: Task) -> List[str]:
+    def eligible_nodes(self, task: Task) -> List[str]:
         """
         Find nodes that have enough available capacity for the given task.
 
@@ -176,13 +176,13 @@ class Scheduler:
         """
         if getattr(task, "pinned_node_id", None):
             nid = task.pinned_node_id
-            if nid in self._state and self._state[nid].can_run(task):
+            if nid in self.state and self.state[nid].can_run(task):
                 return [nid]
             return []
 
         # 1) Filter by capacity (baseline)
         capacity_ok = [
-            nid for nid, state in self._state.items() if state.can_run(task)
+            nid for nid, state in self.state.items() if state.can_run(task)
         ]
 
         # 2) If placement grouped, refine the candidate set
@@ -190,7 +190,7 @@ class Scheduler:
         if not pg_id:
             return capacity_ok
 
-        pg = self._pgs.get(pg_id, None)
+        pg = self.placement_groups.get(pg_id, None)
         if pg is None:
             raise ValueError(
                 "`PlacementGroup` must be registered with the scheduler before use. "
@@ -198,7 +198,7 @@ class Scheduler:
                 "The `create_placement_group(...)` function will register it automatically."
             )
 
-        assign = self._pg_assign.setdefault(pg_id, {})
+        assign = self.placement_group_assignment.setdefault(pg_id, {})
 
         if pg.strategy == PlacementStrategy.PACK:
             # If group already packed to a node, stick to it.
@@ -225,7 +225,7 @@ class Scheduler:
         # Unknown placement strategy -> ignore
         return capacity_ok
 
-    def _try_place(self, task: Task) -> Optional[ObjectRef]:
+    def try_place(self, task: Task) -> Optional[ObjectRef]:
         """
         Attempt to place the task on an eligible node using the scheduling policy.
 
@@ -235,7 +235,7 @@ class Scheduler:
         Returns:
             Optional[ObjectRef]: Result reference if placed, else `None`.
         """
-        cands = self._eligible_nodes(task)
+        cands = self.eligible_nodes(task)
         if not cands:
             return None
 
@@ -243,16 +243,16 @@ class Scheduler:
         if nid is None:
             return None
 
-        st = self._state[nid]
+        st = self.state[nid]
         st.allocate(task)
         try:
-            worker = self._workers[nid]
+            worker = self.workers[nid]
             ref = worker.execute_task(task)
             # If PG, record the final assignment now that placement successful
             pg_id = getattr(task, "placement_group_id", None)
-            if pg_id and pg_id in self._pgs:
-                pg = self._pgs[pg_id]
-                assign = self._pg_assign.setdefault(pg_id, {})
+            if pg_id and pg_id in self.placement_groups:
+                pg = self.placement_groups[pg_id]
+                assign = self.placement_group_assignment.setdefault(pg_id, {})
                 if pg.strategy == PlacementStrategy.PACK:
                     assign.setdefault("__pack__", nid)
                 elif pg.strategy == PlacementStrategy.SPREAD:
@@ -269,8 +269,8 @@ class Scheduler:
         Args:
             pg (PlacementGroup): The placement group to register.
         """
-        self._pgs[pg.pg_id] = pg
-        self._pg_assign.setdefault(pg.pg_id, {})
+        self.placement_groups[pg.pg_id] = pg
+        self.placement_group_assignment.setdefault(pg.pg_id, {})
 
     def unregister_placement_group(self, pg_id: str):
         """
@@ -279,5 +279,5 @@ class Scheduler:
         Args:
             pg_id (str): The ID of the placement group to unregister.
         """
-        self._pgs.pop(pg_id, None)
-        self._pg_assign.pop(pg_id, None)
+        self.placement_groups.pop(pg_id, None)
+        self.placement_group_assignment.pop(pg_id, None)

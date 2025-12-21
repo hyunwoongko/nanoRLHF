@@ -95,6 +95,9 @@ class RolloutWorkerGroup:
 
     def run_model(self):
         while not all(scheduler.is_finished() for scheduler in self.schedulers):
+            launches = []  # (dp_rank, sequences, object_refs)
+            flat_object_refs = []
+
             for data_parallel_rank in range(self.data_parallel_size):
                 scheduler = self.schedulers[data_parallel_rank]
                 if scheduler.is_finished():
@@ -106,8 +109,21 @@ class RolloutWorkerGroup:
                     runner = self.workers[data_parallel_rank][tensor_parallel_rank]
                     object_ref = runner.generate.remote(sequences, is_prefill, blocking=False)
                     object_refs.append(object_ref)
-                token_ids = nanoray.get(object_refs)[0]
-                scheduler.postprocess(sequences, token_ids)
+
+                launches.append((data_parallel_rank, sequences, object_refs))
+                flat_object_refs.extend(object_refs)
+
+            if not launches:
+                continue
+
+            flat_results = nanoray.get(flat_object_refs)
+            cu_tp_size = 0
+            for data_parallel_rank, sequences, object_refs in launches:
+                tp_size = len(object_refs)
+                results = flat_results[cu_tp_size : cu_tp_size + tp_size]
+                cu_tp_size += tp_size
+                scheduler = self.schedulers[data_parallel_rank]
+                scheduler.postprocess(sequences, results[0])
 
     def repack_outputs(self, data_parallel_unpacked_batches, data_parallel_outputs):
         total_tokens_repacked, response_tokens_unpacked = [], []

@@ -88,26 +88,26 @@ def split_packed_batch(
         raise ValueError("Invalid token slice")
 
     local_batch = {}
-    for k, v in batch.items():
-        if not torch.is_tensor(v):
-            local_batch[k] = v
+    for key, value in batch.items():
+        if not torch.is_tensor(value):
+            local_batch[key] = value
             continue
 
-        if k in ("cu_seq_lens_q", "cu_seq_lens_k"):
-            local_cu_seq_lens = v[seq_start : seq_end + 1].clone()
+        if key in ("cu_seq_lens_q", "cu_seq_lens_k"):
+            local_cu_seq_lens = value[seq_start : seq_end + 1].clone()
             local_cu_seq_lens = local_cu_seq_lens - local_cu_seq_lens[0]
-            local_batch[k] = local_cu_seq_lens
+            local_batch[key] = local_cu_seq_lens
             continue
 
-        if v.dim() == 1 and v.numel() == total_tokens:
-            local_batch[k] = v[tok_start:tok_end].contiguous()
+        if value.dim() == 1 and value.numel() == total_tokens:
+            local_batch[key] = value[tok_start:tok_end].contiguous()
             continue
 
-        if v.dim() == 2 and v.size(0) == 1 and v.size(1) == total_tokens:
-            local_batch[k] = v[:, tok_start:tok_end].contiguous()
+        if value.dim() == 2 and value.size(0) == 1 and value.size(1) == total_tokens:
+            local_batch[key] = value[:, tok_start:tok_end].contiguous()
             continue
 
-        local_batch[k] = v
+        local_batch[key] = value
 
     return local_batch
 

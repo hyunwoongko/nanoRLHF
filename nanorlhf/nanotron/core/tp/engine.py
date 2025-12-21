@@ -47,7 +47,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
         self.rank = self.mpu.get_local_rank(mode)
         self.device = torch.cuda.current_device()
 
-    def _pad_tensor(self, module: nn.Module, name: str, dim: int):
+    def pad_tensor(self, module: nn.Module, name: str, dim: int):
         original_tensor = getattr(module, name)
         original_size = original_tensor.size(dim)
         resized_size = original_size
@@ -66,10 +66,10 @@ class TensorParallelWrapper(ParallelizationWrapper):
             original_tensor.data = new_tensor
         return resized_size
 
-    def _pad_embedding_related_params(self):
+    def pad_embedding_related_params(self):
         embedding = self.mp_plan.embedding_plan.module
         original_num_embeddings = embedding.weight.size(0)
-        padded_num_embedding = self._pad_tensor(embedding, "weight", dim=0)
+        padded_num_embedding = self.pad_tensor(embedding, "weight", dim=0)
         setattr(embedding, "num_embeddings", padded_num_embedding)
         setattr(embedding, "original_num_embeddings", original_num_embeddings)
 
@@ -90,14 +90,14 @@ class TensorParallelWrapper(ParallelizationWrapper):
                 setattr(head, "original_out_features", original_num_embeddings)
             else:
                 original_out_features = head.weight.size(0)
-                padded_out_features = self._pad_tensor(head, "weight", dim=0)
+                padded_out_features = self.pad_tensor(head, "weight", dim=0)
                 setattr(head, "out_features", padded_out_features)
                 setattr(head, "original_out_features", original_out_features)
 
             if hasattr(head, "bias") and head.bias is not None:
-                self._pad_tensor(head, "bias", dim=0)
+                self.pad_tensor(head, "bias", dim=0)
 
-    def _load_data(self, kwargs: Dict[str, Any]):
+    def load_data(self, kwargs: Dict[str, Any]):
         loaded = {}
         for k, v in kwargs.items():
             if torch.is_tensor(v):
@@ -107,7 +107,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
             loaded[k] = v
         return loaded
 
-    def _update_existing_attrs(self, fn: Callable):
+    def update_existing_attrs(self, fn: Callable):
         for module in self.model.modules():
             for attr in ATTRS_TO_UPDATE:
                 if hasattr(module, attr):
@@ -123,12 +123,12 @@ class TensorParallelWrapper(ParallelizationWrapper):
                     updated_value = fn(original_value)
                     setattr(module, attr, updated_value)
 
-    def _replicate_module(self, plan: ModuleParallelPlan):
+    def replicate_module(self, plan: ModuleParallelPlan):
         tag_module(plan.module, self.mode, self.rank)
 
     def _parallelize(self):
-        self._pad_embedding_related_params()
-        self._update_existing_attrs(lambda x: x // self.world_size)
+        self.pad_embedding_related_params()
+        self.update_existing_attrs(lambda x: x // self.world_size)
 
         # Parallelize embedding
         embedding_plan = self.mp_plan.embedding_plan
@@ -136,7 +136,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
 
         # Parallelize pre module list
         for plan in self.mp_plan.pre_module_list_plans:
-            self._replicate_module(plan)
+            self.replicate_module(plan)
 
         # Parallelize main module list
         for plan in self.mp_plan.main_module_list_plans:
@@ -145,11 +145,11 @@ class TensorParallelWrapper(ParallelizationWrapper):
             elif plan.slicing_type == SlicingType.ROW:
                 plan.module = RowParallelLinear.parallelize(plan, self.mpu, self.mode)
             else:
-                self._replicate_module(plan)
+                self.replicate_module(plan)
 
         # Parallelize post module list
         for plan in self.mp_plan.post_module_list_plans:
-            self._replicate_module(plan)
+            self.replicate_module(plan)
 
         # Parallelize head if needed
         head_plan = self.mp_plan.head_plan
@@ -163,7 +163,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
             )
 
     def _deparallelize(self):
-        self._update_existing_attrs(lambda x: x * self.world_size)
+        self.update_existing_attrs(lambda x: x * self.world_size)
 
         # Deparallelize embedding
         embedding_plan = self.mp_plan.embedding_plan
@@ -189,7 +189,7 @@ class TensorParallelWrapper(ParallelizationWrapper):
 
     def _forward(self, *args, **kwargs):
         _kwargs = to_kwargs(self.model_forward, args, kwargs)
-        _kwargs = self._load_data(_kwargs)
+        _kwargs = self.load_data(_kwargs)
 
         need_snapshot = (
             is_causal_lm(self.model)

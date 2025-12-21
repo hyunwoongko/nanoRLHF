@@ -4,18 +4,18 @@ from typing import List, Tuple
 from nanorlhf import nanoray
 
 
-@nanoray.remote()
+@nanoray.remote
 def add(a: int, b: int) -> int:
     return a + b
 
 
-@nanoray.remote()
+@nanoray.remote
 def whoami() -> Tuple[str, int]:
     import os, platform
     return platform.node(), os.getpid()
 
 
-@nanoray.actor
+@nanoray.remote
 class TokenizerActor:
     def __init__(self):
         self.counts = {}

@@ -107,12 +107,12 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     return model, optimizer, mpu
 
 
-@nanoray.actor
+@nanoray.remote
 class ActorCriticRefWorker:
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
-        self.experience_buffer = deque(maxlen=self.config.data.experience_staleness + 1)
+        self.experience_buffer = deque(maxlen=2)
 
         # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)

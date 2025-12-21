@@ -9,9 +9,7 @@ from nanorlhf.nanosets.table.field import Field
 class RecordBatch:
     def __init__(self, schema: Schema, columns: List[Array]):
         if len(schema.fields) != len(columns):
-            raise ValueError(
-                f"Number of columns ({len(columns)}) must match schema fields ({len(schema.fields)})"
-            )
+            raise ValueError(f"Number of columns ({len(columns)}) must match schema fields ({len(schema.fields)})")
 
         lengths = {len(c) for c in columns}
         if len(lengths) > 1:
@@ -84,12 +82,7 @@ class RecordBatch:
         return rows
 
     @classmethod
-    def from_list(
-        cls,
-        rows: List[Optional[Dict[str, Any]]],
-        *,
-        strict_keys: bool = False,
-    ) -> "RecordBatch":
+    def from_list(cls, rows: List[Optional[Dict[str, Any]]], strict_keys: bool = False) -> "RecordBatch":
         struct = StructArray.from_list(rows, strict_keys=strict_keys)
         field_names = struct.field_names
 

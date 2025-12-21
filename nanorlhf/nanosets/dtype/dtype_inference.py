@@ -11,18 +11,18 @@ def infer_primitive_dtype(values: List[Optional[PrimitiveType]]) -> DataType:
     saw_int = False
     saw_bool = False
 
-    for v in values:
-        if v is None:
+    for value in values:
+        if value is None:
             continue
-        if isinstance(v, bool):
+        if isinstance(value, bool):
             saw_bool = True
             continue
-        if isinstance(v, float):
+        if isinstance(value, float):
             saw_float = True
-        elif isinstance(v, int):
+        elif isinstance(value, int):
             saw_int = True
         else:
-            raise ValueError(f"Unsupported primitive type: {type(v).__name__}")
+            raise ValueError(f"Unsupported primitive type: {type(value).__name__}")
 
     if saw_float:
         return FLOAT64
@@ -41,12 +41,12 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
     from nanorlhf.nanosets.dtype.tensor_array import TensorArrayBuilder
 
     sample: Any = None
-    for r in rows:
-        if r is None:
+    for row in rows:
+        if row is None:
             continue
-        for e in r:
-            if e is not None:
-                sample = e
+        for element in row:
+            if element is not None:
+                sample = element
                 break
         if sample is not None:
             break
@@ -56,10 +56,10 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
 
     if isinstance(sample, (list, tuple)):
         inner_rows: List[Optional[Iterable[Any]]] = []
-        for r in rows:
-            if r is None:
+        for row in rows:
+            if row is None:
                 continue
-            for sub in r:
+            for sub in row:
                 if sub is None:
                     inner_rows.append(None)
                 elif isinstance(sub, (list, tuple)):
@@ -70,57 +70,57 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
         return ListArrayBuilder(inner_child_builder)
 
     if isinstance(sample, dict):
-        dict_elems: List[Optional[Dict[str, Any]]] = []
+        dict_elements: List[Optional[Dict[str, Any]]] = []
         for row in rows:
             if row is None:
                 continue
-            for elem in row:
-                if elem is None:
-                    dict_elems.append(None)
-                elif isinstance(elem, dict):
-                    dict_elems.append(elem)
+            for element in row:
+                if element is None:
+                    dict_elements.append(None)
+                elif isinstance(element, dict):
+                    dict_elements.append(element)
                 else:
-                    raise TypeError(f"Mixed element types: expected dict, got {type(elem).__name__}")
+                    raise TypeError(f"Mixed element types: expected dict, got {type(element).__name__}")
 
-        return get_struct_array_builder_from_rows(dict_elems)
+        return get_struct_array_builder_from_rows(dict_elements)
 
     if isinstance(sample, str):
-        for r in rows:
-            if r is None:
+        for row in rows:
+            if row is None:
                 continue
-            for e in r:
-                if e is None:
+            for element in row:
+                if element is None:
                     continue
-                if not isinstance(e, str):
-                    raise TypeError(f"Mixed element types: expected str, got {type(e).__name__}")
+                if not isinstance(element, str):
+                    raise TypeError(f"Mixed element types: expected str, got {type(element).__name__}")
         return StringArrayBuilder()
 
     if isinstance(sample, (bool, int, float)):
         prims: List[Optional[PrimitiveType]] = []
-        for r in rows:
-            if r is None:
+        for row in rows:
+            if row is None:
                 continue
-            for e in r:
-                if e is None:
+            for element in row:
+                if element is None:
                     prims.append(None)
                     continue
-                if isinstance(e, (bool, int, float)):
-                    prims.append(e)
+                if isinstance(element, (bool, int, float)):
+                    prims.append(element)
                 else:
-                    raise TypeError(f"Mixed element types: expected primitive, got {type(e).__name__}")
+                    raise TypeError(f"Mixed element types: expected primitive, got {type(element).__name__}")
 
-        dt = infer_primitive_dtype(prims)
-        return PrimitiveArrayBuilder(dt)
+        data_type = infer_primitive_dtype(prims)
+        return PrimitiveArrayBuilder(data_type)
 
     if torch.is_tensor(sample):
-        for r in rows:
-            if r is None:
+        for row in rows:
+            if row is None:
                 continue
-            for e in r:
-                if e is None:
+            for element in row:
+                if element is None:
                     continue
-                if not torch.is_tensor(e):
-                    raise TypeError(f"Mixed element types: expected tensor-like, got {type(e).__name__}")
+                if not torch.is_tensor(element):
+                    raise TypeError(f"Mixed element types: expected tensor-like, got {type(element).__name__}")
         return TensorArrayBuilder()
 
     raise TypeError(f"Unsupported element type for list: {type(sample).__name__}")

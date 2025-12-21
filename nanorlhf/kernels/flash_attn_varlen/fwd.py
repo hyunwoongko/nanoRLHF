@@ -11,20 +11,36 @@ import triton.language as tl
         triton.Config({"block_size_q": 32, "tile_size_kv": 64, "num_warps": 4, "num_stages": 2}),
         triton.Config({"block_size_q": 64, "tile_size_kv": 32, "num_warps": 4, "num_stages": 2}),
     ],
-    key=["dim"]
+    key=["dim"],
 )
 @triton.jit
 def flash_attn_varlen_fwd_kernel(
-    q_ptr, k_ptr, v_ptr,
-    cu_seqlens_q_ptr, cu_seqlens_k_ptr,
-    o_ptr, max_q_ptr, ez_sum_ptr,
-    bsz, num_heads,
-    stride_q_tok, stride_q_head, stride_q_dim,
-    stride_k_tok, stride_k_head, stride_k_dim,
-    stride_v_tok, stride_v_head, stride_v_dim,
-    stride_o_tok, stride_o_head, stride_o_dim,
-    stride_max_q_head, stride_max_q_tok,
-    stride_ez_sum_head, stride_ez_sum_tok,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    cu_seqlens_q_ptr,
+    cu_seqlens_k_ptr,
+    o_ptr,
+    max_q_ptr,
+    ez_sum_ptr,
+    bsz,
+    num_heads,
+    stride_q_tok,
+    stride_q_head,
+    stride_q_dim,
+    stride_k_tok,
+    stride_k_head,
+    stride_k_dim,
+    stride_v_tok,
+    stride_v_head,
+    stride_v_dim,
+    stride_o_tok,
+    stride_o_head,
+    stride_o_dim,
+    stride_max_q_head,
+    stride_max_q_tok,
+    stride_ez_sum_head,
+    stride_ez_sum_tok,
     softmax_scale,
     causal: tl.constexpr,
     block_size_q: tl.constexpr,
@@ -108,8 +124,7 @@ def flash_attn_varlen_fwd_kernel(
             boundary_check=(0, 1),
             padding_option="zero",
         )
-
-        scores = tl.dot(q, tl.trans(k)) * softmax_scale
+        scores = tl.dot(q.to(k.dtype), tl.trans(k)) * softmax_scale
         kv_idx = kv_start + offs_kv
         kv_mask = kv_idx < seqlen_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
@@ -156,11 +171,7 @@ def flash_attn_varlen_fwd_kernel(
 
 
 def flash_attn_varlen_fwd(
-    q, k, v,
-    cu_seqlens_q, cu_seqlens_k,
-    bsz, num_heads,
-    max_seqlen_q, max_seqlen_k,
-    causal=True, softmax_scale=None
+    q, k, v, cu_seqlens_q, cu_seqlens_k, bsz, num_heads, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None
 ):
     assert q.is_cuda and k.is_cuda and v.is_cuda
     assert q.dim() == 3 and k.dim() == 3 and v.dim() == 3
@@ -186,22 +197,38 @@ def flash_attn_varlen_fwd(
     stride_ez_sum_head, stride_ez_sum_tok = ez_sum.stride()
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim ** 0.5)
+        softmax_scale = 1.0 / (dim**0.5)
 
     def grid(meta):
         return bsz * num_heads, triton.cdiv(max_seqlen_q, meta["block_size_q"])
 
     flash_attn_varlen_fwd_kernel[grid](
-        q, k, v,
-        cu_seqlens_q, cu_seqlens_k,
-        o, max_q, ez_sum,
-        bsz, num_heads,
-        stride_q_tok, stride_q_head, stride_q_dim,
-        stride_k_tok, stride_k_head, stride_k_dim,
-        stride_v_tok, stride_v_head, stride_v_dim,
-        stride_o_tok, stride_o_head, stride_o_dim,
-        stride_max_q_head, stride_max_q_tok,
-        stride_ez_sum_head, stride_ez_sum_tok,
+        q,
+        k,
+        v,
+        cu_seqlens_q,
+        cu_seqlens_k,
+        o,
+        max_q,
+        ez_sum,
+        bsz,
+        num_heads,
+        stride_q_tok,
+        stride_q_head,
+        stride_q_dim,
+        stride_k_tok,
+        stride_k_head,
+        stride_k_dim,
+        stride_v_tok,
+        stride_v_head,
+        stride_v_dim,
+        stride_o_tok,
+        stride_o_head,
+        stride_o_dim,
+        stride_max_q_head,
+        stride_max_q_tok,
+        stride_ez_sum_head,
+        stride_ez_sum_tok,
         softmax_scale,
         causal=causal,
         dim=dim,

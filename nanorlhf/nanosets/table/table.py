@@ -12,8 +12,8 @@ class Table:
         if not batches:
             raise ValueError("Table must have at least one RecordBatch")
         schema = batches[0].schema
-        for b in batches:
-            if b.schema != schema:
+        for batch in batches:
+            if batch.schema != schema:
                 raise ValueError("All RecordBatches must have the same schema")
         self.schema: Schema = schema
         self.batches: List[RecordBatch] = batches
@@ -49,7 +49,6 @@ class Table:
     def from_list(
         cls,
         rows: List[Optional[Dict[str, Any]]],
-        *,
         strict_keys: bool = False,
         batch_size: Optional[int] = DEFAULT_BATCH_SIZE,
     ) -> "Table":
@@ -74,12 +73,12 @@ class Table:
         if not tables:
             raise ValueError("No tables to concatenate.")
         schema = tables[0].schema
-        for t in tables:
-            if t.schema != schema:
+        for table in tables:
+            if table.schema != schema:
                 raise ValueError("All tables must share the same schema to concatenate.")
         batches: List[RecordBatch] = []
-        for t in tables:
-            batches.extend(t.batches)
+        for table in tables:
+            batches.extend(table.batches)
         return cls.from_batches(batches)
 
     def num_rows(self) -> int:
@@ -119,16 +118,16 @@ class Table:
         remaining = length
         batch_start_global = 0
         new_batches: List[RecordBatch] = []
-        for b in self.batches:
-            b_len = b.length
-            batch_end_global = batch_start_global + b_len
+        for batch in self.batches:
+            batch_length = batch.length
+            batch_end_global = batch_start_global + batch_length
             if batch_end_global <= offset:
                 batch_start_global = batch_end_global
                 continue
             local_start = max(0, offset - batch_start_global)
-            local_available = b_len - local_start
+            local_available = batch_length - local_start
             local_len = min(remaining, local_available)
-            new_batches.append(b.slice(local_start, local_len))
+            new_batches.append(batch.slice(local_start, local_len))
             remaining -= local_len
             if remaining <= 0:
                 break
@@ -142,12 +141,12 @@ class Table:
             empty_batch = RecordBatch(self.schema, empty_columns)
             return Table.from_batches([empty_batch])
         n = self.length
-        norm_indices = [normalize_index(idx, n) for idx in indices]
+        normalized_indices = [normalize_index(idx, n) for idx in indices]
         batch_starts: List[int] = []
         current = 0
-        for b in self.batches:
+        for batch in self.batches:
             batch_starts.append(current)
-            current += b.length
+            current += batch.length
         new_batches: List[RecordBatch] = []
         current_batch_idx: Optional[int] = None
         current_local_indices: List[int] = []
@@ -163,11 +162,11 @@ class Table:
             current_local_indices = []
             prev_local = None
 
-        for gi in norm_indices:
-            batch_idx = bisect_right(batch_starts, gi) - 1
+        for idx in normalized_indices:
+            batch_idx = bisect_right(batch_starts, idx) - 1
             if batch_idx < 0 or batch_idx >= len(self.batches):
-                raise IndexError(f"Global index {gi} not mapped to any batch.")
-            local_idx = gi - batch_starts[batch_idx]
+                raise IndexError(f"Global index {idx} not mapped to any batch.")
+            local_idx = idx - batch_starts[batch_idx]
             if current_batch_idx is None:
                 current_batch_idx = batch_idx
                 current_local_indices = [local_idx]
@@ -195,14 +194,14 @@ class Table:
 
     def to_list(self) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
-        for b in self.batches:
-            if b.num_columns() == 0:
-                rows.extend({} for _ in range(b.length))
+        for batch in self.batches:
+            if batch.num_columns() == 0:
+                rows.extend({} for _ in range(batch.length))
                 continue
-            cols = [c.to_list() for c in b.columns]
-            for r in range(b.length):
-                row: Dict[str, Any] = {}
-                for f, col in zip(b.schema.fields, cols):
-                    row[f.name] = col[r]
-                rows.append(row)
+            columns = [c.to_list() for c in batch.columns]
+            for row in range(batch.length):
+                row_dict: Dict[str, Any] = {}
+                for field, column in zip(batch.schema.fields, columns):
+                    row_dict[field.name] = column[row]
+                rows.append(row_dict)
         return rows

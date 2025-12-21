@@ -17,7 +17,7 @@ from nanorlhf.kernels.api import (
 )
 
 
-def _maybe_repeat_kv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+def maybe_repeat_kv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
     if k.shape[-2] == q.shape[-2]:
         return q, k, v
 
@@ -36,7 +36,7 @@ def _maybe_repeat_kv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
     return q, k, v
 
 
-def _get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[torch.dtype]:
+def get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[torch.dtype]:
     if query.dtype == torch.float32:
         if torch.is_autocast_enabled():
             return (
@@ -51,7 +51,7 @@ def _get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[
     return None
 
 
-def _convert_4d_mask_to_2d_mask(attention_mask):
+def convert_4d_mask_to_2d_mask(attention_mask):
     padding_mask = None
     if attention_mask is not None:
         if attention_mask.dim() == 4:
@@ -86,7 +86,7 @@ def _flash_attention_forward(
     query_states, key_states, value_states = fa_peft_integration_check(
         query_states, key_states, value_states, target_dtype
     )
-    query_states, key_states, value_states = _maybe_repeat_kv(query_states, key_states, value_states)
+    query_states, key_states, value_states = maybe_repeat_kv(query_states, key_states, value_states)
 
     flash_kwargs = {"causal": is_causal, "softmax_scale": softmax_scale}
     is_fa_with_position_ids = _is_packed_sequence(position_ids, batch_size=query_states.size(0))
@@ -102,23 +102,23 @@ def _flash_attention_forward(
         if "mps" in str(query_states.device):
             cu_seq_lens_k = cu_seq_lens_k.clone()
 
-        out = flash_attn_varlen_func(
+        output = flash_attn_varlen_func(
             q,
             k,
             v,
-            cu_seqlens_q=cu_seq_lens_q,
-            cu_seqlens_k=cu_seq_lens_k,
-            max_seqlen_q=max_length_q,
-            max_seqlen_k=max_length_k,
+            cu_seq_lens_q=cu_seq_lens_q,
+            cu_seq_lens_k=cu_seq_lens_k,
+            max_seq_len_q=max_length_q,
+            max_seq_len_k=max_length_k,
             **flash_kwargs,
         )
-        if isinstance(out, tuple):
-            out = out[0]
+        if isinstance(output, tuple):
+            output = output[0]
 
-        out = out.view(query_states.size(0), -1, out.size(-2), out.size(-1))
+        output = output.view(query_states.size(0), -1, output.size(-2), output.size(-1))
 
     elif attention_mask is not None:
-        attention_mask = _convert_4d_mask_to_2d_mask(attention_mask)
+        attention_mask = convert_4d_mask_to_2d_mask(attention_mask)
 
         q, k, v, indices_q, (cu_seq_lens_q, cu_seq_lens_k), (max_length_q, max_length_k) = _upad_input(
             query_states, key_states, value_states, attention_mask, query_length, unpad_input
@@ -127,20 +127,20 @@ def _flash_attention_forward(
         if "mps" in str(q.device):
             cu_seq_lens_k = cu_seq_lens_k.clone()
 
-        out_unpad = flash_attn_varlen_func(
+        output_unpad = flash_attn_varlen_func(
             q,
             k,
             v,
-            cu_seqlens_q=cu_seq_lens_q,
-            cu_seqlens_k=cu_seq_lens_k,
-            max_seqlen_q=max_length_q,
-            max_seqlen_k=max_length_k,
+            cu_seq_lens_q=cu_seq_lens_q,
+            cu_seq_lens_k=cu_seq_lens_k,
+            max_seq_len_q=max_length_q,
+            max_seq_len_k=max_length_k,
             **flash_kwargs,
         )
-        if isinstance(out_unpad, tuple):
-            out_unpad = out_unpad[0]
+        if isinstance(output_unpad, tuple):
+            output_unpad = output_unpad[0]
 
-        out = pad_input(out_unpad, indices_q, query_states.size(0), query_length)
+        output = pad_input(output_unpad, indices_q, query_states.size(0), query_length)
     else:
         q_fixed = query_states.transpose(1, 2).contiguous()
         k_fixed = key_states.transpose(1, 2).contiguous()
@@ -148,13 +148,13 @@ def _flash_attention_forward(
 
         # attention mask actually is not used here, but we provide flash_attn_func
         # with attention mask to provide this even without huggingface dependencies.
-        out = flash_attn_func(q_fixed, k_fixed, v_fixed, attention_mask, **flash_kwargs)
-        if isinstance(out, tuple):
-            out = out[0]
+        output = flash_attn_func(q_fixed, k_fixed, v_fixed, attention_mask, **flash_kwargs)
+        if isinstance(output, tuple):
+            output = output[0]
 
-        out = out.transpose(1, 2).contiguous()
+        output = output.transpose(1, 2).contiguous()
 
-    return out
+    return output
 
 
 def flash_attention_forward(
@@ -186,7 +186,7 @@ def flash_attention_forward(
     key_states = key.transpose(1, 2)
     value_states = value.transpose(1, 2)
 
-    target_dtype = _get_target_dtype(query_states, module)
+    target_dtype = get_target_dtype(query_states, module)
     is_causal = is_causal if is_causal is not None else module.is_causal
 
     attn_output = _flash_attention_forward(

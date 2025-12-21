@@ -1,6 +1,8 @@
 model_path="./checkpoints/math/sft"
+formatting_prompt="./data/math_prompt.json"
 global_step=2109
 
 python3 -m nanorlhf.eval.math_eval \
   --model "$model_path/step_$global_step/merged" \
-  --test MATH-500
+  --test MATH-500 \
+  --formatting_prompt="$formatting_prompt"

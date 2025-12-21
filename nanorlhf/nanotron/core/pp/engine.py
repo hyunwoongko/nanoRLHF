@@ -141,33 +141,33 @@ class PipelineParallelWrapper(ParallelizationWrapper):
             is_packed_sequence = False
 
         if is_packed_sequence:
-            self.micro_batches = self._split_packed_batches(_kwargs)
+            self.micro_batches = self.split_packed_batches(_kwargs)
         else:
-            self.micro_batches = self._split_batches(_kwargs)
+            self.micro_batches = self.split_batches(_kwargs)
 
         self.micro_offset = 0
-        self._reserve_buffers(self.num_micro_batches)
+        self.reserve_buffers(self.num_micro_batches)
 
         for micro_idx in range(self.num_micro_batches):
             if self.is_first_stage:
-                self._exec_load_micro_batch(micro_idx)
+                self.exec_load_micro_batch(micro_idx)
 
             if not self.is_first_stage:
-                self._exec_recv_activations(micro_idx)
+                self.exec_recv_activations(micro_idx)
 
-            self._exec_forward_pass(micro_idx)
+            self.exec_forward_pass(micro_idx)
 
             if not self.is_last_stage:
-                self._exec_send_activations(micro_idx)
+                self.exec_send_activations(micro_idx)
 
-            yield self._exec_postprocess(micro_idx)
+            yield self.exec_postprocess(micro_idx)
 
-        self._exec_all_reduce_embedding()
+        self.exec_all_reduce_embedding()
 
         for micro_idx in range(self.num_micro_batches):
-            self._free_buffers("inputs", micro_idx)
-            self._free_buffers("outputs", micro_idx)
-            self._free_buffers("grads", micro_idx)
+            self.free_buffers("inputs", micro_idx)
+            self.free_buffers("outputs", micro_idx)
+            self.free_buffers("grads", micro_idx)
 
     def _parallelize(self):
         """
@@ -187,7 +187,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
 
         # 4) Tag {mode: local_rank} to parameters and buffers
         if self.is_first_stage:
-            self._collect_tied_modules()
+            self.collect_tied_modules()
             tag_modules(
                 modules=embeddings + pre_modules,
                 mode=ParallelMode.PIPELINE,
@@ -202,7 +202,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
             )
 
         if self.is_last_stage:
-            self._collect_tied_modules()
+            self.collect_tied_modules()
             tag_modules(
                 modules=post_modules + heads,
                 mode=ParallelMode.PIPELINE,
@@ -223,14 +223,14 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         embeddings, pre_modules, post_modules, heads = self.mp_plan.extract_modules()
 
         # 3) Collect parameters from all stages
-        self._deparallelize_modules(embeddings + pre_modules, src_rank=self.first_stage)
+        self.deparallelize_modules(embeddings + pre_modules, src_rank=self.first_stage)
 
         for idx in range(num_layers):
-            self._deparallelize_modules([self.mp_plan.main_module_list[idx]], src_rank=layer_owner[idx])
+            self.deparallelize_modules([self.mp_plan.main_module_list[idx]], src_rank=layer_owner[idx])
 
-        self._deparallelize_modules(post_modules + heads, src_rank=self.last_stage)
+        self.deparallelize_modules(post_modules + heads, src_rank=self.last_stage)
 
-    def _collect_tied_modules(self):
+    def collect_tied_modules(self):
         """
         Collect tied modules (e.g., embeddings) and ensure they share weights across stages.
         """
@@ -256,7 +256,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         ):
             self.buffer.embeddings[output_emb.bias] = input_emb.bias
 
-    def _deparallelize_modules(self, modules: List[nn.Module], src_rank: int):
+    def deparallelize_modules(self, modules: List[nn.Module], src_rank: int):
         """
         Collect parameters from the specified source rank and update the local modules.
 
@@ -279,7 +279,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                     )
                     m.bias.data = bias
 
-    def _split_packed_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def split_packed_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
         if "position_ids" not in batches:
             raise KeyError("batch must contain 'position_ids' to split as micro batches")
         pos = batches["position_ids"]
@@ -299,7 +299,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
 
         return micro_batches
 
-    def _split_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def split_batches(self, batches: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Split mini-batches to micro-batches.
 
@@ -333,7 +333,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
 
         return micro_batches
 
-    def _reserve_buffers(self, num_buffers: int):
+    def reserve_buffers(self, num_buffers: int):
         """
         Allocate buffer slots for inputs, outputs, and gradients.
 
@@ -351,7 +351,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                 current_buffer.extend([{} for _ in range(num_added)])
         self.num_buffers = num_buffers
 
-    def _free_buffers(self, buffer_key: str, buffer_id: int):
+    def free_buffers(self, buffer_key: str, buffer_id: int):
         """
         Free a specific buffer slot.
 
@@ -361,7 +361,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         """
         getattr(self.buffer, buffer_key)[buffer_id] = {}
 
-    def _run_forward_pass_first_stage(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
+    def run_forward_pass_first_stage(self, inputs: Dict[str, Any]) -> Dict[str, Any]:
         # According to our `self._partition_layers` method,
         # the first layer in the `ModuleList` can only belong to the first stage.
         # Send the snapshot `input_param_name` to the next stage
@@ -388,7 +388,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
             "user_inputs": inputs,
         }
 
-    def _run_forward_pass_remained_stages(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def run_forward_pass_remained_stages(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         input_param_name = payload["input_param_name"]
         module_list_kwargs = payload.get("module_list_kwargs", {})
         layer_inputs = {input_param_name: payload["hidden_states"], **module_list_kwargs}
@@ -405,7 +405,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
             "user_inputs": payload["user_inputs"],
         }
 
-    def _exec_load_micro_batch(self, buffer_id: int):
+    def exec_load_micro_batch(self, buffer_id: int):
         """
         Load a micro-batch into the specified buffer slot.
 
@@ -422,7 +422,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
                 loaded[k] = v
             self.buffer.inputs[buffer_id] = loaded
 
-    def _exec_send_activations(self, buffer_id: int):
+    def exec_send_activations(self, buffer_id: int):
         """
         Send activations from the specified buffer slot to the next pipeline stage.
 
@@ -431,7 +431,7 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         """
         self.p2p.send(self.buffer.outputs[buffer_id], dst_rank=self.next_stage)
 
-    def _exec_recv_activations(self, buffer_id: int):
+    def exec_recv_activations(self, buffer_id: int):
         """
         Receive activations into the specified buffer slot from the previous pipeline stage.
 
@@ -440,19 +440,19 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         """
         self.buffer.inputs[buffer_id] = self.p2p.recv(src_rank=self.prev_stage)
 
-    def _exec_forward_pass(self, buffer_id: int):
+    def exec_forward_pass(self, buffer_id: int):
         self.micro_offset += 1
         inputs = self.buffer.inputs[buffer_id]
 
         if self.is_first_stage:
             inputs = zero_grads(inputs)
-            payload = self._run_forward_pass_first_stage(inputs)
+            payload = self.run_forward_pass_first_stage(inputs)
         else:
-            payload = self._run_forward_pass_remained_stages(inputs)
+            payload = self.run_forward_pass_remained_stages(inputs)
 
         self.buffer.outputs[buffer_id] = payload
 
-    def _exec_postprocess(self, buffer_id: int):
+    def exec_postprocess(self, buffer_id: int):
         if self.is_last_stage:
             payload = self.buffer.outputs[buffer_id]
             last_hidden_states = payload["hidden_states"]
@@ -485,16 +485,16 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         )
 
         if hasattr(modeling_output, "loss") and modeling_output.loss is not None:
-            modeling_output.loss = self._convert_tensor_to_micro_loss(modeling_output.loss, buffer_id)
+            modeling_output.loss = self.convert_tensor_to_micro_loss(modeling_output.loss, buffer_id)
 
         return modeling_output
 
-    def _convert_tensor_to_micro_loss(self, loss: torch.Tensor, micro_idx: int):
+    def convert_tensor_to_micro_loss(self, loss: torch.Tensor, micro_idx: int):
         loss.__class__ = MicroLossTensor
         loss.set_arguments(self.mpu, self.buffer, micro_idx)  # noqa
         return loss
 
-    def _exec_all_reduce_embedding(self):
+    def exec_all_reduce_embedding(self):
         for head, embedding in self.buffer.embeddings.items():
             if head.grad is not None and embedding.grad is not None:
                 dist.all_reduce(
