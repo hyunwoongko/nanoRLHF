@@ -167,7 +167,7 @@ def preprocess_sft(
         tokens = tokenizer.apply_chat_template(
             messages[: turn_idx + 1],
             tools=tools,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
             tokenize=True,
             **tokenizer_kwargs,
         )

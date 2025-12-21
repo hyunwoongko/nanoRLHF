@@ -21,42 +21,42 @@ class Scheduler:
     def is_finished(self):
         return not self.waiting and not self.running
 
-    def add(self, seq):
-        self.waiting.append(seq)
+    def add(self, sequence):
+        self.waiting.append(sequence)
 
     def schedule(self):
-        scheduled_seqs = []
+        scheduled_sequences = []
         num_sequences = 0
         num_batched_tokens = 0
         while self.waiting and num_sequences < self.max_num_seqs:
-            seq = self.waiting[0]
-            if num_batched_tokens + len(seq) > self.max_num_batched_tokens or not self.block_manager.can_allocate(seq):
+            sequence = self.waiting[0]
+            if num_batched_tokens + len(sequence) > self.max_num_batched_tokens or not self.block_manager.can_allocate(sequence):
                 break
             num_sequences += 1
-            self.block_manager.allocate(seq)
-            num_batched_tokens += len(seq) - seq.num_cached_tokens
-            seq.status = SequenceStatus.RUNNING
+            self.block_manager.allocate(sequence)
+            num_batched_tokens += len(sequence) - sequence.num_cached_tokens
+            sequence.status = SequenceStatus.RUNNING
             self.waiting.popleft()
-            self.running.append(seq)
-            scheduled_seqs.append(seq)
-        if scheduled_seqs:
-            return scheduled_seqs, True
+            self.running.append(sequence)
+            scheduled_sequences.append(sequence)
+        if scheduled_sequences:
+            return scheduled_sequences, True
 
         while self.running and num_sequences < self.max_num_seqs:
-            seq = self.running.popleft()
-            while not self.block_manager.can_append(seq):
+            sequence = self.running.popleft()
+            while not self.block_manager.can_append(sequence):
                 if self.running:
                     self.preempt(self.running.pop())
                 else:
-                    self.preempt(seq)
+                    self.preempt(sequence)
                     break
             else:
                 num_sequences += 1
-                self.block_manager.may_append(seq)
-                scheduled_seqs.append(seq)
-        assert scheduled_seqs
-        self.running.extendleft(reversed(scheduled_seqs))
-        return scheduled_seqs, False
+                self.block_manager.may_append(sequence)
+                scheduled_sequences.append(sequence)
+        assert scheduled_sequences
+        self.running.extendleft(reversed(scheduled_sequences))
+        return scheduled_sequences, False
 
     def preempt(self, sequence):
         # pause the sequence and deallocate its blocks.

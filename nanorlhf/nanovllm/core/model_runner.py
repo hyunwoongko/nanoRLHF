@@ -158,11 +158,11 @@ class ModelRunner:
                 if layer_id >= hf_config.num_hidden_layers:
                     break
 
-    def prepare_block_tables(self, seqs):
-        if any(len(seq.block_table) == 0 for sequence in seqs):
+    def prepare_block_tables(self, sequences):
+        if any(len(sequence.block_table) == 0 for sequence in sequences):
             return None
-        max_len = max(len(seq.block_table) for sequence in seqs)
-        block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for sequence in seqs]
+        max_len = max(len(sequence.block_table) for sequence in sequences)
+        block_tables = [sequence.block_table + [-1] * (max_len - len(sequence.block_table)) for sequence in sequences]
         block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
         return block_tables
 
@@ -190,7 +190,7 @@ class ModelRunner:
             seq_lens_k.append(length)
 
             if block_tables is not None:
-                assert len(sequence.block_table) > 0, "block_tables is not None but seq.block_table is empty"
+                assert len(sequence.block_table) > 0, "block_tables is not None but sequence.block_table is empty"
                 for position in range(prefix, length):
                     block_idx = position // self.block_size
                     assert block_idx < len(sequence.block_table)

@@ -2,6 +2,15 @@ from typing import Optional
 
 
 def last_boxed_only_string(string: str) -> Optional[str]:
+    """
+    Extracts the last occurrence of a boxed expression from the input string.
+
+    Args:
+        string (str): The input string to search for boxed expressions.
+
+    Returns:
+        Optional[str]: The last boxed expression found, or None if none exists.
+    """
     idx = string.rfind("\\boxed")
     if "\\boxed " in string:
         return "\\boxed " + string.split("\\boxed ")[-1].split("$")[0]
@@ -32,6 +41,15 @@ def last_boxed_only_string(string: str) -> Optional[str]:
 
 
 def get_unnormalized_answer(text: str) -> str:
+    """
+    Extracts the last boxed expression from the input text.
+
+    Args:
+        text (str): The input text to search for boxed expressions.
+
+    Returns:
+        str: The last boxed expression found, or "[invalidanswer]" if none exists.
+    """
     answer = last_boxed_only_string(text)
     if answer:
         return answer

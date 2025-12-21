@@ -56,16 +56,16 @@ class BlockManager:
         self.used_block_ids.remove(block_id)
         self.free_block_ids.append(block_id)
 
-    def can_allocate(self, seq):
-        return len(self.free_block_ids) >= seq.num_blocks
+    def can_allocate(self, sequence):
+        return len(self.free_block_ids) >= sequence.num_blocks
 
-    def allocate(self, seq):
-        assert not seq.block_table
+    def allocate(self, sequence):
+        assert not sequence.block_table
         h = -1
         cache_miss = False
 
-        for i in range(seq.num_blocks):
-            token_ids = seq.block(i)
+        for i in range(sequence.num_blocks):
+            token_ids = sequence.block(i)
             if len(token_ids) == self.block_size:
                 # the i-th block is full, h is computed as a valid hash value
                 h = self.compute_hash(token_ids, prefix=h)
@@ -90,7 +90,7 @@ class BlockManager:
                 block = self.allocate_block(block_id)
             else:
                 # if this is full block:
-                seq.num_cached_tokens += self.block_size
+                sequence.num_cached_tokens += self.block_size
                 if block_id in self.used_block_ids:
                     # if the block is already used, we just increase its ref_count.
                     block = self.blocks[block_id]
@@ -102,18 +102,18 @@ class BlockManager:
                 # if the hash value is valid, we update the hash_to_block_id mapping
                 block.update(h, token_ids)
                 self.hash_to_block_id[h] = block_id
-            seq.block_table.append(block_id)
+            sequence.block_table.append(block_id)
 
-    def deallocate(self, seq):
-        for block_id in reversed(seq.block_table):
+    def deallocate(self, sequence):
+        for block_id in reversed(sequence.block_table):
             block = self.blocks[block_id]
             assert block.ref_count > 0
             block.ref_count -= 1
             if block.ref_count == 0:
                 # if no sequence is using this block, we can deallocate it
                 self.deallocate_block(block_id)
-        seq.num_cached_tokens = 0
-        seq.block_table.clear()
+        sequence.num_cached_tokens = 0
+        sequence.block_table.clear()
 
     def can_append(self, seq):
         num_tokens_in_last_block = len(seq) % self.block_size
@@ -122,10 +122,10 @@ class BlockManager:
         # so we need to ensure that there is at least one free block available.
         return len(self.free_block_ids) >= need_new_block
 
-    def may_append(self, seq):
-        block_table = seq.block_table
+    def may_append(self, sequence):
+        block_table = sequence.block_table
         last_block = self.blocks[block_table[-1]]
-        num_tokens_in_last_block = len(seq) % self.block_size
+        num_tokens_in_last_block = len(sequence) % self.block_size
 
         if num_tokens_in_last_block == 1:
             # just starting a new block
@@ -136,7 +136,7 @@ class BlockManager:
         elif num_tokens_in_last_block == 0:
             # last block is full, need to allocate a new block
             assert last_block.hash == -1
-            token_ids = seq.block(seq.num_blocks - 1)
+            token_ids = sequence.block(sequence.num_blocks - 1)
             # -2 means the previous block of the last block
             prefix = self.blocks[block_table[-2]].hash if len(block_table) > 1 else -1
             h = self.compute_hash(token_ids, prefix)

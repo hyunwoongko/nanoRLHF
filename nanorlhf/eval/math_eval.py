@@ -6,17 +6,39 @@ python3 -m nanorlhf.evaluation.math_eval \
 
 import json
 import os
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
+from typing import List, Tuple, Optional
 
 from math_verify import parse, verify
 from transformers import AutoTokenizer
 
 from nanorlhf.eval.utils import get_unnormalized_answer
-from nanorlhf.nanosets import load_dataset
+from nanorlhf.nanosets import load_dataset, Dataset
 from nanorlhf.nanovllm import LLM, SamplingParams
 
+from transformers import PreTrainedTokenizerBase
 
-def generate(llm, tokenizer, sampling_params, dataset, formatting_prompt):
+
+def generate(
+    llm: LLM,
+    tokenizer: PreTrainedTokenizerBase,
+    sampling_params: SamplingParams,
+    dataset: Dataset,
+    formatting_prompt: Optional[str] = None,
+) -> List[dict]:
+    """
+    Generate model outputs for the given dataset.
+
+    Args:
+        llm (LLM): The language model to use for generation.
+        tokenizer (PreTrainedTokenizerBase): Tokenizer for the model.
+        sampling_params (SamplingParams): Sampling parameters for generation.
+        dataset (Dataset): The dataset containing problems.
+        formatting_prompt (Optional[str]): Path to the formatting prompt file.
+
+    Returns:
+        List[dict]: List of model output dictionaries.
+    """
     if formatting_prompt is not None:
         formatting_prompt = json.load(open(formatting_prompt, "r"))["prompt"]
 
@@ -29,14 +51,29 @@ def generate(llm, tokenizer, sampling_params, dataset, formatting_prompt):
             prompt = sample["problem"]
 
         messages = [{"role": "user", "content": prompt}]
-        messages = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        messages = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
         prompts.append(messages)
 
     outputs = llm.generate(prompts, sampling_params=sampling_params)
     return outputs
 
 
-def evaluate(model_outputs, dataset):
+def evaluate(model_outputs: list, dataset: Dataset) -> Tuple[dict, list]:
+    """
+    Evaluate model outputs against the dataset solutions.
+
+    Args:
+        model_outputs (list): List of model output dictionaries.
+        dataset (Dataset): The dataset containing problems and solutions.
+
+    Returns:
+        Tuple[dict, list]: Evaluation results and model outputs for saving.
+    """
     accuracy = 0
     model_outputs_for_saving = []
     for idx in range(len(dataset)):
@@ -51,6 +88,10 @@ def evaluate(model_outputs, dataset):
             else:
                 gold_answer = parse(sample["answer"])
 
+        print(f"Problem: {sample['problem']}")
+        print(f"Model text: {model_text}")
+        print(f"Gold answer: {gold_answer}")
+        print("-" * 100)
         model_answer = parse(get_unnormalized_answer(model_text))
         accuracy += int(verify(gold_answer, model_answer))
         model_outputs_for_saving.append(
@@ -68,7 +109,21 @@ def evaluate(model_outputs, dataset):
     return evaluation_result, model_outputs_for_saving
 
 
-def main(args, llm, sampling_params, tokenizer):
+def main(
+    args: Namespace,
+    llm: LLM,
+    sampling_params: SamplingParams,
+    tokenizer: PreTrainedTokenizerBase,
+):
+    """
+    Main evaluation loop for math problems.
+
+    Args:
+        args (Namespace): Command line arguments.
+        llm (LLM): The language model to use for generation.
+        sampling_params (SamplingParams): Sampling parameters for generation.
+        tokenizer (PreTrainedTokenizerBase): Tokenizer for the model.
+    """
     print("Loading test dataset...")
     dataset = load_dataset(f"./data/{args.test}/test.jsonl")
     print("Generating model answers...")
@@ -78,7 +133,7 @@ def main(args, llm, sampling_params, tokenizer):
     eval_output, model_outputs_for_saving = evaluate(model_outputs, dataset)
     print(f"Evaluation result: {eval_output}")
 
-    eval_result_dir = os.path.join(args.model, "eval", args.test)
+    eval_result_dir = os.path.join("eval", args.model.split("/")[-1], args.test)
     os.makedirs(eval_result_dir, exist_ok=True)
 
     eval_result_path = os.path.join(eval_result_dir, "score.json")

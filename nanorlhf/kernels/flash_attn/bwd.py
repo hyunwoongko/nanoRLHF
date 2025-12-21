@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import torch
 import triton
 import triton.language as tl
@@ -5,21 +7,49 @@ import triton.language as tl
 
 @triton.jit
 def flash_attn_kernel_bwd(
-    q_ptr, k_ptr, v_ptr, do_ptr,
-    dq_ptr, dk_ptr, dv_ptr,
-    max_q_ptr, ez_sum_ptr, mask_ptr,
-    seq_len_q, seq_len_kv,
-    stride_q_bh, stride_q_seq, stride_q_dim,
-    stride_k_bh, stride_k_seq, stride_k_dim,
-    stride_v_bh, stride_v_seq, stride_v_dim,
-    stride_do_bh, stride_do_seq, stride_do_dim,
-    stride_dq_bh, stride_dq_seq, stride_dq_dim,
-    stride_dk_bh, stride_dk_seq, stride_dk_dim,
-    stride_dv_bh, stride_dv_seq, stride_dv_dim,
-    stride_max_q_bh, stride_max_q_seq,
-    stride_ez_sum_bh, stride_ez_sum_seq,
-    stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
-    num_heads, mask_num_heads,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    do_ptr,
+    dq_ptr,
+    dk_ptr,
+    dv_ptr,
+    max_q_ptr,
+    ez_sum_ptr,
+    mask_ptr,
+    seq_len_q,
+    seq_len_kv,
+    stride_q_bh,
+    stride_q_seq,
+    stride_q_dim,
+    stride_k_bh,
+    stride_k_seq,
+    stride_k_dim,
+    stride_v_bh,
+    stride_v_seq,
+    stride_v_dim,
+    stride_do_bh,
+    stride_do_seq,
+    stride_do_dim,
+    stride_dq_bh,
+    stride_dq_seq,
+    stride_dq_dim,
+    stride_dk_bh,
+    stride_dk_seq,
+    stride_dk_dim,
+    stride_dv_bh,
+    stride_dv_seq,
+    stride_dv_dim,
+    stride_max_q_bh,
+    stride_max_q_seq,
+    stride_ez_sum_bh,
+    stride_ez_sum_seq,
+    stride_mask_b,
+    stride_mask_h,
+    stride_mask_q,
+    stride_mask_k,
+    num_heads,
+    mask_num_heads,
     softmax_scale,
     causal: tl.constexpr,
     has_mask: tl.constexpr,
@@ -199,7 +229,35 @@ def flash_attn_kernel_bwd(
     tl.store(dq_block_ptr, dq_out, boundary_check=(0, 1))
 
 
-def flash_attn_bwd(q, k, v, do, max_q, ez_sum, attention_mask=None, causal=True, softmax_scale=None):
+def flash_attn_bwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    do: torch.Tensor,
+    max_q: torch.Tensor,
+    ez_sum: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    softmax_scale: Optional[float] = None,
+    causal: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Backward pass for Flash Attention.
+
+    Args:
+        q: Query tensor of shape (bsz, num_heads, seq_len_q, dim_head).
+        k: Key tensor of shape (bsz, num_heads, seq_len_kv, dim_head).
+        v: Value tensor of shape (bsz, num_heads, seq_len_kv, dim_head).
+        do: Gradient of output tensor of shape (bsz, num_heads, seq_len_q, dim_head).
+        max_q: Max logits per query block of shape (bsz * num_heads, seq_len_q).
+        ez_sum: Exponential sum per query block of shape (bsz * num_heads, seq_len_q).
+        attention_mask: Optional attention mask tensor.
+        softmax_scale: Optional scaling factor for softmax.
+        causal: Whether to apply causal masking.
+
+    Returns:
+        Tuple of gradients (dq, dk, dv) with the same shapes as q, k, v respectively.
+    """
+
     bsz, num_heads_q, seq_len_q, dim_head = q.shape
     seq_len_kv = k.shape[2]
     assert max_q.shape == ez_sum.shape == (bsz * num_heads_q, seq_len_q)
@@ -251,23 +309,50 @@ def flash_attn_bwd(q, k, v, do, max_q, ez_sum, attention_mask=None, causal=True,
         stride_mask_b = stride_mask_h = stride_mask_q = stride_mask_k = 0
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim_head ** 0.5)
+        softmax_scale = 1.0 / (dim_head**0.5)
 
     flash_attn_kernel_bwd[grid](
-        q, k, v, do,
-        dq, dk, dv,
-        max_q, ez_sum, mask,
-        seq_len_q, seq_len_kv,
-        stride_q_bh, stride_q_seq, stride_q_dim,
-        stride_k_bh, stride_k_seq, stride_k_dim,
-        stride_v_bh, stride_v_seq, stride_v_dim,
-        stride_do_bh, stride_do_seq, stride_do_dim,
-        stride_dq_bh, stride_dq_seq, stride_dq_dim,
-        stride_dk_bh, stride_dk_seq, stride_dk_dim,
-        stride_dv_bh, stride_dv_seq, stride_dv_dim,
-        stride_max_q_bh, stride_max_q_seq,
-        stride_ez_sum_bh, stride_ez_sum_seq,
-        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+        q,
+        k,
+        v,
+        do,
+        dq,
+        dk,
+        dv,
+        max_q,
+        ez_sum,
+        mask,
+        seq_len_q,
+        seq_len_kv,
+        stride_q_bh,
+        stride_q_seq,
+        stride_q_dim,
+        stride_k_bh,
+        stride_k_seq,
+        stride_k_dim,
+        stride_v_bh,
+        stride_v_seq,
+        stride_v_dim,
+        stride_do_bh,
+        stride_do_seq,
+        stride_do_dim,
+        stride_dq_bh,
+        stride_dq_seq,
+        stride_dq_dim,
+        stride_dk_bh,
+        stride_dk_seq,
+        stride_dk_dim,
+        stride_dv_bh,
+        stride_dv_seq,
+        stride_dv_dim,
+        stride_max_q_bh,
+        stride_max_q_seq,
+        stride_ez_sum_bh,
+        stride_ez_sum_seq,
+        stride_mask_b,
+        stride_mask_h,
+        stride_mask_q,
+        stride_mask_k,
         num_heads=num_heads_q,
         mask_num_heads=mask_num_heads,
         softmax_scale=softmax_scale,

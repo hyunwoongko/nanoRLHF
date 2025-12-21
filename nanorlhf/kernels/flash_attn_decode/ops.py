@@ -1,5 +1,8 @@
+from typing import Optional
+
 import torch
 import triton
+from deprecated import deprecated
 
 from nanorlhf.kernels.flash_attn_decode.reduce_k import flash_attn_decode_kernel_reduce_k
 from nanorlhf.kernels.flash_attn_decode.split_k import (
@@ -7,16 +10,29 @@ from nanorlhf.kernels.flash_attn_decode.split_k import (
     flash_attn_decode_kernel_split_k,
 )
 
-
 KVCACHE_BLOCK_SIZE = 256
 
 
-def get_split_k(batch_size, n_group_q, heads_per_group_q, seq_len_kc):
-    # https://github.com/Dao-AILab/flash-attention/blob/672381f72c927a4b4a92f30755dc5829c3d0eaa3/flash_attn/flash_attn_triton_amd/fwd_decode.py
+def get_split_k(batch_size: int, n_group_q: int, heads_per_group_q: int, seq_len_k: int) -> int:
+    """
+    Heuristic to determine split_k for flash attention decoding.
+
+    Args:
+        batch_size (int): Batch size.
+        n_group_q (int): Number of query head groups.
+        heads_per_group_q (int): Number of heads per query group.
+        seq_len_k (int): Sequence length of keys.
+
+    Returns:
+        int: Calculated split_k value.
+
+    References:
+        https://github.com/Dao-AILab/flash-attention/blob/672381f72c927a4b4a92f30755dc5829c3d0eaa3/flash_attn/flash_attn_triton_amd/fwd_decode.py
+    """
     bh = max(batch_size * heads_per_group_q, 1)
-    split_k = max(seq_len_kc, 1024) // bh
+    split_k = max(seq_len_k, 1024) // bh
     max_chunk_size = 64
-    while split_k > 0 and seq_len_kc / split_k < max_chunk_size:
+    while split_k > 0 and seq_len_k / split_k < max_chunk_size:
         split_k = split_k // 2
     while batch_size * heads_per_group_q * n_group_q * split_k >= 1024:
         split_k = split_k // 2
@@ -33,10 +49,29 @@ def flash_attn_decode_paged(
     num_heads: int,
     kv_heads: int,
     causal: bool = True,
-    softmax_scale: float | None = None,
+    softmax_scale: Optional[float] = None,
     block_size_k: int = 64,
     kv_block_size: int = KVCACHE_BLOCK_SIZE,
 ) -> torch.Tensor:
+    """
+    Flash Attention decoding with paged key-value cache.
+
+    Args:
+        q_bh (torch.Tensor): Query tensor of shape (batch_size * num_heads, 1, dim).
+        k_slots (torch.Tensor): Key cache tensor of shape (num_kv_slots, kv_heads, dim).
+        v_slots (torch.Tensor): Value cache tensor of shape (num_kv_slots, kv_heads, dim).
+        block_tables (torch.Tensor): Block table tensor of shape (batch_size, max_num_blocks).
+        context_lens (torch.Tensor): Context lengths tensor of shape (batch_size,).
+        num_heads (int): Total number of attention heads.
+        kv_heads (int): Number of key-value heads.
+        causal (bool): Whether to apply causal masking.
+        softmax_scale (Optional[float]): Scaling factor for softmax.
+        block_size_k (int): Block size for keys.
+        kv_block_size (int): Block size for key-value cache.
+
+    Returns:
+        torch.Tensor: Output tensor of shape (batch_size * num_heads, 1, dim).
+    """
     assert q_bh.ndim == 3
     bh, seq_len_q, dim = q_bh.shape
     assert seq_len_q == 1
@@ -44,7 +79,7 @@ def flash_attn_decode_paged(
     split_k = 1  # fix split_k to 1 for cuda graph
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim ** 0.5)
+        softmax_scale = 1.0 / (dim**0.5)
 
     assert block_tables.ndim == 2
     max_num_blocks = int(block_tables.shape[1])
@@ -139,8 +174,37 @@ def flash_attn_decode_paged(
     return o
 
 
-# deprecated, kept for reference.
-def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, block_size_q=64, block_size_k=64):
+@deprecated
+def flash_attn_decode(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    causal: bool = True,
+    softmax_scale: Optional[float] = None,
+    split_k: Optional[int] = None,
+    block_size_q: int = 16,
+    block_size_k: int = 64,
+) -> torch.Tensor:
+    """
+    Flash Attention decoding from loaded key-value tensors by python.
+
+    Args:
+        q (torch.Tensor): Query tensor of shape (batch_size, num_heads, seq_len_q, dim) or (batch_size * num_heads, seq_len_q, dim).
+        k (torch.Tensor): Key tensor of shape (batch_size, num_heads, seq_len_k, dim) or (batch_size * num_heads, seq_len_k, dim).
+        v (torch.Tensor): Value tensor of shape (batch_size, num_heads, seq_len_k, dim) or (batch_size * num_heads, seq_len_k, dim).
+        causal (bool): Whether to apply causal masking.
+        softmax_scale (Optional[float]): Scaling factor for softmax.
+        split_k (Optional[int]): Number of splits along the key dimension.
+        block_size_q (int): Block size for queries.
+        block_size_k (int): Block size for keys.
+
+    Returns:
+        torch.Tensor: Output tensor of shape (batch_size, num_heads, seq_len_q, dim).
+
+    Notes:
+        This function is deprecated because it can not be used with CUDA graph.
+        Use `flash_attn_decode_paged` instead.
+    """
     if q.ndim == 4:
         bsz, num_heads, seq_len_q, dim = q.shape
         seq_len_k = k.shape[2]
@@ -258,4 +322,3 @@ def flash_attn_decode(q, k, v, split_k=None, causal=True, softmax_scale=None, bl
     )
     o = o.view(bsz, num_heads, seq_len_q, dim)
     return o
-

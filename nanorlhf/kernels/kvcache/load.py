@@ -5,10 +5,10 @@ def load_kv_from_cache_prefill(context, cu_seq_lens_k, key_cache, value_cache, n
     assert context.block_tables is not None
 
     device = key_cache.device
-    cu_k = cu_seq_lens_k.to(device)
+    cu_seq_lens_k = cu_seq_lens_k.to(device)
     block_tables = context.block_tables.to(device)
 
-    b = cu_k.numel() - 1
+    b = cu_seq_lens_k.numel() - 1
     num_blocks, block_size, kv_heads, hd = key_cache.shape
     assert hd == dim, f"head_dim mismatch: cache {hd}, q {dim}"
     assert block_tables.size(0) == b
@@ -21,7 +21,7 @@ def load_kv_from_cache_prefill(context, cu_seq_lens_k, key_cache, value_cache, n
     v_chunks = []
     total_k = 0
     for _b in range(b):
-        length = int((cu_k[_b + 1] - cu_k[_b]).item())
+        length = int((cu_seq_lens_k[_b + 1] - cu_seq_lens_k[_b]).item())
         if length == 0:
             continue
 

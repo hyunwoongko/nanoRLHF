@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import torch
 import triton
 import triton.language as tl
@@ -18,12 +20,12 @@ def flash_attn_varlen_fwd_kernel(
     q_ptr,
     k_ptr,
     v_ptr,
-    cu_seqlens_q_ptr,
-    cu_seqlens_k_ptr,
+    cu_seq_lens_q_ptr,
+    cu_seq_lens_k_ptr,
     o_ptr,
     max_q_ptr,
     ez_sum_ptr,
-    bsz,
+    batch_size,
     num_heads,
     stride_q_tok,
     stride_q_head,
@@ -47,26 +49,57 @@ def flash_attn_varlen_fwd_kernel(
     tile_size_kv: tl.constexpr,
     dim: tl.constexpr,
 ):
+    """
+    Flash Attention forward kernel for variable-length sequences.
+
+    Discussion:
+        Q. How does this kernel handle variable-length sequences?
+            This kernel uses cumulative sequence length pointers (cu_seq_lens_q and cu_seq_lens_k) to determine the
+            start and end positions of each sequence within the batch. By calculating the sequence lengths dynamically
+            for each sequence, it can process sequences of variable lengths without computation on padding tokens.
+
+        Q. How this kernel uses cumulative sequence lengths to manage variable-length sequences?
+            We can see the following code snippet in the kernel implementation:
+
+                ```
+                seq_id = pid_bh // num_heads
+
+                q_start = tl.load(cu_seq_lens_q_ptr + seq_id)
+                q_end = tl.load(cu_seq_lens_q_ptr + seq_id + 1)
+                seq_len_q = q_end - q_start
+
+                k_start = tl.load(cu_seq_lens_k_ptr + seq_id)
+                k_end = tl.load(cu_seq_lens_k_ptr + seq_id + 1)
+                seq_len_k = k_end - k_start
+                ```
+
+            The kernel takes in two pointers, `cu_seq_lens_q_ptr` and `cu_seq_lens_k_ptr`, which point to arrays
+            containing the cumulative sequence lengths for the query and key/value sequences, respectively. For each
+            sequence in the batch, the kernel calculates the start and end indices by loading values from these arrays.
+            The sequence length is determined by subtracting the start index from the end index. This allows the kernel
+            to identify the valid tokens for each sequence and avoid processing padding tokens, ensuring efficient
+            computation for variable-length sequences.
+    """
     pid_bh = tl.program_id(0)
     pid_m = tl.program_id(1)
 
     seq_id = pid_bh // num_heads
     head_id = pid_bh % num_heads
 
-    q_start = tl.load(cu_seqlens_q_ptr + seq_id)
-    q_end = tl.load(cu_seqlens_q_ptr + seq_id + 1)
-    seqlen_q = q_end - q_start
+    q_start = tl.load(cu_seq_lens_q_ptr + seq_id)
+    q_end = tl.load(cu_seq_lens_q_ptr + seq_id + 1)
+    seq_len_q = q_end - q_start
 
-    k_start = tl.load(cu_seqlens_k_ptr + seq_id)
-    k_end = tl.load(cu_seqlens_k_ptr + seq_id + 1)
-    seqlen_k = k_end - k_start
+    k_start = tl.load(cu_seq_lens_k_ptr + seq_id)
+    k_end = tl.load(cu_seq_lens_k_ptr + seq_id + 1)
+    seq_len_k = k_end - k_start
 
     block_q_start = pid_m * block_size_q
     offs_q = block_q_start + tl.arange(0, block_size_q)
     offs_kv = tl.arange(0, tile_size_kv)
-    q_mask = offs_q < seqlen_q
+    q_mask = offs_q < seq_len_q
 
-    if block_q_start >= seqlen_q:
+    if block_q_start >= seq_len_q:
         return
 
     q_indices = q_start + offs_q
@@ -82,7 +115,7 @@ def flash_attn_varlen_fwd_kernel(
 
     q_block_ptr = tl.make_block_ptr(
         base=q_head_seq_base,
-        shape=(seqlen_q, dim),
+        shape=(seq_len_q, dim),
         strides=(stride_q_tok, stride_q_dim),
         offsets=(block_q_start, 0),
         block_shape=(block_size_q, dim),
@@ -97,10 +130,10 @@ def flash_attn_varlen_fwd_kernel(
     ez_sum = tl.zeros((block_size_q,), dtype=tl.float32)
     ez_dot_v = tl.zeros((block_size_q, dim), dtype=tl.float32)
 
-    for kv_start in range(0, seqlen_k, tile_size_kv):
+    for kv_start in range(0, seq_len_k, tile_size_kv):
         k_block_ptr = tl.make_block_ptr(
             base=k_head_seq_base,
-            shape=(seqlen_k, dim),
+            shape=(seq_len_k, dim),
             strides=(stride_k_tok, stride_k_dim),
             offsets=(kv_start, 0),
             block_shape=(tile_size_kv, dim),
@@ -108,7 +141,7 @@ def flash_attn_varlen_fwd_kernel(
         )
         v_block_ptr = tl.make_block_ptr(
             base=v_head_seq_base,
-            shape=(seqlen_k, dim),
+            shape=(seq_len_k, dim),
             strides=(stride_v_tok, stride_v_dim),
             offsets=(kv_start, 0),
             block_shape=(tile_size_kv, dim),
@@ -126,11 +159,11 @@ def flash_attn_varlen_fwd_kernel(
         )
         scores = tl.dot(q.to(k.dtype), tl.trans(k)) * softmax_scale
         kv_idx = kv_start + offs_kv
-        kv_mask = kv_idx < seqlen_k
+        kv_mask = kv_idx < seq_len_k
         base_mask = (~q_mask[:, None]) | (~kv_mask[None, :])
 
         if causal:
-            offset = seqlen_k - seqlen_q
+            offset = seq_len_k - seq_len_q
             q_pos = (offset + offs_q)[:, None]
             kv_pos = kv_idx[None, :]
             causal_mask = kv_pos > q_pos
@@ -154,7 +187,7 @@ def flash_attn_varlen_fwd_kernel(
     # Output block store
     o_block_ptr = tl.make_block_ptr(
         base=o_head_seq_base,
-        shape=(seqlen_q, dim),
+        shape=(seq_len_q, dim),
         strides=(stride_o_tok, stride_o_dim),
         offsets=(block_q_start, 0),
         block_shape=(block_size_q, dim),
@@ -171,14 +204,46 @@ def flash_attn_varlen_fwd_kernel(
 
 
 def flash_attn_varlen_fwd(
-    q, k, v, cu_seqlens_q, cu_seqlens_k, bsz, num_heads, max_seqlen_q, max_seqlen_k, causal=True, softmax_scale=None
-):
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    cu_seq_lens_q: torch.Tensor,
+    cu_seq_lens_k: torch.Tensor,
+    batch_size: int,
+    num_heads: int,
+    max_seq_len_q: int,
+    max_seq_len_k: int,
+    causal: bool = True,
+    softmax_scale: Optional[float] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Flash Attention forward function for variable-length sequences.
+
+    Args:
+        q (torch.Tensor): Query tensor of shape (total_q, num_heads, dim).
+        k (torch.Tensor): Key tensor of shape (total_k, num_heads, dim).
+        v (torch.Tensor): Value tensor of shape (total_k, num_heads, dim).
+        cu_seq_lens_q (torch.Tensor): Cumulative sequence lengths for queries of shape (batch_size + 1,).
+        cu_seq_lens_k (torch.Tensor): Cumulative sequence lengths for keys/values of shape (batch_size + 1,).
+        batch_size (int): Number of sequences in the batch.
+        num_heads (int): Number of attention heads.
+        max_seq_len_q (int): Maximum sequence length for queries.
+        max_seq_len_k (int): Maximum sequence length for keys/values.
+        causal (bool): Whether to apply causal masking. Default is True.
+        softmax_scale (Optional[float]): Scaling factor for softmax. If None, defaults to 1/sqrt(dim).
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            - Output tensor of shape (total_q, num_heads, dim).
+            - Max logits tensor of shape (num_heads, total_q).
+            - Exponential sum tensor of shape (num_heads, total_q).
+    """
     assert q.is_cuda and k.is_cuda and v.is_cuda
     assert q.dim() == 3 and k.dim() == 3 and v.dim() == 3
     assert q.shape[1] == k.shape[1] == v.shape[1]
     assert q.shape[2] == k.shape[2] == v.shape[2]
-    assert cu_seqlens_q.shape[0] == bsz + 1
-    assert cu_seqlens_k.shape[0] == bsz + 1
+    assert cu_seq_lens_q.shape[0] == batch_size + 1
+    assert cu_seq_lens_k.shape[0] == batch_size + 1
 
     total_q, num_heads_q, dim = q.shape
     total_k, num_heads_k, dim_k = k.shape
@@ -200,18 +265,18 @@ def flash_attn_varlen_fwd(
         softmax_scale = 1.0 / (dim**0.5)
 
     def grid(meta):
-        return bsz * num_heads, triton.cdiv(max_seqlen_q, meta["block_size_q"])
+        return batch_size * num_heads, triton.cdiv(max_seq_len_q, meta["block_size_q"])
 
     flash_attn_varlen_fwd_kernel[grid](
         q,
         k,
         v,
-        cu_seqlens_q,
-        cu_seqlens_k,
+        cu_seq_lens_q,
+        cu_seq_lens_k,
         o,
         max_q,
         ez_sum,
-        bsz,
+        batch_size,
         num_heads,
         stride_q_tok,
         stride_q_head,

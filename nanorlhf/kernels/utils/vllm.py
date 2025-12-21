@@ -105,8 +105,8 @@ def compute_prefill(
     if context.block_tables is None:
         assert total_k == total_q, f"no-cache prefill expects total_k==total_q, got {total_k} vs {total_q}"
 
-    bsz, q_len, num_heads, _ = query_states.shape
-    assert bsz == 1, f"packed prefill expects batch=1, got {bsz}"
+    batch_size, q_len, num_heads, _ = query_states.shape
+    assert batch_size == 1, f"packed prefill expects batch=1, got {batch_size}"
 
     q = query_states.reshape(-1, num_heads, dim).contiguous()
 
@@ -146,7 +146,7 @@ def compute_decode(
     query_states,
     key_cache,
     value_cache,
-    bsz,
+    batch_size,
     seq_len_q,
     num_heads,
     dim,
@@ -157,7 +157,7 @@ def compute_decode(
     assert context.block_tables is not None
     assert context.context_lens is not None
 
-    q_bh = query_states.permute(0, 2, 1, 3).reshape(bsz * num_heads, seq_len_q, dim).contiguous()
+    q_bh = query_states.permute(0, 2, 1, 3).reshape(batch_size * num_heads, seq_len_q, dim).contiguous()
 
     num_blocks, block_size, kv_heads, dim_cache = key_cache.shape
     assert dim_cache == dim
@@ -181,7 +181,7 @@ def compute_decode(
         softmax_scale=scaling,
         kv_block_size=block_size,
     )
-    output = output.view(bsz, num_heads, seq_len_q, dim)
+    output = output.view(batch_size, num_heads, seq_len_q, dim)
     return output, None
 
 
@@ -211,7 +211,7 @@ def paged_flash_attention_forward(
             "Please check your input shapes or use SDPA instead."
         )
 
-    bsz, num_heads, seq_len_q, dim = query.shape
+    batch_size, num_heads, seq_len_q, dim = query.shape
     query_states = query.transpose(1, 2)
     key_states = key.transpose(1, 2)
     value_states = value.transpose(1, 2)
@@ -263,7 +263,7 @@ def paged_flash_attention_forward(
             query_states=query_states,
             key_cache=key_cache,
             value_cache=value_cache,
-            bsz=bsz,
+            batch_size=batch_size,
             seq_len_q=seq_len_q,
             num_heads=num_heads,
             dim=dim,

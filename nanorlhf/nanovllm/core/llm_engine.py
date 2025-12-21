@@ -102,11 +102,13 @@ class LLMEngine:
             scheduler.postprocess(sequences, token_ids)
 
             outputs = [
-                (seq.sequence_id, seq.completion_token_ids, seq.finish_reason) for seq in sequences if seq.is_finished
+                (sequence.sequence_id, sequence.completion_token_ids, sequence.finish_reason)
+                for sequence in sequences
+                if sequence.is_finished
             ]
             all_outputs.extend(outputs)
 
-            num_tokens = sum(len(seq) for seq in sequences) if is_prefill else -len(sequences)
+            num_tokens = sum(len(sequence) for sequence in sequences) if is_prefill else -len(sequences)
             total_num_tokens += num_tokens
 
         return all_outputs, total_num_tokens

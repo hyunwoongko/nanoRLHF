@@ -1,3 +1,5 @@
+from typing import Optional, Tuple
+
 import torch
 import triton
 import triton.language as tl
@@ -5,17 +7,37 @@ import triton.language as tl
 
 @triton.jit
 def flash_attn_kernel_fwd(
-    q_ptr, k_ptr, v_ptr, o_ptr,
-    max_q_ptr, ez_sum_ptr, mask_ptr,
-    seq_len_q, seq_len_k,
-    stride_q_bh, stride_q_seq, stride_q_dim,
-    stride_k_bh, stride_k_seq, stride_k_dim,
-    stride_v_bh, stride_v_seq, stride_v_dim,
-    stride_o_bh, stride_o_seq, stride_o_dim,
-    stride_max_bh, stride_max_seq,
-    stride_ez_sum_bh, stride_ez_sum_seq,
-    stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
-    num_heads, mask_num_heads,
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    o_ptr,
+    max_q_ptr,
+    ez_sum_ptr,
+    mask_ptr,
+    seq_len_q,
+    seq_len_k,
+    stride_q_bh,
+    stride_q_seq,
+    stride_q_dim,
+    stride_k_bh,
+    stride_k_seq,
+    stride_k_dim,
+    stride_v_bh,
+    stride_v_seq,
+    stride_v_dim,
+    stride_o_bh,
+    stride_o_seq,
+    stride_o_dim,
+    stride_max_bh,
+    stride_max_seq,
+    stride_ez_sum_bh,
+    stride_ez_sum_seq,
+    stride_mask_b,
+    stride_mask_h,
+    stride_mask_q,
+    stride_mask_k,
+    num_heads,
+    mask_num_heads,
     softmax_scale,
     causal: tl.constexpr,
     has_mask: tl.constexpr,
@@ -268,7 +290,28 @@ def flash_attn_kernel_fwd(
     tl.store(ez_sum_ptrs, ez_sum, mask=q_mask)
 
 
-def flash_attn_fwd(q, k, v, attention_mask=None, causal=True, softmax_scale=None):
+def flash_attn_fwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    attention_mask: Optional[torch.Tensor] = None,
+    softmax_scale: Optional[float] = None,
+    causal: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Flash attention forward pass.
+
+    Args:
+        q: Query tensor of shape (bsz, num_heads, seq_len_q, dim) or (bh, seq_len_q, dim)
+        k: Key tensor of shape (bsz, num_heads, seq_len_k, dim) or (bh, seq_len_k, dim)
+        v: Value tensor of shape (bsz, num_heads, seq_len_k, dim) or (bh, seq_len_k, dim)
+        attention_mask: Optional attention mask of shape (bsz, num_heads_mask, seq_len_q, seq_len_k)
+        softmax_scale: Optional scaling factor for softmax
+        causal: Whether to apply causal masking
+
+    Returns:
+        Tuple of output tensor, max_q, ez_sum for backward pass
+    """
     input_ndim = q.ndim
 
     if input_ndim == 4:
@@ -322,19 +365,38 @@ def flash_attn_fwd(q, k, v, attention_mask=None, causal=True, softmax_scale=None
         stride_mask_b = stride_mask_h = stride_mask_q = stride_mask_k = 0
 
     if softmax_scale is None:
-        softmax_scale = 1.0 / (dim ** 0.5)
+        softmax_scale = 1.0 / (dim**0.5)
 
     flash_attn_kernel_fwd[grid](
-        q, k, v, o,
-        max_q, ez_sum, mask,
-        seq_len_q, seq_len_k,
-        stride_q_bh, stride_q_seq, stride_q_dim,
-        stride_k_bh, stride_k_seq, stride_k_dim,
-        stride_v_bh, stride_v_seq, stride_v_dim,
-        stride_o_bh, stride_o_seq, stride_o_dim,
-        stride_max_bh, stride_max_seq,
-        stride_ez_sum_bh, stride_ez_sum_seq,
-        stride_mask_b, stride_mask_h, stride_mask_q, stride_mask_k,
+        q,
+        k,
+        v,
+        o,
+        max_q,
+        ez_sum,
+        mask,
+        seq_len_q,
+        seq_len_k,
+        stride_q_bh,
+        stride_q_seq,
+        stride_q_dim,
+        stride_k_bh,
+        stride_k_seq,
+        stride_k_dim,
+        stride_v_bh,
+        stride_v_seq,
+        stride_v_dim,
+        stride_o_bh,
+        stride_o_seq,
+        stride_o_dim,
+        stride_max_bh,
+        stride_max_seq,
+        stride_ez_sum_bh,
+        stride_ez_sum_seq,
+        stride_mask_b,
+        stride_mask_h,
+        stride_mask_q,
+        stride_mask_k,
         num_heads=num_heads_q,
         mask_num_heads=mask_num_heads,
         softmax_scale=softmax_scale,

@@ -1,5 +1,6 @@
 import triton
 import triton.language as tl
+from deprecated import deprecated
 
 
 @triton.jit
@@ -43,6 +44,27 @@ def flash_attn_decode_kernel_split_k_paged(
     block_size_k: tl.constexpr,
     max_num_blocks: tl.constexpr,
 ):
+    """
+    Decoding kernel for Flash Attention with Split-K and paged KV cache.
+
+    Discussion:
+        Q. Why Split-K is needed for decoding?
+            In decoding, the query length (seq_len_q) is just 1 (for one token at a time),
+            So it does not make sense to split along the query length dimension.
+            However, the key/value cache can grow very long (seq_len_k) as more tokens are generated.
+            To efficiently handle long key/value caches, we split along the key/value length dimension (Split-K).
+
+        Q. Can we compute the final output directly in this kernel?
+            No. We can't directly compute the final softmax output from partial results of each split,
+            because softmax is a non-linear operation. To address this, we call Reduce-K kernel after this kernel.
+            The Reduce-K kernel will aggregate the partial results from all splits to produce the final output.
+
+        Q. What is difference between this paged kernel and the deprecated kernel?
+            This kernel gets the huge KV cache directly and loads only the needed KV tensors based on the block table.
+            But the deprecated kernel requires preloaded KV tensors by Python code.
+            The problem is the KV cache loading function written in Python can not be used with CUDA graphs,
+            because it has dynamic control flow.
+    """
     pid_q_block = tl.program_id(0)
     pid_bh = tl.program_id(1)
     pid_split = tl.program_id(2)
@@ -169,7 +191,7 @@ def flash_attn_decode_kernel_split_k_paged(
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
 
 
-# deprecated, kept for reference.
+@deprecated
 @triton.jit
 def flash_attn_decode_kernel_split_k(
     q_ptr,
