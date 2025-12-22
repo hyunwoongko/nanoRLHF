@@ -11,7 +11,7 @@ class DataConfig:
     valid_batch_size: int = 200
     ppo_mini_batch_size_per_gpu: int = 32
     ppo_micro_batch_size_per_gpu: int = 8
-    ppo_epochs: int = 2
+    ppo_epochs: int = 1
     train_data: Optional[str] = None
     valid_data: Optional[str] = None
     num_workers: int = 8
@@ -56,7 +56,7 @@ class RewardConfig:
 
 @dataclass
 class OptimConfig:
-    lr: float = 5e-7
+    lr: float = 3e-6
     min_lr: float = 0.0
     lr_warmup_steps_ratio: float = 0.1
     lr_scheduler: str = "cosine"

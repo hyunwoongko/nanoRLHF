@@ -3,7 +3,7 @@ data:
   valid_batch_size: 256
   ppo_mini_batch_size_per_gpu: 32
   ppo_micro_batch_size_per_gpu: 8
-  ppo_epochs: 2
+  ppo_epochs: 1
   train_data: ./data/DeepMath-84k/preprocessed/train.nano
   valid_data: ./data/MATH-500/preprocessed/valid.nano
   num_workers: 8
@@ -42,7 +42,7 @@ reward:
   path: nanorlhf.nanoverl.reward.custom_reward_fn
 
 optim:
-  lr: 1e-5
+  lr: 3e-6
   min_lr: 0
   lr_warmup_steps_ratio: 0.1
   lr_scheduler: cosine
