@@ -59,12 +59,7 @@ class ActorCriticRefWorkerGroup:
         for actor_local_rank in range(self.actor_world_size):
             object_ref = self.workers[actor_local_rank].step.remote(blocking=False)
             object_refs.append(object_ref)
-        outputs = nanoray.get(object_refs)
-
-        if all(out.get("skipped", False) for out in outputs):
-            return {"skipped": True}
-
-        return outputs[0]
+        return nanoray.get(object_refs)[0]
 
     def save_parallelized(self, global_step):
         experiment_dir = (
