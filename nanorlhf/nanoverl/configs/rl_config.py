@@ -56,7 +56,7 @@ class RewardConfig:
 
 @dataclass
 class OptimConfig:
-    lr: float = 3e-6
+    lr: float = 5e-6
     min_lr: float = 0.0
     lr_warmup_steps_ratio: float = 0.1
     lr_scheduler: str = "cosine"
