@@ -32,8 +32,11 @@ rollout:
   kvcache_block_size: 256
   tensor_parallel_size: 2
   data_parallel_size: 2
-  temperature: 1.0
-  top_p: 1.0
+  temperature: 0.3
+  top_p: 0.9
+  # The 0.6B model is often under-confident, the top-1 probability is very low.
+  # so we use temperature=0.3 to keep generations stable while still allowing some exploration,
+  # and set top_p=0.9 to avoid sampling extremely low-probability tail tokens.
   enforce_eager: false
 
 reward:

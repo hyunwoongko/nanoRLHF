@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from pprint import pprint
 from typing import Dict, Any
 
 import wandb
@@ -7,6 +8,7 @@ import wandb
 class BaseTrainer:
     def __init__(self, config):
         self.config = config
+        pprint(f"Training configuration:\n{asdict(self.config)}")
         self.global_step = 0
         self.maybe_init_logger()
 
