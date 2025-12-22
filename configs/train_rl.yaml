@@ -1,10 +1,10 @@
 data:
   train_batch_size: 256
   valid_batch_size: 256
-  train_micro_batch_size_per_gpu: 32
-  valid_micro_batch_size_per_gpu: 32
-  train_data: ./data/DeepMath-72k/preprocessed/train.nano
-  valid_data: ./data/DeepMath-72k/preprocessed/valid.nano
+  train_micro_batch_size_per_gpu: 16
+  valid_micro_batch_size_per_gpu: 16
+  train_data: ./data/DeepMath-84k/preprocessed/train.nano
+  valid_data: ./data/MATH-500/preprocessed/valid.nano
   num_workers: 8
   experience_staleness: 1
 

@@ -13,22 +13,23 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from nanorlhf import nanoray
 from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
 from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel
+from nanorlhf.nanoverl.configs.rl_config import RLConfig
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 
 
 @nanoray.remote
 class ModelMerger:
-    def __init__(self, config, rank, model_parallel_world_size):
-        if config.model.zero_stage == 3:
+    def __init__(self, model_config, rank, model_parallel_world_size):
+        if model_config.zero_stage == 3:
             data_parallel_size = model_parallel_world_size
             tensor_parallel_size = pipeline_parallel_size = 1
         else:
             data_parallel_size = 1
-            tensor_parallel_size = config.model.tensor_parallel_size
-            pipeline_parallel_size = config.model.pipeline_parallel_size
+            tensor_parallel_size = model_config.tensor_parallel_size
+            pipeline_parallel_size = model_config.pipeline_parallel_size
 
         self.model = AutoModelForCausalLM.from_pretrained(
-            config.model.model_name_or_path,
+            model_config.model_name_or_path,
             torch_dtype=torch.bfloat16,
         )
         self.mpu = MPU(
@@ -36,17 +37,17 @@ class ModelMerger:
             local_rank=rank,
             world_size=model_parallel_world_size,
             local_world_size=model_parallel_world_size,
-            host=config.model.host,
-            port=config.model.port,
+            host=model_config.host,
+            port=model_config.port,
             data_parallel_size=data_parallel_size,
             pipeline_parallel_size=pipeline_parallel_size,
             tensor_parallel_size=tensor_parallel_size,
             rollout_data_parallel_size=0,
             rollout_tensor_parallel_size=0,
-            backend=config.model.backend,
-            seed=config.model.seed,
+            backend=model_config.backend,
+            seed=model_config.seed,
         )
-        if config.model.zero_stage == 3:
+        if model_config.zero_stage == 3:
             self.model = DataParallel(self.model, mpu=self.mpu, zero_stage=3)
         else:
             self.model = TensorParallel(self.model, mpu=self.mpu)
@@ -62,20 +63,25 @@ class ModelMerger:
 
 
 def merge_model(args):
-    config = SFTConfig.from_yaml(args.config)
-
-    if config.model.zero_stage == 3:
-        model_parallel_world_size = config.model.data_parallel_size
+    if args.training_type == "sft":
+        config = SFTConfig.from_yaml(args.config)
+        model_config = config.model
+    elif args.training_type == "rl":
+        config = RLConfig.from_yaml(args.config)
+        model_config = config.actor
     else:
-        model_parallel_world_size = config.model.tensor_parallel_size * config.model.pipeline_parallel_size
+        raise ValueError(f"Unsupported training type: {args.training_type}")
+
+    if model_config.zero_stage == 3:
+        model_parallel_world_size = model_config.data_parallel_size
+    else:
+        model_parallel_world_size = model_config.tensor_parallel_size * model_config.pipeline_parallel_size
 
     nodes = {}
     for global_rank in range(model_parallel_world_size):
         nodes[f"node-{global_rank + 1}"] = nanoray.NodeConfig(
-            cpus=4.0,
-            gpus=1.0,
             rpc=True,
-            host=config.model.host,
+            host=model_config.host,
             port=NANORAY_BASE_PORT + global_rank,
         )
 
@@ -93,7 +99,10 @@ def merge_model(args):
     for global_rank in range(model_parallel_world_size):
         node_id = node_ids[global_rank % len(node_ids)]
         object_ref = ModelMerger.options(pinned_node_id=node_id).remote(
-            config, rank=global_rank, model_parallel_world_size=model_parallel_world_size, blocking=False
+            model_config,
+            rank=global_rank,
+            model_parallel_world_size=model_parallel_world_size,
+            blocking=False,
         )
         object_refs.append(object_ref)
     model_mergers = nanoray.get(object_refs)
@@ -113,5 +122,6 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument("--model", type=str, required=True, help="Model name or path.")
     parser.add_argument("--config", type=str, required=True, help="Path to the training config yaml file.")
+    parser.add_argument("--training_type", type=str, required=True, help="Type of training: sft or rl.")
     args = parser.parse_args()
     merge_model(args)

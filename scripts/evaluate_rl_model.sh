@@ -1,6 +1,6 @@
-model_path="./checkpoints/math/sft"
+model_path="./checkpoints/math/rl"
 formatting_prompt="./data/math_prompt.json"
-global_step=837
+global_step=200
 
 python3 -m nanorlhf.eval.math_eval \
   --model "$model_path/step_$global_step/merged" \

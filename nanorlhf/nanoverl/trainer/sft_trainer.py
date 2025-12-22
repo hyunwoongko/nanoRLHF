@@ -55,15 +55,15 @@ class SFTTrainer(BaseTrainer):
         if self.global_world_size > 1:
             for rank in range(self.global_world_size):
                 nodes[f"node-{rank}"] = nanoray.NodeConfig(
-                    cpus=4.0,
-                    gpus=1.0,
                     rpc=True,
                     host=config.model.host,
                     port=NANORAY_BASE_PORT + rank,
                 )
         else:
             nodes["node-0"] = nanoray.NodeConfig(
-                cpus=4.0, gpus=1.0, rpc=False, host=config.model.host, port=NANORAY_BASE_PORT
+                rpc=False,
+                host=config.model.host,
+                port=NANORAY_BASE_PORT,
             )
 
         session = nanoray.init(nodes, default_node_id="node-0")

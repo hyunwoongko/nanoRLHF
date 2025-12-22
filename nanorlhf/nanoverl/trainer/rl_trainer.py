@@ -62,8 +62,6 @@ class RLTrainer(BaseTrainer):
         nodes = {}
         for rank in range(self.actor_world_size):
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
-                cpus=4.0,
-                gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
                 port=NANORAY_BASE_PORT + rank,
@@ -71,8 +69,6 @@ class RLTrainer(BaseTrainer):
         for rank in range(self.rollout_world_size):
             rank = rank + self.actor_world_size
             nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
-                cpus=4.0,
-                gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
                 port=NANORAY_BASE_PORT + rank,

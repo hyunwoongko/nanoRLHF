@@ -1,13 +1,5 @@
 #!/bin/bash
 
-# Train dataset has 72k rows and it sampled from training dataset.
-# I sampled only data with difficulty level 5 or higher and removed answer is 'yes' or 'no' only.
-data_path="./data/DeepMath-72k"
-train="$data_path/train.jsonl"
-
-# Valid dataset has 1k rows and it sampled from validation dataset.
-valid="$data_path/valid.jsonl"
-
 # Arguments for dataset preprocessing
 tokenizer_name_or_path="Qwen/Qwen3-0.6B"
 formatting_prompt="./data/math_prompt.json"
@@ -22,10 +14,10 @@ seed=1234
 num_workers=32
 mp_chunksize=512
 
-#echo "Start to preprocess SFT training dataset..."
+#echo "Start to preprocess RL training dataset..."
 python3 -m nanorlhf.nanoverl.dataset.prepare_dataset \
-    --files="$train" \
-    --output_path="${data_path}/preprocessed/train.nano" \
+    --files="./data/DeepMath-84k/train.jsonl" \
+    --output_path="./data/DeepMath-84k/preprocessed/train.nano" \
     --tokenizer_name_or_path="$tokenizer_name_or_path" \
     --formatting_prompt="$formatting_prompt" \
     --max_length=$max_length \
@@ -39,10 +31,10 @@ python3 -m nanorlhf.nanoverl.dataset.prepare_dataset \
     --num_workers=$num_workers \
     --mp_chunksize=$mp_chunksize
 
-echo "Start to preprocess SFT validation dataset..."
+echo "Start to preprocess RL validation dataset..."
 python3 -m nanorlhf.nanoverl.dataset.prepare_dataset \
-    --files="$valid" \
-    --output_path="${data_path}/preprocessed/valid.nano" \
+    --files="./data/MATH-500/test.jsonl" \
+    --output_path="./data/MATH-500/preprocessed/valid.nano" \
     --tokenizer_name_or_path="$tokenizer_name_or_path" \
     --formatting_prompt="$formatting_prompt" \
     --max_length=$max_length \
