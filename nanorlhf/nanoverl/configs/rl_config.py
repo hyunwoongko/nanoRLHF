@@ -71,7 +71,7 @@ class AlgorithmConfig:
     gamma: float = 1.0
     lam: float = 1.0
     use_kl_in_reward: bool = False
-    kl_loss_coef: float = 0.1
+    kl_loss_coef: float = 0.01
     vf_loss_coef: float = 0.1
     clip_ratio_high: float = 0.2
     clip_ratio_low: float = 0.2

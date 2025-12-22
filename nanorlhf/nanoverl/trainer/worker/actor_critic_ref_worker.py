@@ -109,6 +109,7 @@ class ActorCriticRefWorker:
         self.config = config
         self.rank = rank
         self.experience_buffer = deque(maxlen=2)
+        self.update_idx_for_rng = 0
         self.rollout_temperature = float(config.rollout.temperature)
 
         # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
@@ -424,6 +425,7 @@ class ActorCriticRefWorker:
         }
 
     def step(self):
+        self.update_idx_for_rng += 1
         device = torch.cuda.current_device()
         experience = self.experience_buffer.popleft().to(device)
 
@@ -455,8 +457,13 @@ class ActorCriticRefWorker:
         # https://github.com/huggingface/trl/blob/6a718789814bf1b653cbe213fdabb1d6ea31989f/trl/experimental/ppo/ppo_trainer.py#L788
         # we need triple for-loops: ppo-epoch -> mini-batch -> micro-batch
         for ppo_epoch_idx in range(ppo_epochs):
-            for mini_idx in range(num_mini_batches):
-                mini_batch = mini_batches[mini_idx]
+            # shuffle the mini-batches for some randomness
+            rng = torch.Generator(device="cpu")
+            rng.manual_seed(int(self.config.actor.seed) + (100 * self.update_idx_for_rng) + (10000 * ppo_epoch_idx))
+            mini_perm = torch.randperm(num_mini_batches, generator=rng).tolist()
+
+            for random_mini_idx in mini_perm:
+                mini_batch = mini_batches[random_mini_idx]
                 mini_starts = (mini_batch["position_ids"][0] == 0).nonzero(as_tuple=False).flatten()
                 mini_num_sequences = int(mini_starts.numel())
 
