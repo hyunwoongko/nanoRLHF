@@ -113,7 +113,7 @@ If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.
 Running the following command will start supervised fine-tuning. 
 Moreover, you can monitor the training process if you have wandb account.
 
-![one_step](assets/one_step_off_policy_rl.png)
+![one_step](assets/one_step.png)
 
 ```bash
 bash ./scripts/train_rl.sh 
