@@ -10,14 +10,14 @@ class RewardManager:
         self.reward_fn = self.load_reward_fn()
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path)
 
-    def compute_score(self, response_tokens_unpacked):
+    def compute_score(self, prompt_tokens_unpacked, response_tokens_unpacked):
         reward_fn_inputs = [
             {
-                # shape of input_ids is [1, num_completion_tokens].
+                "prompt_str": self.tokenizer.decode(prompt["input_ids"][0], skip_special_tokens=False),
                 "response_str": self.tokenizer.decode(response["input_ids"][0], skip_special_tokens=False),
                 "reward_model": response["reward_model"],
             }
-            for response in response_tokens_unpacked
+            for prompt, response in zip(prompt_tokens_unpacked, response_tokens_unpacked)
         ]
 
         return self.reward_fn(reward_fn_inputs)

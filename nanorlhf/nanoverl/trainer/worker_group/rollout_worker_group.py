@@ -59,10 +59,10 @@ class RolloutWorkerGroup:
         self.run_model()
 
         # packed data parallel outputs -> repacked outputs
-        total_tokens_repacked, response_tokens_unpacked = self.repack_outputs(
+        total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked = self.repack_outputs(
             data_parallel_unpacked_batches, data_parallel_outputs
         )
-        return total_tokens_repacked, response_tokens_unpacked
+        return total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked
 
     def async_generate(self, batches):
         return self.async_executor.submit(self.generate, batches)
@@ -77,6 +77,11 @@ class RolloutWorkerGroup:
                 chunk_idx=data_parallel_rank,
                 num_chunks=self.data_parallel_size,
                 cu_seq_lens=cu_seq_lens_q,
+            )
+            batch_size_per_dp_rank = int((data_parallel_chunk["position_ids"][0] == 0).sum().item())
+            assert len(data_parallel_chunk["reward_model"]) == batch_size_per_dp_rank, (
+                f"[dp_rank={data_parallel_rank}] reward_model len={len(data_parallel_chunk['reward_model'])} "
+                f"!= num_seqs_local={batch_size_per_dp_rank}"
             )
             data_parallel_chunks.append(data_parallel_chunk)
         return data_parallel_chunks
@@ -126,9 +131,16 @@ class RolloutWorkerGroup:
                 scheduler.postprocess(sequences, results[0])
 
     def repack_outputs(self, data_parallel_unpacked_batches, data_parallel_outputs):
-        total_tokens_repacked, response_tokens_unpacked = [], []
+        total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked = [], [], []
         for unpacked_batch_per_rank, outputs_per_rank in zip(data_parallel_unpacked_batches, data_parallel_outputs):
             for prompt, output in zip(unpacked_batch_per_rank, outputs_per_rank):
+                prompt_tokens = {
+                    "input_ids": prompt["input_ids"],
+                    "position_ids": prompt["position_ids"],
+                    "loss_mask": torch.zeros_like(prompt["input_ids"]),
+                }
+                prompt_tokens_unpacked.append(prompt_tokens)
+
                 response_ids = torch.tensor(output.completion_token_ids, dtype=torch.long).unsqueeze(0)
                 response_position_ids = torch.arange(response_ids.numel(), dtype=torch.long).unsqueeze(0)
                 response_tokens = {
@@ -137,18 +149,13 @@ class RolloutWorkerGroup:
                     "loss_mask": torch.ones_like(response_ids),
                     "reward_model": prompt["reward_model"],
                 }
-                # will be used for reward model scoring
                 response_tokens_unpacked.append(response_tokens)
-                prompt_tokens = {
-                    "input_ids": prompt["input_ids"],
-                    "position_ids": prompt["position_ids"],
-                    "loss_mask": torch.zeros_like(prompt["input_ids"]),
-                }
+
                 total_tokens = repack_sequences([prompt_tokens, response_tokens])
                 total_tokens_repacked.append(total_tokens)
 
         total_tokens_repacked = repack_sequences(total_tokens_repacked)
-        return total_tokens_repacked, response_tokens_unpacked
+        return total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked
 
     def sync_actor_to_rollout(self):
         object_refs = []

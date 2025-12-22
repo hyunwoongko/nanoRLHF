@@ -164,14 +164,14 @@ class RLTrainer(BaseTrainer):
 
             # wait for the previous batch to complete rollout
             pbar.set_postfix(global_step=self.global_step, status="waiting_for_rollout", reward=mean_reward)
-            total_tokens_repacked, response_tokens_unpacked = rollout_future.result()
+            total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked = rollout_future.result()
             # asynchronously generate the next batch while we compute rewards and loss on the current batch
             if self.global_step % self.config.training.test_freq != 0:
                 # only generate the next batch if we are not doing validation this step
                 batch_data_future = self.async_generate_next_batch(continuous_iterator)
 
             pbar.set_postfix(global_step=self.global_step, status="computing_rewards", reward=mean_reward)
-            reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
+            reward_scores = self.reward_manager.compute_score(prompt_tokens_unpacked, response_tokens_unpacked)
             mean_reward = sum(reward_scores) / len(reward_scores)
 
             pbar.set_postfix(global_step=self.global_step, status="making_experiences", reward=mean_reward)
@@ -202,18 +202,20 @@ class RLTrainer(BaseTrainer):
             )
 
             if self.global_step % self.config.training.test_freq == 0:
-                total_valid_reward_scores = []
+                valid_reward_scores = []
                 pbar = tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True)
                 for valid_batch in pbar:
                     pbar.set_postfix(global_step=self.global_step, status="generating_validation_responses")
                     # We use synchronous generation for validation because there's no overlap with training
-                    _, response_tokens_unpacked = self.rollout_worker_group.generate(valid_batch)
+                    _, prompt_tokens_unpacked, response_tokens_unpacked = self.rollout_worker_group.generate(
+                        valid_batch
+                    )
 
                     pbar.set_postfix(global_step=self.global_step, status="computing_validation_rewards")
-                    valid_reward_scores = self.reward_manager.compute_score(response_tokens_unpacked)
-                    total_valid_reward_scores.extend(valid_reward_scores)
+                    reward_scores = self.reward_manager.compute_score(prompt_tokens_unpacked, response_tokens_unpacked)
+                    valid_reward_scores.extend(reward_scores)
 
-                mean_valid_reward = sum(total_valid_reward_scores) / len(total_valid_reward_scores)
+                mean_valid_reward = sum(valid_reward_scores) / len(valid_reward_scores)
                 # After validation, we need to generate the next training batch
                 batch_data_future = self.async_generate_next_batch(continuous_iterator)
 

@@ -17,6 +17,7 @@ def compute_score(inputs):
             raise ValueError(f"Unsupported reward type: {reward_type}")
 
         score = scorer.compute_score(
+            prompt=sample["prompt_str"],
             prediction=sample["response_str"],
             reference=reward_model["ground_truth"],
         )

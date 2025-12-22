@@ -8,7 +8,7 @@ from math_verify import parse, verify
 from nanorlhf.eval.utils import get_unnormalized_answer
 
 
-def compute_score(prediction, reference):
+def compute_score(prompt, prediction, reference):
     if "boxed" not in reference:
         gold_answer = parse("\\boxed{" + str(reference) + "}")
     else:

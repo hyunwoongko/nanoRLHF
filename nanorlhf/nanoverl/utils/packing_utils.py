@@ -90,7 +90,10 @@ def split_packed_batch(
     local_batch = {}
     for key, value in batch.items():
         if not torch.is_tensor(value):
-            local_batch[key] = value
+            if isinstance(value, list) and len(value) == num_seqs:
+                local_batch[key] = value[seq_start:seq_end]
+            else:
+                local_batch[key] = value
             continue
 
         if key in ("cu_seq_lens_q", "cu_seq_lens_k"):

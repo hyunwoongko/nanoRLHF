@@ -258,38 +258,50 @@ class ModelRunner:
         return input_ids, position_ids, attention_mask
 
     def sample(self, logits, sequences):
-        temperatures = [sequence.temperature for sequence in sequences]
-        temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
+        device = logits.device
+        temperatures = torch.tensor(
+            [seq.temperature for seq in sequences],
+            dtype=torch.float32,
+            device=device,
+        )
+        top_ps = torch.tensor(
+            [seq.top_p for seq in sequences],
+            dtype=torch.float32,
+            device=device,
+        ).clamp_(0.0, 1.0)
 
-        top_ps = [sequence.top_p for sequence in sequences]
-        top_ps = torch.tensor(top_ps, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True).clamp_(0.0, 1.0)
-
-        greedy_mask = temperatures == 0.0
-        output_token_ids = torch.empty((logits.size(0),), device=logits.device, dtype=torch.long)
+        greedy_mask = temperatures <= 1e-6
+        output_token_ids = torch.empty((logits.size(0),), device=device, dtype=torch.long)
 
         if greedy_mask.any():
             output_token_ids[greedy_mask] = logits[greedy_mask].argmax(dim=-1)
 
-        if (~greedy_mask).any():
-            logits_sampling = logits[~greedy_mask].float()
-            top_ps_sampling = top_ps[~greedy_mask]
+        sampling_mask = ~greedy_mask
+        if sampling_mask.any():
+            idx = sampling_mask.nonzero(as_tuple=True)[0]
 
-            logits_sampling = logits_sampling.float().div_(temperatures.unsqueeze(dim=1))
+            logits_sampling = logits[idx].float()
+            temps_sampling = temperatures[idx].unsqueeze(1)
+            top_ps_sampling = top_ps[idx].unsqueeze(1)
+
+            logits_sampling.div_(temps_sampling)
+
             sorted_logits, sorted_indices = torch.sort(logits_sampling, dim=-1, descending=True)
             sorted_probs = torch.softmax(sorted_logits, dim=-1)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
 
-            remove_mask = cumulative_probs > top_ps_sampling.unsqueeze(dim=1)
-            remove_mask[:, 0] = False
+            remove_mask = cumulative_probs > top_ps_sampling
+            remove_mask[..., 1:] = remove_mask[..., :-1].clone()
+            remove_mask[..., 0] = False
 
-            sorted_logits = sorted_logits.masked_fill(remove_mask, float("-inf"))
+            sorted_logits.masked_fill_(remove_mask, float("-inf"))
+
             filtered_logits = torch.empty_like(logits_sampling)
             filtered_logits.scatter_(dim=1, index=sorted_indices, src=sorted_logits)
-            probs = torch.softmax(filtered_logits, dim=-1)
 
-            # Gumbel-max trick: argmax(probs / Exp(1)) == categorical(probs)
-            sampled_token_ids = probs.div_(torch.empty_like(probs).exponential_(1).clamp_min_(1e-12)).argmax(dim=-1)
-            output_token_ids[~greedy_mask] = sampled_token_ids
+            gumbel = -torch.empty_like(filtered_logits).exponential_(1).log_()
+            sampled_token_ids = (filtered_logits + gumbel).argmax(dim=-1)
+            output_token_ids[idx] = sampled_token_ids
 
         return output_token_ids
 
