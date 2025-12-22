@@ -22,8 +22,8 @@ class RolloutWorkerGroup:
         self.async_executor = ThreadPoolExecutor(max_workers=1)
         self.schedulers = self.create_schedulers()
         self.sampling_params = SamplingParams(
+            top_p=1.0,
             temperature=float(config.rollout.temperature),
-            top_p=float(config.rollout.top_p),
             max_tokens=int(config.rollout.max_response_len),
         )
 

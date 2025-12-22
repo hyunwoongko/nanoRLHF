@@ -15,6 +15,7 @@ from nanorlhf.nanoverl.utils.experience import Experience
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 from nanorlhf.nanoverl.utils.sync_utils import ParameterSyncManager
+from nanorlhf.nanovllm.utils.config import MIN_TEMPERATURE
 
 
 def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
@@ -92,8 +93,7 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     )
     accum_steps = max(
         1,
-        config.data.train_batch_size
-        // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
+        config.data.train_batch_size // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
     )
     model, optimizer = DataParallel(
         model,
@@ -112,7 +112,8 @@ class ActorCriticRefWorker:
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
-        self.experience_buffer = deque(maxlen=2)
+        self.latest_experience = None
+        self.rollout_temperature = float(config.rollout.temperature)
 
         # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
         self.tokenizer = AutoTokenizer.from_pretrained(config.actor.tokenizer_name_or_path, trust_remote_code=True)
@@ -125,6 +126,28 @@ class ActorCriticRefWorker:
         self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_steps)
         self.parameter_sync_manager = ParameterSyncManager(self.actor, self.mpu, self.config, is_rollout=False)
 
+    def whiten_advantages(self, advantages, loss_mask, eps=1e-8):
+        assert advantages.dim() == 2 and loss_mask.dim() == 2
+        loss_mask = loss_mask.to(dtype=torch.bool, device=advantages.device)
+
+        if not bool(loss_mask.any()):
+            return torch.zeros_like(advantages)
+
+        masked_advantages = advantages[loss_mask]
+        mean = masked_advantages.mean()
+        var = masked_advantages.var(unbiased=True)
+        std = torch.sqrt(var + eps)
+
+        whitened = (advantages - mean) / std
+        whitened = torch.where(loss_mask, whitened, torch.zeros_like(whitened))
+        return whitened
+
+    def compute_kl_per_token(self, actor_logprobs, ref_logprobs):
+        # This follows the k3 implementation of kl divergence approximation:
+        # http://joschu.net/blog/kl-approx.html
+        kl_per_token = (ref_logprobs - actor_logprobs).float()
+        return torch.expm1(kl_per_token) - kl_per_token
+
     def compute_token_logprobs(
         self,
         model,
@@ -133,6 +156,7 @@ class ActorCriticRefWorker:
         loss_mask: torch.Tensor,
         enable_grad: bool,
         logits: Optional[torch.Tensor] = None,
+        temperature: float = 1.0,
     ) -> torch.Tensor:
         assert input_ids.dtype == torch.long
         assert input_ids.dim() == 2
@@ -152,6 +176,10 @@ class ActorCriticRefWorker:
 
         logits_shifted = logits[:, :-1, :]
         targets = input_ids[:, 1:]
+
+        if temperature <= 0.0:
+            temperature = MIN_TEMPERATURE
+        logits_shifted = logits_shifted / temperature
 
         if self.mpu.get_world_size(ParallelMode.TENSOR) <= 1:
             logprobs = F.log_softmax(logits_shifted.float(), dim=-1)
@@ -233,8 +261,8 @@ class ActorCriticRefWorker:
         values = experience.old_values[0].float()
 
         if use_kl_in_reward and kl_loss_coef != 0.0:
-            kl = (experience.old_logprobs[0] - experience.ref_logprobs[0]).float()
-            rewards = rewards - kl_loss_coef * kl
+            kl = self.compute_kl_per_token(experience.old_logprobs[0], experience.ref_logprobs[0])
+            rewards = rewards - (kl_loss_coef * kl * loss_mask.to(kl.dtype))
 
         starts = ((position_ids == 0) & (~loss_mask)).nonzero(as_tuple=False).flatten().tolist()
         ends = starts[1:] + [position_ids.numel()]
@@ -258,11 +286,13 @@ class ActorCriticRefWorker:
                 advantages[t] = gae
                 returns[t] = gae + v_t
 
-        experience.advantages = advantages.unsqueeze(0)
+        advantages = self.whiten_advantages(advantages.unsqueeze(0), experience.loss_mask)
+
+        experience.advantages = advantages
         experience.returns = returns.unsqueeze(0)
         return experience
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def make_experience(self, input_batch, reward_scores):
         device = torch.cuda.current_device()
         input_ids = input_batch["input_ids"].to(device, non_blocking=True)
@@ -330,6 +360,7 @@ class ActorCriticRefWorker:
                 micro_batch["loss_mask"],
                 enable_grad=False,
                 logits=actor_logits,
+                temperature=self.rollout_temperature,
             )
             micro_ref_logprobs = self.compute_token_logprobs(
                 self.ref,
@@ -338,6 +369,7 @@ class ActorCriticRefWorker:
                 micro_batch["loss_mask"],
                 enable_grad=False,
                 logits=ref_logits,
+                temperature=self.rollout_temperature,
             )
             micro_old_values = self.compute_values(
                 micro_batch["input_ids"],
@@ -370,10 +402,10 @@ class ActorCriticRefWorker:
 
         experience = self.assign_sequence_rewards_to_tokens(experience, reward_scores, num_sequences)
         experience = self.compute_returns_and_advantages(experience)
-        self.experience_buffer.append(experience.to("cpu", pin_memory=True, detach=True))
+        self.latest_experience = experience
 
         if num_response_tokens > 0:
-            approx_kl = float((old_logprobs - ref_logprobs)[response_mask].mean().item())
+            approx_kl = float(self.compute_kl_per_token(old_logprobs, ref_logprobs)[response_mask].mean().item())
             mean_logprobs = float(old_logprobs[response_mask].mean().item())
         else:
             approx_kl = 0.0
@@ -388,11 +420,8 @@ class ActorCriticRefWorker:
         }
 
     def step(self):
-        if len(self.experience_buffer) == 0:
-            return {"skipped": True}
-
         device = torch.cuda.current_device()
-        experience = self.experience_buffer.popleft().to(device)
+        experience = self.latest_experience
         starts = ((experience.position_ids[0] == 0) & (experience.loss_mask[0] == 0)).nonzero(as_tuple=False).flatten()
         num_sequences = int(starts.numel())
 
@@ -410,7 +439,9 @@ class ActorCriticRefWorker:
 
         clip_min = 1.0 - float(self.config.algorithm.clip_ratio_low)
         clip_max = 1.0 + float(self.config.algorithm.clip_ratio_high)
+        clip_value = float(self.config.algorithm.clip_ratio_value)
         kl_loss_coef = float(self.config.algorithm.kl_loss_coef)
+        vf_loss_coef = float(self.config.algorithm.vf_loss_coef)
 
         sum_of_total_losses = torch.zeros((), device=device, dtype=torch.float32)
         sum_of_policy_losses = torch.zeros((), device=device, dtype=torch.float32)
@@ -452,6 +483,7 @@ class ActorCriticRefWorker:
                 micro_batch["loss_mask"],
                 enable_grad=True,
                 logits=actor_logits,
+                temperature=self.rollout_temperature,
             ).float()
 
             new_values = self.compute_values(
@@ -472,20 +504,31 @@ class ActorCriticRefWorker:
 
             if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
                 micro_ref_logprobs = micro_batch["ref_logprobs"].float()
-                kl = (new_logprobs - micro_ref_logprobs)[micro_loss_mask].mean()
-                policy_loss = policy_loss + kl_loss_coef * kl
+                kl = self.compute_kl_per_token(new_logprobs, micro_ref_logprobs)[micro_loss_mask].mean()
+                policy_loss = policy_loss + (kl_loss_coef * kl)
 
-            value_diff = new_values - micro_batch["returns"].float()
-            value_loss = (value_diff**2)[micro_loss_mask].mean()
+            old_values = micro_batch["old_values"].float()
+            returns = micro_batch["returns"].float()
+
+            if clip_value > 0.0:
+                new_values_clipped = old_values + (new_values - old_values).clamp(-clip_value, clip_value)
+                value_loss_1 = (new_values - returns) ** 2
+                value_loss_2 = (new_values_clipped - returns) ** 2
+                value_loss = 0.5 * torch.maximum(value_loss_1, value_loss_2)[micro_loss_mask].mean()
+            else:
+                value_loss = 0.5 * ((new_values - returns) ** 2)[micro_loss_mask].mean()
+            value_loss = value_loss * vf_loss_coef
 
             contribution = num_of_micro_valid_tokens / sum_of_valid_tokens
-            total_loss = policy_loss + value_loss
+            total_loss = policy_loss + value_loss if vf_loss_coef != 0 else policy_loss
 
             if self.config.actor.pipeline_parallel_size > 1:
                 policy_loss = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
                 (policy_loss * contribution).backward()
-                value_loss = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
-                (value_loss * contribution).backward()
+
+                if vf_loss_coef != 0:
+                    value_loss = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
+                    (value_loss * contribution).backward()
             else:
                 (total_loss * contribution).backward()
 

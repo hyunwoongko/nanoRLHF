@@ -5,6 +5,9 @@ from transformers import AutoConfig, AutoTokenizer
 from nanorlhf.kernels.flash_attn_decode.ops import KVCACHE_BLOCK_SIZE
 
 
+MIN_TEMPERATURE = 1e-6
+
+
 @dataclass
 class NanoVLLMConfig:
     # vllm options

@@ -8,7 +8,8 @@ import wandb
 class BaseTrainer:
     def __init__(self, config):
         self.config = config
-        pprint(f"Training configuration:\n{asdict(self.config)}")
+        pprint("Training configuration:")
+        pprint(asdict(self.config))
         self.global_step = 0
         self.maybe_init_logger()
 

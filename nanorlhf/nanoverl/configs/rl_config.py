@@ -40,13 +40,12 @@ class RolloutConfig:
     max_model_len: int = 2048
     max_prompt_len: int = 512
     max_response_len: int = 1536
-    gpu_memory_utilization: float = 0.4
+    gpu_memory_utilization: float = 0.9
     kvcache_block_size: int = 256
     tensor_parallel_size: int = 1
     data_parallel_size: int = 1
-    temperature: float = 1.0
-    top_p: float = 1.0
     enforce_eager: bool = False
+    temperature: float = 1.0
 
 
 @dataclass
@@ -73,8 +72,10 @@ class AlgorithmConfig:
     lam: float = 1.0
     use_kl_in_reward: bool = False
     kl_loss_coef: float = 0.1
+    vf_loss_coef: float = 0.1
     clip_ratio_high: float = 0.2
     clip_ratio_low: float = 0.2
+    clip_ratio_value: float = 0.2
 
 
 @dataclass

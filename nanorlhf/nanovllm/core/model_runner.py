@@ -9,7 +9,7 @@ from nanorlhf.kernels.utils.vllm import set_context, reset_context, get_context
 from nanorlhf.nanotron import TensorParallel, MPU, ParallelMode
 from nanorlhf.nanotron.distributed.collectives import Collectives
 from nanorlhf.nanovllm.core.sequence import Sequence
-from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
+from nanorlhf.nanovllm.utils.config import NanoVLLMConfig, MIN_TEMPERATURE
 
 
 @nanoray.remote
@@ -270,7 +270,7 @@ class ModelRunner:
             device=device,
         ).clamp_(0.0, 1.0)
 
-        greedy_mask = temperatures <= 1e-6
+        greedy_mask = temperatures <= MIN_TEMPERATURE
         output_token_ids = torch.empty((logits.size(0),), device=device, dtype=torch.long)
 
         if greedy_mask.any():
