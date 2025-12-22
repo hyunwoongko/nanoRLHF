@@ -1,6 +1,5 @@
 import triton
 import triton.language as tl
-from deprecated import deprecated
 
 
 @triton.jit
@@ -191,7 +190,6 @@ def flash_attn_decode_kernel_split_k_paged(
     tl.store(ez_sum_block_ptr, ez_sum, mask=q_mask)
 
 
-@deprecated
 @triton.jit
 def flash_attn_decode_kernel_split_k(
     q_ptr,
