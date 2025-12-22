@@ -187,6 +187,8 @@ class RLTrainer(BaseTrainer):
                     "train/value_loss": train_step_output["loss_value"],
                     "train/epoch": epoch,
                     "train/global_step": self.global_step,
+                    "train/num_micro_updates": train_step_output["num_micro_updates"],
+                    "train/num_optimizer_steps": train_step_output["num_optimizer_steps"],
                     "train/num_sequences": experience_info["num_sequences"],
                     "train/num_total_tokens": experience_info["num_total_tokens"],
                     "train/num_response_tokens": experience_info["num_response_tokens"],
@@ -195,9 +197,6 @@ class RLTrainer(BaseTrainer):
                     "train/reward": mean_reward,
                     "train/actor_lr": train_step_output["actor_lr"],
                     "train/critic_lr": train_step_output["critic_lr"],
-                    "train/skipped": 1 if train_step_output["skipped"] else 0,
-                    "train/num_micro_batches": train_step_output["num_micro_batches"],
-                    "train/num_updates": train_step_output["num_updates"],
                 }
             )
 

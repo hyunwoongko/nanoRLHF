@@ -9,12 +9,12 @@ import torch
 class DataConfig:
     train_batch_size: int = 256
     valid_batch_size: int = 200
-    train_micro_batch_size_per_gpu: int = 4
-    valid_micro_batch_size_per_gpu: int = 2
+    ppo_mini_batch_size_per_gpu: int = 32
+    ppo_micro_batch_size_per_gpu: int = 8
+    ppo_epochs: int = 2
     train_data: Optional[str] = None
     valid_data: Optional[str] = None
     num_workers: int = 8
-    experience_staleness: int = 1
 
 
 @dataclass
@@ -123,18 +123,11 @@ class RLConfig:
                 f"But got rollout.tensor_parallel_size={self.rollout.tensor_parallel_size}."
             )
 
-        if self.data.train_batch_size % self.data.train_micro_batch_size_per_gpu != 0:
+        if self.data.train_batch_size % self.data.ppo_micro_batch_size_per_gpu != 0:
             raise ValueError(
-                "`train_batch_size` must be divisible by `train_micro_batch_size_per_gpu`. "
+                "`train_batch_size` must be divisible by `ppo_micro_batch_size_per_gpu`. "
                 f"Got train_batch_size={self.data.train_batch_size} and "
-                f"train_micro_batch_size_per_gpu={self.data.train_micro_batch_size_per_gpu}."
-            )
-
-        if self.data.valid_batch_size % self.data.valid_micro_batch_size_per_gpu != 0:
-            raise ValueError(
-                "`valid_batch_size` must be divisible by `valid_micro_batch_size_per_gpu`. "
-                f"Got valid_batch_size={self.data.valid_batch_size} and "
-                f"valid_micro_batch_size_per_gpu={self.data.valid_micro_batch_size_per_gpu}."
+                f"ppo_micro_batch_size_per_gpu={self.data.ppo_micro_batch_size_per_gpu}."
             )
 
         assert self.data.train_batch_size % self.rollout.data_parallel_size == 0, (
@@ -156,6 +149,18 @@ class RLConfig:
             f"max_response_len={self.rollout.max_response_len}, "
             f"max_model_len={self.rollout.max_model_len}.\n"
             "Fix: set max_model_len >= max_prompt_len + max_response_len."
+        )
+
+        assert self.data.train_batch_size % self.data.ppo_mini_batch_size_per_gpu == 0, (
+            "train_batch_size must be divisible by ppo_mini_batch_size to avoid silently dropping sequences.\n"
+            f"Got train_batch_size={self.data.train_batch_size}, ppo_mini_batch_size={self.data.ppo_mini_batch_size_per_gpu}."
+        )
+
+        assert self.data.ppo_mini_batch_size_per_gpu % self.data.ppo_micro_batch_size_per_gpu == 0, (
+            "ppo_mini_batch_size_per_gpu must be divisible by ppo_micro_batch_size_per_gpu "
+            "to avoid silently dropping sequences.\n"
+            f"Got ppo_mini_batch_size_per_gpu={self.data.ppo_mini_batch_size_per_gpu}, "
+            f"ppo_micro_batch_size_per_gpu={self.data.ppo_micro_batch_size_per_gpu}."
         )
 
     @classmethod

@@ -38,11 +38,9 @@ class ActorCriticRefWorkerGroup:
         reward_scores_per_data_parallel = []
         offset = 0
         for data_parallel_batch in per_data_parallel_batches:
-            n_seq = int(
-                ((data_parallel_batch["position_ids"] == 0) & (data_parallel_batch["loss_mask"] == 0)).sum().item()
-            )
-            reward_scores_per_data_parallel.append(reward_scores[offset : offset + n_seq])
-            offset += n_seq
+            num_sequences = int((data_parallel_batch["position_ids"] == 0).sum().item())
+            reward_scores_per_data_parallel.append(reward_scores[offset : offset + num_sequences])
+            offset += num_sequences
         assert offset == len(reward_scores), f"reward_scores len mismatch: used={offset}, total={len(reward_scores)}"
 
         object_refs = []

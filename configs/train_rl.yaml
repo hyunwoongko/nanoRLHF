@@ -1,12 +1,12 @@
 data:
   train_batch_size: 256
   valid_batch_size: 256
-  train_micro_batch_size_per_gpu: 16
-  valid_micro_batch_size_per_gpu: 16
+  ppo_mini_batch_size_per_gpu: 32
+  ppo_micro_batch_size_per_gpu: 8
+  ppo_epochs: 2
   train_data: ./data/DeepMath-84k/preprocessed/train.nano
   valid_data: ./data/MATH-500/preprocessed/valid.nano
   num_workers: 8
-  experience_staleness: 1
 
 actor:
   model_name_or_path: "./checkpoints/math/sft/step_2109/merged"
@@ -42,7 +42,7 @@ reward:
   path: nanorlhf.nanoverl.reward.custom_reward_fn
 
 optim:
-  lr: 1e-6
+  lr: 1e-5
   min_lr: 0
   lr_warmup_steps_ratio: 0.1
   lr_scheduler: cosine

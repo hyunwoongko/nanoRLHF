@@ -67,10 +67,10 @@ def split_packed_batch(
     if cu_seq_lens is None:
         if "position_ids" not in batch:
             raise KeyError("batch must contain 'position_ids' to split as micro batches")
-        pos = batch["position_ids"]
-        starts = (pos[0] == 0).nonzero(as_tuple=False).flatten()
-        ends = torch.cat([starts[1:], torch.tensor([pos[0].numel()], device=pos.device)], dim=0)
-        cu_seq_lens = torch.cat([torch.zeros(1, device=pos.device, dtype=ends.dtype), ends], dim=0)
+        position_ids = batch["position_ids"]
+        starts = (position_ids[0] == 0).nonzero(as_tuple=False).flatten()
+        ends = torch.cat([starts[1:], torch.tensor([position_ids[0].numel()], device=position_ids.device)], dim=0)
+        cu_seq_lens = torch.cat([torch.zeros(1, device=position_ids.device, dtype=ends.dtype), ends], dim=0)
 
     num_seqs = cu_seq_lens.numel() - 1
     chunk_size = num_seqs // num_chunks

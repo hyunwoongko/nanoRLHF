@@ -88,19 +88,15 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
     model = PipelineParallel(
         model,
         mpu=mpu,
-        micro_batch_size=config.data.train_micro_batch_size_per_gpu,
+        micro_batch_size=config.data.ppo_micro_batch_size_per_gpu,
         gradient_checkpointing_enable=config.actor.gradient_checkpointing_enable,
-    )
-    accum_steps = max(
-        1,
-        config.data.train_batch_size // (config.actor.data_parallel_size * config.data.train_micro_batch_size_per_gpu),
     )
     model, optimizer = DataParallel(
         model,
         mpu=mpu,
         optimizer=optimizer,
         zero_stage=0 if role == "ref" else config.actor.zero_stage,
-        accum_steps=accum_steps,
+        accum_steps=max(1, config.data.ppo_mini_batch_size_per_gpu // config.data.ppo_micro_batch_size_per_gpu),
     )
     model.parallelize()
     model = patch_kernel(model)
@@ -112,7 +108,7 @@ class ActorCriticRefWorker:
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
-        self.latest_experience = None
+        self.experience_buffer = deque(maxlen=2)
         self.rollout_temperature = float(config.rollout.temperature)
 
         # Data is already tokenized so we don't use tokenizer here, but for saving it in the checkpoint path together.
@@ -122,8 +118,13 @@ class ActorCriticRefWorker:
         self.ref, _, _ = initialize_model(config, rank, mpu=self.mpu, role="ref")
         self.critic, self.critic_optimizer, _ = initialize_model(config, rank, mpu=self.mpu, role="critic")
 
-        self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_steps)
-        self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_steps)
+        ppo_epochs = int(config.data.ppo_epochs)
+        num_sequences_per_rank = int(config.data.train_batch_size // config.actor.data_parallel_size)
+        num_mini_batches_per_update = int(num_sequences_per_rank // config.data.ppo_mini_batch_size_per_gpu)
+        total_optimizer_steps = int(total_steps) * ppo_epochs * num_mini_batches_per_update
+
+        self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_optimizer_steps)
+        self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_optimizer_steps)
         self.parameter_sync_manager = ParameterSyncManager(self.actor, self.mpu, self.config, is_rollout=False)
 
     def whiten_advantages(self, advantages, loss_mask, eps=1e-8):
@@ -235,7 +236,7 @@ class ActorCriticRefWorker:
         loss_mask = experience.loss_mask
 
         rewards = torch.zeros_like(loss_mask, dtype=torch.float32)
-        starts = ((position_ids[0] == 0) & (loss_mask[0] == 0)).nonzero(as_tuple=False).flatten().tolist()
+        starts = (position_ids[0] == 0).nonzero(as_tuple=False).flatten().tolist()
         ends = starts[1:] + [position_ids.size(1)]
 
         for i, (start, end) in enumerate(zip(starts, ends)):
@@ -264,7 +265,7 @@ class ActorCriticRefWorker:
             kl = self.compute_kl_per_token(experience.old_logprobs[0], experience.ref_logprobs[0])
             rewards = rewards - (kl_loss_coef * kl * loss_mask.to(kl.dtype))
 
-        starts = ((position_ids == 0) & (~loss_mask)).nonzero(as_tuple=False).flatten().tolist()
+        starts = (position_ids == 0).nonzero(as_tuple=False).flatten().tolist()
         ends = starts[1:] + [position_ids.numel()]
 
         advantages = torch.zeros_like(rewards)
@@ -286,21 +287,24 @@ class ActorCriticRefWorker:
                 advantages[t] = gae
                 returns[t] = gae + v_t
 
-        advantages = self.whiten_advantages(advantages.unsqueeze(0), experience.loss_mask)
+        advantages = self.whiten_advantages(
+            advantages=advantages.unsqueeze(0),
+            loss_mask=experience.loss_mask,
+        )
 
         experience.advantages = advantages
         experience.returns = returns.unsqueeze(0)
         return experience
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def make_experience(self, input_batch, reward_scores):
         device = torch.cuda.current_device()
         input_ids = input_batch["input_ids"].to(device, non_blocking=True)
         position_ids = input_batch["position_ids"].to(device, non_blocking=True)
         loss_mask = input_batch["loss_mask"].to(device, non_blocking=True)
 
-        num_sequences = int(((position_ids == 0) & (loss_mask == 0)).sum().item())
-        micro_batch_size = self.config.data.train_micro_batch_size_per_gpu
+        num_sequences = int((position_ids == 0).sum().item())
+        micro_batch_size = self.config.data.ppo_micro_batch_size_per_gpu
         num_micro_batches = num_sequences // micro_batch_size
 
         input_batch_in_cuda = {
@@ -398,11 +402,11 @@ class ActorCriticRefWorker:
         response_mask = loss_mask.bool()
         num_response_tokens = int(response_mask.sum().item())
         num_total_tokens = int(loss_mask.numel())
-        num_sequences = int(((position_ids == 0) & (loss_mask == 0)).sum().item())
+        num_sequences = int((position_ids == 0).sum().item())
 
         experience = self.assign_sequence_rewards_to_tokens(experience, reward_scores, num_sequences)
         experience = self.compute_returns_and_advantages(experience)
-        self.latest_experience = experience
+        self.experience_buffer.append(experience.to("cpu", pin_memory=True, detach=True))
 
         if num_response_tokens > 0:
             approx_kl = float(self.compute_kl_per_token(old_logprobs, ref_logprobs)[response_mask].mean().item())
@@ -421,21 +425,18 @@ class ActorCriticRefWorker:
 
     def step(self):
         device = torch.cuda.current_device()
-        experience = self.latest_experience
-        starts = ((experience.position_ids[0] == 0) & (experience.loss_mask[0] == 0)).nonzero(as_tuple=False).flatten()
-        num_sequences = int(starts.numel())
+        experience = self.experience_buffer.popleft().to(device)
 
-        micro_batch_size = self.config.data.train_micro_batch_size_per_gpu
-        num_of_micro_batches = num_sequences // micro_batch_size
+        batch_starts = (experience.position_ids[0] == 0).nonzero(as_tuple=False).flatten()
+        num_sequences = int(batch_starts.numel())
 
+        micro_batch_size = int(self.config.data.ppo_micro_batch_size_per_gpu)
+        mini_batch_size = int(self.config.data.ppo_mini_batch_size_per_gpu)
+        ppo_epochs = int(self.config.data.ppo_epochs)
+
+        num_mini_batches = num_sequences // mini_batch_size
         experience_dict = experience.to_dict()
-        micro_batches = [
-            split_packed_batch(experience_dict, micro_idx, num_of_micro_batches)
-            for micro_idx in range(num_of_micro_batches)
-        ]
-
-        self.actor_optimizer.zero_grad(set_to_none=True)
-        self.critic_optimizer.zero_grad(set_to_none=True)
+        mini_batches = [split_packed_batch(experience_dict, idx, num_mini_batches) for idx in range(num_mini_batches)]
 
         clip_min = 1.0 - float(self.config.algorithm.clip_ratio_low)
         clip_max = 1.0 + float(self.config.algorithm.clip_ratio_high)
@@ -443,134 +444,172 @@ class ActorCriticRefWorker:
         kl_loss_coef = float(self.config.algorithm.kl_loss_coef)
         vf_loss_coef = float(self.config.algorithm.vf_loss_coef)
 
-        sum_of_total_losses = torch.zeros((), device=device, dtype=torch.float32)
-        sum_of_policy_losses = torch.zeros((), device=device, dtype=torch.float32)
-        sum_of_value_losses = torch.zeros((), device=device, dtype=torch.float32)
+        total_valid_tokens = torch.zeros((), device=device, dtype=torch.float32)
+        total_loss_total_token_sum = torch.zeros((), device=device, dtype=torch.float32)
+        total_loss_policy_token_sum = torch.zeros((), device=device, dtype=torch.float32)
+        total_loss_value_token_sum = torch.zeros((), device=device, dtype=torch.float32)
 
-        sum_of_valid_tokens = [micro_batch["loss_mask"].sum().to(device).float() for micro_batch in micro_batches]
-        sum_of_valid_tokens = torch.stack(sum_of_valid_tokens).sum().clamp_min(1.0)
-        num_of_updates = 0
+        total_optimizer_steps = 0
+        total_micro_updates = 0
 
-        if self.config.actor.pipeline_parallel_size > 1:
-            actor_micro_iterator = self.actor(
-                experience.input_ids, position_ids=experience.position_ids, attention_mask=None, use_cache=False
-            )
-            critic_micro_iterator = self.critic(
-                experience.input_ids, position_ids=experience.position_ids, attention_mask=None, use_cache=False
-            )
-            micro_batch_iterator = enumerate(zip(actor_micro_iterator, critic_micro_iterator))
-        else:
-            micro_batch_iterator = enumerate(micro_batches)
+        # https://github.com/huggingface/trl/blob/6a718789814bf1b653cbe213fdabb1d6ea31989f/trl/experimental/ppo/ppo_trainer.py#L788
+        # we need triple for-loops: ppo-epoch -> mini-batch -> micro-batch
+        for ppo_epoch_idx in range(ppo_epochs):
+            for mini_idx in range(num_mini_batches):
+                mini_batch = mini_batches[mini_idx]
+                mini_starts = (mini_batch["position_ids"][0] == 0).nonzero(as_tuple=False).flatten()
+                mini_num_sequences = int(mini_starts.numel())
 
-        for micro_idx, micro_input_or_output in micro_batch_iterator:
-            micro_batch = micro_batches[micro_idx]
+                num_micro_batches = mini_num_sequences // micro_batch_size
+                micro_batches = [
+                    split_packed_batch(mini_batch, idx, num_micro_batches) for idx in range(num_micro_batches)
+                ]
 
-            micro_loss_mask = micro_batch["loss_mask"].to(torch.bool)
-            num_of_micro_valid_tokens = micro_loss_mask.sum().to(device).float()
-            if num_of_micro_valid_tokens.item() == 0:
-                continue
+                self.actor_optimizer.zero_grad(set_to_none=True)
+                self.critic_optimizer.zero_grad(set_to_none=True)
 
-            if self.config.actor.pipeline_parallel_size > 1:
-                actor_outputs, critic_outputs = micro_input_or_output
-                actor_logits, critic_logits = actor_outputs.logits, critic_outputs.logits
-            else:
-                actor_logits, critic_logits = None, None
+                mini_loss_total_token_sum = torch.zeros((), device=device, dtype=torch.float32)
+                mini_loss_policy_token_sum = torch.zeros((), device=device, dtype=torch.float32)
+                mini_loss_value_token_sum = torch.zeros((), device=device, dtype=torch.float32)
 
-            new_logprobs = self.compute_token_logprobs(
-                self.actor,
-                micro_batch["input_ids"],
-                micro_batch["position_ids"],
-                micro_batch["loss_mask"],
-                enable_grad=True,
-                logits=actor_logits,
-                temperature=self.rollout_temperature,
-            ).float()
+                micro_valid_tokens_list = [mb["loss_mask"].sum().to(device).float() for mb in micro_batches]
+                mini_valid_tokens = torch.stack(micro_valid_tokens_list).sum().clamp_min(1.0)
+                mini_micro_updates = 0
 
-            new_values = self.compute_values(
-                micro_batch["input_ids"],
-                micro_batch["position_ids"],
-                shift_for_actions=True,
-                enable_grad=True,
-                logits=critic_logits,
-            ).float()
+                if self.config.actor.pipeline_parallel_size > 1:
+                    actor_micro_iterator = self.actor(
+                        mini_batch["input_ids"],
+                        position_ids=mini_batch["position_ids"],
+                        attention_mask=None,
+                        use_cache=False,
+                    )
+                    critic_micro_iterator = self.critic(
+                        mini_batch["input_ids"],
+                        position_ids=mini_batch["position_ids"],
+                        attention_mask=None,
+                        use_cache=False,
+                    )
+                    micro_batch_iterator = enumerate(zip(actor_micro_iterator, critic_micro_iterator))
+                else:
+                    micro_batch_iterator = enumerate(micro_batches)
 
-            log_ratio = new_logprobs - micro_batch["old_logprobs"].float()
-            ratio = torch.exp(log_ratio)
-            ratio_clipped = torch.clamp(ratio, min=clip_min, max=clip_max)
+                for micro_idx, micro_input_or_output in micro_batch_iterator:
+                    micro_batch = micro_batches[micro_idx]
 
-            pg_loss_1 = -ratio * micro_batch["advantages"].float()
-            pg_loss_2 = -ratio_clipped * micro_batch["advantages"].float()
-            policy_loss = torch.maximum(pg_loss_1, pg_loss_2)[micro_loss_mask].mean()
+                    micro_loss_mask = micro_batch["loss_mask"].to(torch.bool)
+                    micro_valid_tokens = micro_loss_mask.sum().to(device).float()
+                    if micro_valid_tokens.item() == 0:
+                        continue
 
-            if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
-                micro_ref_logprobs = micro_batch["ref_logprobs"].float()
-                kl = self.compute_kl_per_token(new_logprobs, micro_ref_logprobs)[micro_loss_mask].mean()
-                policy_loss = policy_loss + (kl_loss_coef * kl)
+                    if self.config.actor.pipeline_parallel_size > 1:
+                        actor_outputs, critic_outputs = micro_input_or_output
+                        actor_logits, critic_logits = actor_outputs.logits, critic_outputs.logits
+                    else:
+                        actor_logits, critic_logits = None, None
 
-            old_values = micro_batch["old_values"].float()
-            returns = micro_batch["returns"].float()
+                    new_logprobs = self.compute_token_logprobs(
+                        self.actor,
+                        micro_batch["input_ids"],
+                        micro_batch["position_ids"],
+                        micro_batch["loss_mask"],
+                        enable_grad=True,
+                        logits=actor_logits,
+                        temperature=self.rollout_temperature,
+                    ).float()
 
-            if clip_value > 0.0:
-                new_values_clipped = old_values + (new_values - old_values).clamp(-clip_value, clip_value)
-                value_loss_1 = (new_values - returns) ** 2
-                value_loss_2 = (new_values_clipped - returns) ** 2
-                value_loss = 0.5 * torch.maximum(value_loss_1, value_loss_2)[micro_loss_mask].mean()
-            else:
-                value_loss = 0.5 * ((new_values - returns) ** 2)[micro_loss_mask].mean()
-            value_loss = value_loss * vf_loss_coef
+                    new_values = self.compute_values(
+                        micro_batch["input_ids"],
+                        micro_batch["position_ids"],
+                        shift_for_actions=True,
+                        enable_grad=True,
+                        logits=critic_logits,
+                    ).float()
 
-            contribution = num_of_micro_valid_tokens / sum_of_valid_tokens
-            total_loss = policy_loss + value_loss if vf_loss_coef != 0 else policy_loss
+                    log_ratio = new_logprobs - micro_batch["old_logprobs"].float()
+                    ratio = torch.exp(log_ratio)
+                    ratio_clipped = torch.clamp(ratio, min=clip_min, max=clip_max)
 
-            if self.config.actor.pipeline_parallel_size > 1:
-                policy_loss = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
-                (policy_loss * contribution).backward()
+                    pg_loss_1 = -ratio * micro_batch["advantages"].float()
+                    pg_loss_2 = -ratio_clipped * micro_batch["advantages"].float()
+                    policy_loss = torch.maximum(pg_loss_1, pg_loss_2)[micro_loss_mask].mean()
 
-                if vf_loss_coef != 0:
-                    value_loss = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
-                    (value_loss * contribution).backward()
-            else:
-                (total_loss * contribution).backward()
+                    if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
+                        micro_ref_logprobs = micro_batch["ref_logprobs"].float()
+                        kl = self.compute_kl_per_token(new_logprobs, micro_ref_logprobs)[micro_loss_mask].mean()
+                        policy_loss = policy_loss + (kl_loss_coef * kl)
 
-            sum_of_total_losses += total_loss.detach() * num_of_micro_valid_tokens
-            sum_of_policy_losses += policy_loss.detach() * num_of_micro_valid_tokens
-            sum_of_value_losses += value_loss.detach() * num_of_micro_valid_tokens
-            num_of_updates += 1
+                    old_values = micro_batch["old_values"].float()
+                    returns = micro_batch["returns"].float()
 
-        if num_of_updates == 0:
-            self.actor_optimizer.zero_grad(set_to_none=True)
-            self.critic_optimizer.zero_grad(set_to_none=True)
-            return {"skipped": True}
+                    if clip_value > 0.0:
+                        new_values_clipped = old_values + (new_values - old_values).clamp(-clip_value, clip_value)
+                        value_loss_1 = (new_values - returns) ** 2
+                        value_loss_2 = (new_values_clipped - returns) ** 2
+                        value_loss = 0.5 * torch.maximum(value_loss_1, value_loss_2)[micro_loss_mask].mean()
+                    else:
+                        value_loss = 0.5 * ((new_values - returns) ** 2)[micro_loss_mask].mean()
 
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.optim.clip_grad)
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.config.optim.clip_grad)
+                    value_loss = value_loss * vf_loss_coef
+                    total_loss = policy_loss + value_loss if vf_loss_coef != 0 else policy_loss
+                    contribution = micro_valid_tokens / mini_valid_tokens
 
-        self.actor_optimizer.step()
-        self.critic_optimizer.step()
+                    if self.config.actor.pipeline_parallel_size > 1:
+                        policy_loss_pp = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
+                        (policy_loss_pp * contribution).backward()
 
-        if self.actor_scheduler is not None:
-            self.actor_scheduler.step()
-        if self.critic_scheduler is not None:
-            self.critic_scheduler.step()
+                        if vf_loss_coef != 0:
+                            value_loss_pp = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
+                            (value_loss_pp * contribution).backward()
+                    else:
+                        (total_loss * contribution).backward()
 
-        if self.config.actor.data_parallel_size > 1:
-            dist.all_reduce(sum_of_total_losses, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
-            dist.all_reduce(sum_of_policy_losses, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
-            dist.all_reduce(sum_of_value_losses, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
-            dist.all_reduce(sum_of_valid_tokens, op=dist.ReduceOp.SUM, group=self.mpu.get_group(ParallelMode.DATA))
+                    mini_loss_total_token_sum += total_loss.detach() * micro_valid_tokens
+                    mini_loss_policy_token_sum += policy_loss.detach() * micro_valid_tokens
+                    mini_loss_value_token_sum += value_loss.detach() * micro_valid_tokens
+                    mini_micro_updates += 1
 
-        total_loss = (sum_of_total_losses / sum_of_valid_tokens.clamp_min(1.0)).item()
-        policy_loss = (sum_of_policy_losses / sum_of_valid_tokens.clamp_min(1.0)).item()
-        value_loss = (sum_of_value_losses / sum_of_valid_tokens.clamp_min(1.0)).item()
+                if mini_micro_updates == 0:
+                    self.actor_optimizer.zero_grad(set_to_none=True)
+                    self.critic_optimizer.zero_grad(set_to_none=True)
+                    continue
+
+                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.optim.clip_grad)
+                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.config.optim.clip_grad)
+
+                self.actor_optimizer.step()
+                self.critic_optimizer.step()
+
+                if self.actor_scheduler is not None:
+                    self.actor_scheduler.step()
+                if self.critic_scheduler is not None:
+                    self.critic_scheduler.step()
+
+                if self.config.actor.data_parallel_size > 1:
+                    dist.all_reduce(mini_loss_total_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
+                    dist.all_reduce(mini_loss_policy_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
+                    dist.all_reduce(mini_loss_value_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
+                    dist.all_reduce(mini_valid_tokens, group=self.mpu.get_group(ParallelMode.DATA))
+
+                total_valid_tokens += mini_valid_tokens
+                total_loss_total_token_sum += mini_loss_total_token_sum
+                total_loss_policy_token_sum += mini_loss_policy_token_sum
+                total_loss_value_token_sum += mini_loss_value_token_sum
+
+                total_optimizer_steps += 1
+                total_micro_updates += mini_micro_updates
+
+        total_valid_tokens = total_valid_tokens.clamp_min(1.0)
+        total_loss = (total_loss_total_token_sum / total_valid_tokens).item()
+        policy_loss = (total_loss_policy_token_sum / total_valid_tokens).item()
+        value_loss = (total_loss_value_token_sum / total_valid_tokens).item()
 
         actor_lr = self.actor_optimizer.param_groups[0]["lr"]
         critic_lr = self.critic_optimizer.param_groups[0]["lr"]
 
         return {
-            "skipped": False,
             "num_sequences": num_sequences,
-            "num_micro_batches": num_of_micro_batches,
-            "num_updates": num_of_updates,
+            "num_optimizer_steps": total_optimizer_steps,
+            "num_micro_updates": total_micro_updates,
             "loss_total": float(total_loss),
             "loss_policy": float(policy_loss),
             "loss_value": float(value_loss),
