@@ -174,8 +174,7 @@ class ActorCriticRefWorker:
 
         if logits is None:
             with torch.set_grad_enabled(enable_grad):
-                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    outputs = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
+                outputs = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
 
                 if self.config.actor.pipeline_parallel_size > 1:
                     logits = torch.cat([out.logits for out in outputs], dim=1).contiguous()
@@ -352,8 +351,8 @@ class ActorCriticRefWorker:
         micro_ref_logprobs_list = []
         micro_old_values_list = []
 
-        for micro_idx, micro_input_or_output in micro_batch_iterator:
-            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            for micro_idx, micro_input_or_output in micro_batch_iterator:
                 if self.config.actor.pipeline_parallel_size > 1:
                     actor_outputs, ref_outputs, critic_outputs = micro_input_or_output
                     actor_logits, ref_logits, critic_logits = (
@@ -502,94 +501,95 @@ class ActorCriticRefWorker:
                 else:
                     micro_batch_iterator = enumerate(micro_batches)
 
-                for micro_idx, micro_input_or_output in micro_batch_iterator:
-                    micro_batch = micro_batches[micro_idx]
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    for micro_idx, micro_input_or_output in micro_batch_iterator:
+                        micro_batch = micro_batches[micro_idx]
 
-                    micro_loss_mask = micro_batch["loss_mask"].to(torch.bool)
-                    micro_valid_tokens = micro_loss_mask.sum().to(device).float()
-                    if micro_valid_tokens.item() == 0:
-                        continue
+                        micro_loss_mask = micro_batch["loss_mask"].to(torch.bool)
+                        micro_valid_tokens = micro_loss_mask.sum().to(device).float()
+                        if micro_valid_tokens.item() == 0:
+                            continue
 
-                    if self.config.actor.pipeline_parallel_size > 1:
-                        actor_outputs, critic_outputs = micro_input_or_output
-                        actor_logits, critic_logits = actor_outputs.logits, critic_outputs.logits
-                    else:
-                        actor_logits, critic_logits = None, None
+                        if self.config.actor.pipeline_parallel_size > 1:
+                            actor_outputs, critic_outputs = micro_input_or_output
+                            actor_logits, critic_logits = actor_outputs.logits, critic_outputs.logits
+                        else:
+                            actor_logits, critic_logits = None, None
 
-                    new_logprobs = self.compute_token_logprobs(
-                        self.actor,
-                        micro_batch["input_ids"],
-                        micro_batch["position_ids"],
-                        micro_batch["loss_mask"],
-                        enable_grad=True,
-                        logits=actor_logits,
-                        temperature=self.rollout_temperature,
-                    ).float()
+                        new_logprobs = self.compute_token_logprobs(
+                            self.actor,
+                            micro_batch["input_ids"],
+                            micro_batch["position_ids"],
+                            micro_batch["loss_mask"],
+                            enable_grad=True,
+                            logits=actor_logits,
+                            temperature=self.rollout_temperature,
+                        ).float()
 
-                    new_values = self.compute_values(
-                        micro_batch["input_ids"],
-                        micro_batch["position_ids"],
-                        shift_for_actions=True,
-                        enable_grad=True,
-                        logits=critic_logits,
-                    ).float()
+                        new_values = self.compute_values(
+                            micro_batch["input_ids"],
+                            micro_batch["position_ids"],
+                            shift_for_actions=True,
+                            enable_grad=True,
+                            logits=critic_logits,
+                        ).float()
 
-                    log_ratio = new_logprobs - micro_batch["old_logprobs"].float()
-                    ratio = torch.exp(log_ratio)
-                    ratio_clipped = torch.clamp(ratio, min=clip_min, max=clip_max)
+                        log_ratio = new_logprobs - micro_batch["old_logprobs"].float()
+                        ratio = torch.exp(log_ratio)
+                        ratio_clipped = torch.clamp(ratio, min=clip_min, max=clip_max)
 
-                    advantages = micro_batch["advantages"].float()
-                    pg_loss_1 = -ratio * advantages
-                    pg_loss_2 = -ratio_clipped * advantages
-                    policy_loss = torch.maximum(pg_loss_1, pg_loss_2)[micro_loss_mask].mean()
+                        advantages = micro_batch["advantages"].float()
+                        pg_loss_1 = -ratio * advantages
+                        pg_loss_2 = -ratio_clipped * advantages
+                        policy_loss = torch.maximum(pg_loss_1, pg_loss_2)[micro_loss_mask].mean()
 
-                    ref_logprobs = micro_batch["ref_logprobs"].float()
-                    if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
-                        kl = self.compute_kl_per_token(new_logprobs, ref_logprobs)[micro_loss_mask].mean()
-                        policy_loss = policy_loss + (kl_loss_coef * kl)
+                        ref_logprobs = micro_batch["ref_logprobs"].float()
+                        if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
+                            kl = self.compute_kl_per_token(new_logprobs, ref_logprobs)[micro_loss_mask].mean()
+                            policy_loss = policy_loss + (kl_loss_coef * kl)
 
-                    old_values = micro_batch["old_values"].float()
-                    returns = micro_batch["returns"].float()
+                        old_values = micro_batch["old_values"].float()
+                        returns = micro_batch["returns"].float()
 
-                    if clip_value > 0.0:
-                        new_values_clipped = old_values + (new_values - old_values).clamp(-clip_value, clip_value)
-                        value_loss_1 = (new_values - returns) ** 2
-                        value_loss_2 = (new_values_clipped - returns) ** 2
-                        value_loss = 0.5 * torch.maximum(value_loss_1, value_loss_2)[micro_loss_mask].mean()
-                    else:
-                        value_loss = 0.5 * ((new_values - returns) ** 2)[micro_loss_mask].mean()
+                        if clip_value > 0.0:
+                            new_values_clipped = old_values + (new_values - old_values).clamp(-clip_value, clip_value)
+                            value_loss_1 = (new_values - returns) ** 2
+                            value_loss_2 = (new_values_clipped - returns) ** 2
+                            value_loss = 0.5 * torch.maximum(value_loss_1, value_loss_2)[micro_loss_mask].mean()
+                        else:
+                            value_loss = 0.5 * ((new_values - returns) ** 2)[micro_loss_mask].mean()
 
-                    value_loss = value_loss * vf_loss_coef
-                    total_loss = policy_loss + value_loss if vf_loss_coef != 0 else policy_loss
-                    contribution = micro_valid_tokens / mini_valid_tokens
+                        value_loss = value_loss * vf_loss_coef
+                        total_loss = policy_loss + value_loss if vf_loss_coef != 0 else policy_loss
+                        contribution = micro_valid_tokens / mini_valid_tokens
 
-                    if self.config.actor.pipeline_parallel_size > 1:
-                        policy_loss_pp = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
-                        (policy_loss_pp * contribution).backward()
+                        if self.config.actor.pipeline_parallel_size > 1:
+                            policy_loss_pp = self.actor.convert_tensor_to_micro_loss(policy_loss, micro_idx)
+                            (policy_loss_pp * contribution).backward()
 
-                        if vf_loss_coef != 0:
-                            value_loss_pp = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
-                            (value_loss_pp * contribution).backward()
-                    else:
-                        (total_loss * contribution).backward()
+                            if vf_loss_coef != 0:
+                                value_loss_pp = self.critic.convert_tensor_to_micro_loss(value_loss, micro_idx)
+                                (value_loss_pp * contribution).backward()
+                        else:
+                            (total_loss * contribution).backward()
 
-                    accumulate_ppo_micro_metrics(
-                        metrics=self.metrics,
-                        total_loss=total_loss,
-                        policy_loss=policy_loss,
-                        value_loss=value_loss,
-                        ratio=ratio,
-                        ratio_clipped=ratio_clipped,
-                        new_logprobs=new_logprobs,
-                        ref_logprobs=ref_logprobs,
-                        new_values=new_values,
-                        returns=returns,
-                        advantages=advantages,
-                        micro_loss_mask=micro_loss_mask,
-                        micro_valid_tokens=micro_valid_tokens,
-                        compute_kl_per_token_fn=self.compute_kl_per_token,
-                    )
-                    mini_micro_updates += 1
+                        accumulate_ppo_micro_metrics(
+                            metrics=self.metrics,
+                            total_loss=total_loss,
+                            policy_loss=policy_loss,
+                            value_loss=value_loss,
+                            ratio=ratio,
+                            ratio_clipped=ratio_clipped,
+                            new_logprobs=new_logprobs,
+                            ref_logprobs=ref_logprobs,
+                            new_values=new_values,
+                            returns=returns,
+                            advantages=advantages,
+                            micro_loss_mask=micro_loss_mask,
+                            micro_valid_tokens=micro_valid_tokens,
+                            compute_kl_per_token_fn=self.compute_kl_per_token,
+                        )
+                        mini_micro_updates += 1
 
                 if mini_micro_updates == 0:
                     self.actor_optimizer.zero_grad(set_to_none=True)
