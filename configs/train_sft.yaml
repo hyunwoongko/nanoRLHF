@@ -1,8 +1,8 @@
 data:
   train_batch_size: 256
   valid_batch_size: 256
-  train_micro_batch_size_per_gpu: 64
-  valid_micro_batch_size_per_gpu: 64
+  train_micro_batch_size_per_gpu: 32
+  valid_micro_batch_size_per_gpu: 32
   train_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/train.nano
   valid_data: ./data/NuminaMath-CoT-Small-Hard-200k/preprocessed/valid.nano
   num_workers: 8

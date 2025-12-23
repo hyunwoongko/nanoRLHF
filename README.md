@@ -82,7 +82,7 @@ To use the model for inference or further training, you need to merge the parall
 The following script will merge the checkpoints and save them in `$YOUR_CHECKPOINT_PATH/merged` directory.
 
 ```bash
-bash ./scripts/merge_sft_model.sh 
+bash ./scripts/merge_sft_model.sh $STEP
 ```
 
 #### 4) Evaluate Supervised Fine-tuned Model
@@ -90,10 +90,16 @@ After merging the supervised fine-tuned model, you can evaluate it using the fol
 The evaluation is performed using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset (500 samples from MATH dataset)
 and [Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse and verify the model's generated output.
 
-![sft_eval](assets/sft_eval.png)
+| step     | MATH-500 score |
+|----------|----------------|
+| 500      | 40.8           |
+| 1000     | 39.4           |
+| 1500     | 41.2           |
+| **2000** | **43.4**       |
+| 2109     | 41.8           |
 
 ```
-bash ./scripts/eval_sft_model.sh 
+bash ./scripts/eval_sft_model.sh $STEP
 ```
 
 #### 5) Preparing Reinforcement Learning Dataset
@@ -107,7 +113,7 @@ bash ./scripts/prepare_rl_data.sh
 ```
 
 #### 6) Reinforcement Learning
-Reinforcement learning is performed using SFT model as the initial policy model with verifiable reward function.
+Reinforcement learning is performed using PPO algorithm with the SFT model at 2000 steps as the initial policy.
 To improve training efficiency, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied.
 If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.
 Running the following command will start supervised fine-tuning. 

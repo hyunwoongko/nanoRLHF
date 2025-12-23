@@ -145,12 +145,9 @@ class ParameterSyncManager:
         return stage_objects
 
     def broadcast(self, tensor: torch.Tensor, src: int, group: dist.ProcessGroup):
-        if not tensor.is_contiguous():
-            tmp = tensor.contiguous()
-            dist.broadcast(tmp, src=src, group=group)
-            tensor.copy_(tmp)
-            return
-        dist.broadcast(tensor, src=src, group=group)
+        # make a tensor bfloat16 because policy model is fp32 and rollout model is bfloat16.
+        temp = tensor.bfloat16().contiguous()
+        dist.broadcast(temp, src=src, group=group)
 
     def sync_actor_to_rollout(self):
         num_tensors_synced = 0

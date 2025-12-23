@@ -2,15 +2,15 @@ data:
   train_batch_size: 256
   valid_batch_size: 256
   ppo_mini_batch_size_per_gpu: 32
-  ppo_micro_batch_size_per_gpu: 8
+  ppo_micro_batch_size_per_gpu: 4
   ppo_epochs: 1
   train_data: ./data/DeepMath-84k/preprocessed/train.nano
   valid_data: ./data/MATH-500/preprocessed/valid.nano
   num_workers: 8
 
 actor:
-  model_name_or_path: "./checkpoints/math/sft/step_2109/merged"
-  tokenizer_name_or_path: "./checkpoints/math/sft/step_2109/merged"
+  model_name_or_path: "./checkpoints/math/sft/step_2000/merged"
+  tokenizer_name_or_path: "./checkpoints/math/sft/step_2000/merged"
   tensor_parallel_size: 2
   pipeline_parallel_size: 2
   data_parallel_size: 1
@@ -22,7 +22,7 @@ actor:
   gradient_checkpointing_enable: true
 
 rollout:
-  model_name_or_path: "./checkpoints/math/sft/step_2109/merged"
+  model_name_or_path: "./checkpoints/math/sft/step_2000/merged"
   max_num_batched_tokens: 65536
   max_num_seqs: 1024
   max_model_len: 4096

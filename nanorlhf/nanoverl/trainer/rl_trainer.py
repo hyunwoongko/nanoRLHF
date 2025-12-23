@@ -155,19 +155,17 @@ class RLTrainer(BaseTrainer):
 
     def fit(self):
         continuous_iterator = self.create_continuous_iterator()
-        # generate the first batch before entering the training loop
         batch_data_future = self.async_generate_next_batch(continuous_iterator)
         mean_reward = 0
+
         while batch_data_future is not None:
             self.global_step += 1
             rollout_future, batch, pbar, epoch = batch_data_future
 
-            # wait for the previous batch to complete rollout
             pbar.set_postfix(global_step=self.global_step, status="waiting_for_rollout", reward=mean_reward)
             total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked = rollout_future.result()
-            # asynchronously generate the next batch while we compute rewards and loss on the current batch
+
             if self.global_step % self.config.training.test_freq != 0:
-                # only generate the next batch if we are not doing validation this step
                 batch_data_future = self.async_generate_next_batch(continuous_iterator)
 
             pbar.set_postfix(global_step=self.global_step, status="computing_rewards", reward=mean_reward)
@@ -182,21 +180,11 @@ class RLTrainer(BaseTrainer):
 
             self.log(
                 {
-                    "train/loss": train_step_output["loss_total"],
-                    "train/policy_loss": train_step_output["loss_policy"],
-                    "train/value_loss": train_step_output["loss_value"],
                     "train/epoch": epoch,
                     "train/global_step": self.global_step,
-                    "train/num_micro_updates": train_step_output["num_micro_updates"],
-                    "train/num_optimizer_steps": train_step_output["num_optimizer_steps"],
-                    "train/num_sequences": experience_info["num_sequences"],
-                    "train/num_total_tokens": experience_info["num_total_tokens"],
-                    "train/num_response_tokens": experience_info["num_response_tokens"],
-                    "train/approx_kl": experience_info["approx_kl"],
-                    "train/mean_logprobs": experience_info["mean_logprobs"],
                     "train/reward": mean_reward,
-                    "train/actor_lr": train_step_output["actor_lr"],
-                    "train/critic_lr": train_step_output["critic_lr"],
+                    **{f"train/{k}": v for k, v in experience_info.items()},
+                    **{f"train/{k}": v for k, v in train_step_output.items()},
                 }
             )
 
@@ -205,7 +193,6 @@ class RLTrainer(BaseTrainer):
                 pbar = tqdm(self.valid_dataloader, desc="Validation", dynamic_ncols=True)
                 for valid_batch in pbar:
                     pbar.set_postfix(global_step=self.global_step, status="generating_validation_responses")
-                    # We use synchronous generation for validation because there's no overlap with training
                     _, prompt_tokens_unpacked, response_tokens_unpacked = self.rollout_worker_group.generate(
                         valid_batch
                     )
@@ -215,7 +202,6 @@ class RLTrainer(BaseTrainer):
                     valid_reward_scores.extend(reward_scores)
 
                 mean_valid_reward = sum(valid_reward_scores) / len(valid_reward_scores)
-                # After validation, we need to generate the next training batch
                 batch_data_future = self.async_generate_next_batch(continuous_iterator)
 
                 self.log(
@@ -228,10 +214,8 @@ class RLTrainer(BaseTrainer):
                 print(f"\n[Validation] step {self.global_step}, reward: {mean_valid_reward:.6f}")
 
             if self.global_step % self.config.training.save_freq == 0:
-                # Periodic save during training
                 self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
 
-        # Final save after training
         self.actor_critic_ref_worker_group.save_parallelized(self.global_step)
 
 

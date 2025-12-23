@@ -20,7 +20,7 @@ def initialize_model(config, rank):
     model = AutoModelForCausalLM.from_pretrained(
         config.model.model_name_or_path,
         trust_remote_code=True,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float32,
     )
     model.train()
 
@@ -128,19 +128,20 @@ class SFTWorker:
         num_of_total_valid_tokens = sum(num_of_micro_valid_tokens_per_batch).to(device).clamp_min(1)
 
         with torch.set_grad_enabled(train):
-            for mico_idx, micro_input_or_output in micro_batch_iterator:
-                if self.config.model.pipeline_parallel_size > 1:
-                    micro_loss = micro_input_or_output.loss
-                else:
-                    micro_loss = self.model(**micro_input_or_output).loss
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                for mico_idx, micro_input_or_output in micro_batch_iterator:
+                    if self.config.model.pipeline_parallel_size > 1:
+                        micro_loss = micro_input_or_output.loss
+                    else:
+                        micro_loss = self.model(**micro_input_or_output).loss
 
-                num_of_micro_valid_tokens = num_of_micro_valid_tokens_per_batch[mico_idx].to(device).detach()
-                sum_of_valid_losses += (micro_loss.detach() * num_of_micro_valid_tokens).float()
-                num_of_valid_losses += num_of_micro_valid_tokens.float()
+                    num_of_micro_valid_tokens = num_of_micro_valid_tokens_per_batch[mico_idx].to(device).detach()
+                    sum_of_valid_losses += (micro_loss.detach() * num_of_micro_valid_tokens).float()
+                    num_of_valid_losses += num_of_micro_valid_tokens.float()
 
-                if train:
-                    contribution = num_of_micro_valid_tokens / num_of_total_valid_tokens
-                    (micro_loss * contribution).backward()
+                    if train:
+                        contribution = num_of_micro_valid_tokens / num_of_total_valid_tokens
+                        (micro_loss * contribution).backward()
 
             if train and self.optimizer is not None:
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.optim.clip_grad)

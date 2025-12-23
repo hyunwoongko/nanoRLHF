@@ -2,7 +2,6 @@ from collections import deque
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 from torch.nn import functional as F
 from torch.optim import AdamW
 from transformers import AutoModelForCausalLM, AutoModelForTokenClassification, AutoTokenizer
@@ -12,6 +11,11 @@ from nanorlhf.kernels import patch_kernel
 from nanorlhf.nanotron import MPU, TensorParallel, PipelineParallel, DataParallel, ParallelMode
 from nanorlhf.nanotron.core.tp.loss import VocabParallelCrossEntropyFunction
 from nanorlhf.nanoverl.utils.experience import Experience
+from nanorlhf.nanoverl.utils.metric_utils import (
+    MetricsAccumulator,
+    compute_explained_variance,
+    accumulate_ppo_micro_metrics,
+)
 from nanorlhf.nanoverl.utils.optim_utils import get_optimizer_param_groups, get_scheduler
 from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 from nanorlhf.nanoverl.utils.sync_utils import ParameterSyncManager
@@ -25,7 +29,7 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
         model = AutoModelForTokenClassification.from_pretrained(
             config.actor.model_name_or_path,
             trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float32,
             num_labels=1,
         )
         # turn off dropout
@@ -34,7 +38,7 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
         model = AutoModelForCausalLM.from_pretrained(
             config.actor.model_name_or_path,
             trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float32,
         )
 
     if role == "ref":
@@ -127,6 +131,7 @@ class ActorCriticRefWorker:
         self.actor_scheduler = get_scheduler(config, self.actor_optimizer, total_optimizer_steps)
         self.critic_scheduler = get_scheduler(config, self.critic_optimizer, total_optimizer_steps)
         self.parameter_sync_manager = ParameterSyncManager(self.actor, self.mpu, self.config, is_rollout=False)
+        self.metrics = MetricsAccumulator(device=torch.device(torch.cuda.current_device()))
 
     def whiten_advantages(self, advantages, loss_mask, eps=1e-8):
         assert advantages.dim() == 2 and loss_mask.dim() == 2
@@ -169,7 +174,8 @@ class ActorCriticRefWorker:
 
         if logits is None:
             with torch.set_grad_enabled(enable_grad):
-                outputs = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
+                with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    outputs = model(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
 
                 if self.config.actor.pipeline_parallel_size > 1:
                     logits = torch.cat([out.logits for out in outputs], dim=1).contiguous()
@@ -347,45 +353,46 @@ class ActorCriticRefWorker:
         micro_old_values_list = []
 
         for micro_idx, micro_input_or_output in micro_batch_iterator:
-            if self.config.actor.pipeline_parallel_size > 1:
-                actor_outputs, ref_outputs, critic_outputs = micro_input_or_output
-                actor_logits, ref_logits, critic_logits = (
-                    actor_outputs.logits,
-                    ref_outputs.logits,
-                    critic_outputs.logits,
-                )
-            else:
-                actor_logits, ref_logits, critic_logits = None, None, None
+            with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+                if self.config.actor.pipeline_parallel_size > 1:
+                    actor_outputs, ref_outputs, critic_outputs = micro_input_or_output
+                    actor_logits, ref_logits, critic_logits = (
+                        actor_outputs.logits,
+                        ref_outputs.logits,
+                        critic_outputs.logits,
+                    )
+                else:
+                    actor_logits, ref_logits, critic_logits = None, None, None
 
-            micro_batch = micro_batches[micro_idx]
-            micro_old_logprobs = self.compute_token_logprobs(
-                self.actor,
-                micro_batch["input_ids"],
-                micro_batch["position_ids"],
-                micro_batch["loss_mask"],
-                enable_grad=False,
-                logits=actor_logits,
-                temperature=self.rollout_temperature,
-            )
-            micro_ref_logprobs = self.compute_token_logprobs(
-                self.ref,
-                micro_batch["input_ids"],
-                micro_batch["position_ids"],
-                micro_batch["loss_mask"],
-                enable_grad=False,
-                logits=ref_logits,
-                temperature=self.rollout_temperature,
-            )
-            micro_old_values = self.compute_values(
-                micro_batch["input_ids"],
-                micro_batch["position_ids"],
-                shift_for_actions=True,
-                enable_grad=False,
-                logits=critic_logits,
-            )
-            micro_old_logprobs_list.append(micro_old_logprobs)
-            micro_ref_logprobs_list.append(micro_ref_logprobs)
-            micro_old_values_list.append(micro_old_values)
+                micro_batch = micro_batches[micro_idx]
+                micro_old_logprobs = self.compute_token_logprobs(
+                    self.actor,
+                    micro_batch["input_ids"],
+                    micro_batch["position_ids"],
+                    micro_batch["loss_mask"],
+                    enable_grad=False,
+                    logits=actor_logits,
+                    temperature=self.rollout_temperature,
+                )
+                micro_ref_logprobs = self.compute_token_logprobs(
+                    self.ref,
+                    micro_batch["input_ids"],
+                    micro_batch["position_ids"],
+                    micro_batch["loss_mask"],
+                    enable_grad=False,
+                    logits=ref_logits,
+                    temperature=self.rollout_temperature,
+                )
+                micro_old_values = self.compute_values(
+                    micro_batch["input_ids"],
+                    micro_batch["position_ids"],
+                    shift_for_actions=True,
+                    enable_grad=False,
+                    logits=critic_logits,
+                )
+                micro_old_logprobs_list.append(micro_old_logprobs)
+                micro_ref_logprobs_list.append(micro_ref_logprobs)
+                micro_old_values_list.append(micro_old_values)
 
         old_logprobs = torch.cat(micro_old_logprobs_list, dim=1)
         ref_logprobs = torch.cat(micro_ref_logprobs_list, dim=1)
@@ -410,18 +417,20 @@ class ActorCriticRefWorker:
         self.experience_buffer.append(experience.to("cpu", pin_memory=True, detach=True))
 
         if num_response_tokens > 0:
-            approx_kl = float(self.compute_kl_per_token(old_logprobs, ref_logprobs)[response_mask].mean().item())
-            mean_logprobs = float(old_logprobs[response_mask].mean().item())
+            rollout_approx_kl = float(
+                self.compute_kl_per_token(old_logprobs, ref_logprobs)[response_mask].mean().item()
+            )
+            rollout_mean_logprob = float(old_logprobs[response_mask].mean().item())
         else:
-            approx_kl = 0.0
-            mean_logprobs = 0.0
+            rollout_approx_kl = 0.0
+            rollout_mean_logprob = 0.0
 
         return {
             "num_total_tokens": num_total_tokens,
             "num_response_tokens": num_response_tokens,
             "num_sequences": num_sequences,
-            "approx_kl": approx_kl,
-            "mean_logprobs": mean_logprobs,
+            "rollout_approx_kl": rollout_approx_kl,
+            "rollout_mean_logprob": rollout_mean_logprob,
         }
 
     def step(self):
@@ -446,10 +455,7 @@ class ActorCriticRefWorker:
         kl_loss_coef = float(self.config.algorithm.kl_loss_coef)
         vf_loss_coef = float(self.config.algorithm.vf_loss_coef)
 
-        total_valid_tokens = torch.zeros((), device=device, dtype=torch.float32)
-        total_loss_total_token_sum = torch.zeros((), device=device, dtype=torch.float32)
-        total_loss_policy_token_sum = torch.zeros((), device=device, dtype=torch.float32)
-        total_loss_value_token_sum = torch.zeros((), device=device, dtype=torch.float32)
+        self.metrics.reset()
 
         total_optimizer_steps = 0
         total_micro_updates = 0
@@ -474,10 +480,6 @@ class ActorCriticRefWorker:
 
                 self.actor_optimizer.zero_grad(set_to_none=True)
                 self.critic_optimizer.zero_grad(set_to_none=True)
-
-                mini_loss_total_token_sum = torch.zeros((), device=device, dtype=torch.float32)
-                mini_loss_policy_token_sum = torch.zeros((), device=device, dtype=torch.float32)
-                mini_loss_value_token_sum = torch.zeros((), device=device, dtype=torch.float32)
 
                 micro_valid_tokens_list = [mb["loss_mask"].sum().to(device).float() for mb in micro_batches]
                 mini_valid_tokens = torch.stack(micro_valid_tokens_list).sum().clamp_min(1.0)
@@ -536,13 +538,14 @@ class ActorCriticRefWorker:
                     ratio = torch.exp(log_ratio)
                     ratio_clipped = torch.clamp(ratio, min=clip_min, max=clip_max)
 
-                    pg_loss_1 = -ratio * micro_batch["advantages"].float()
-                    pg_loss_2 = -ratio_clipped * micro_batch["advantages"].float()
+                    advantages = micro_batch["advantages"].float()
+                    pg_loss_1 = -ratio * advantages
+                    pg_loss_2 = -ratio_clipped * advantages
                     policy_loss = torch.maximum(pg_loss_1, pg_loss_2)[micro_loss_mask].mean()
 
+                    ref_logprobs = micro_batch["ref_logprobs"].float()
                     if (not self.config.algorithm.use_kl_in_reward) and kl_loss_coef != 0.0:
-                        micro_ref_logprobs = micro_batch["ref_logprobs"].float()
-                        kl = self.compute_kl_per_token(new_logprobs, micro_ref_logprobs)[micro_loss_mask].mean()
+                        kl = self.compute_kl_per_token(new_logprobs, ref_logprobs)[micro_loss_mask].mean()
                         policy_loss = policy_loss + (kl_loss_coef * kl)
 
                     old_values = micro_batch["old_values"].float()
@@ -570,9 +573,22 @@ class ActorCriticRefWorker:
                     else:
                         (total_loss * contribution).backward()
 
-                    mini_loss_total_token_sum += total_loss.detach() * micro_valid_tokens
-                    mini_loss_policy_token_sum += policy_loss.detach() * micro_valid_tokens
-                    mini_loss_value_token_sum += value_loss.detach() * micro_valid_tokens
+                    accumulate_ppo_micro_metrics(
+                        metrics=self.metrics,
+                        total_loss=total_loss,
+                        policy_loss=policy_loss,
+                        value_loss=value_loss,
+                        ratio=ratio,
+                        ratio_clipped=ratio_clipped,
+                        new_logprobs=new_logprobs,
+                        ref_logprobs=ref_logprobs,
+                        new_values=new_values,
+                        returns=returns,
+                        advantages=advantages,
+                        micro_loss_mask=micro_loss_mask,
+                        micro_valid_tokens=micro_valid_tokens,
+                        compute_kl_per_token_fn=self.compute_kl_per_token,
+                    )
                     mini_micro_updates += 1
 
                 if mini_micro_updates == 0:
@@ -580,8 +596,14 @@ class ActorCriticRefWorker:
                     self.critic_optimizer.zero_grad(set_to_none=True)
                     continue
 
-                torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.config.optim.clip_grad)
-                torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.config.optim.clip_grad)
+                actor_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.actor.parameters(),
+                    self.config.optim.clip_grad,
+                )
+                critic_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.critic.parameters(),
+                    self.config.optim.clip_grad,
+                )
 
                 self.actor_optimizer.step()
                 self.critic_optimizer.step()
@@ -591,38 +613,26 @@ class ActorCriticRefWorker:
                 if self.critic_scheduler is not None:
                     self.critic_scheduler.step()
 
-                if self.config.actor.data_parallel_size > 1:
-                    dist.all_reduce(mini_loss_total_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
-                    dist.all_reduce(mini_loss_policy_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
-                    dist.all_reduce(mini_loss_value_token_sum, group=self.mpu.get_group(ParallelMode.DATA))
-                    dist.all_reduce(mini_valid_tokens, group=self.mpu.get_group(ParallelMode.DATA))
-
-                total_valid_tokens += mini_valid_tokens
-                total_loss_total_token_sum += mini_loss_total_token_sum
-                total_loss_policy_token_sum += mini_loss_policy_token_sum
-                total_loss_value_token_sum += mini_loss_value_token_sum
-
+                self.metrics.add_many_scalars(
+                    with_sq=False, actor_grad_norm=actor_grad_norm, critic_grad_norm=critic_grad_norm
+                )
                 total_optimizer_steps += 1
                 total_micro_updates += mini_micro_updates
 
-        total_valid_tokens = total_valid_tokens.clamp_min(1.0)
-        total_loss = (total_loss_total_token_sum / total_valid_tokens).item()
-        policy_loss = (total_loss_policy_token_sum / total_valid_tokens).item()
-        value_loss = (total_loss_value_token_sum / total_valid_tokens).item()
+        if self.config.actor.data_parallel_size > 1:
+            self.metrics.all_reduce(group=self.mpu.get_group(ParallelMode.DATA))
 
-        actor_lr = self.actor_optimizer.param_groups[0]["lr"]
-        critic_lr = self.critic_optimizer.param_groups[0]["lr"]
-
-        return {
-            "num_sequences": num_sequences,
-            "num_optimizer_steps": total_optimizer_steps,
-            "num_micro_updates": total_micro_updates,
-            "loss_total": float(total_loss),
-            "loss_policy": float(policy_loss),
-            "loss_value": float(value_loss),
-            "actor_lr": float(actor_lr),
-            "critic_lr": float(critic_lr),
-        }
+        output = self.metrics.to_dict()
+        output.update(
+            {
+                "num_optimizer_steps": int(total_optimizer_steps),
+                "num_micro_updates": int(total_micro_updates),
+                "actor_lr": float(self.actor_optimizer.param_groups[0]["lr"]),
+                "critic_lr": float(self.critic_optimizer.param_groups[0]["lr"]),
+                "explained_variance": compute_explained_variance(output)
+            }
+        )
+        return output
 
     def save_parallelized(self, save_dir: str):
         self.actor.save_parallelized(save_dir)
