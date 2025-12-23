@@ -455,7 +455,6 @@ class ActorCriticRefWorker:
         vf_loss_coef = float(self.config.algorithm.vf_loss_coef)
 
         self.metrics.reset()
-
         total_optimizer_steps = 0
         total_micro_updates = 0
 
@@ -614,8 +613,11 @@ class ActorCriticRefWorker:
                     self.critic_scheduler.step()
 
                 self.metrics.add_many_scalars(
-                    with_sq=False, actor_grad_norm=actor_grad_norm, critic_grad_norm=critic_grad_norm
+                    with_sq=False,
+                    actor_grad_norm=actor_grad_norm,
+                    critic_grad_norm=critic_grad_norm,
                 )
+
                 total_optimizer_steps += 1
                 total_micro_updates += mini_micro_updates
 
@@ -629,7 +631,7 @@ class ActorCriticRefWorker:
                 "num_micro_updates": int(total_micro_updates),
                 "actor_lr": float(self.actor_optimizer.param_groups[0]["lr"]),
                 "critic_lr": float(self.critic_optimizer.param_groups[0]["lr"]),
-                "explained_variance": compute_explained_variance(output)
+                "explained_variance": compute_explained_variance(output),
             }
         )
         return output
