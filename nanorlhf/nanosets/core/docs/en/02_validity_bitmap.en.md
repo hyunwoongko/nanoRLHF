@@ -354,4 +354,4 @@ def set_validity(buffer: Buffer, offset: int, i: int, valid: bool):
 ## Validity Bitmap: 3-line summary
 - Validity Bitmap stores missing-value information at the bit level, reducing memory usage while maintaining a contiguous memory layout.
 - A contiguous memory layout improves SIMD optimization and cache efficiency, contributing to better performance.
-- A bitmap can efficiently manage missing values by implementing bit-level lookup, storage, and slicing.
+- A bitmap can efficiently manage missing values by implementing bit-level get/set operations and slicing.
