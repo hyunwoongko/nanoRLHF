@@ -138,7 +138,7 @@ bash ./scripts/merge_rl_model.sh $STEP
 ```
 
 #### 8) Evaluate Reinforcement Learning Model
-After merging the supervised fine-tuned model, you can evaluate it using the following script.
+After merging the reinforcement learning model, you can evaluate it using the following script.
 The evaluation is performed same as the supervised fine-tuned model using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset.
 Qwen3-0.6B (non-thinking) model is also evaluated as a reference.
 
