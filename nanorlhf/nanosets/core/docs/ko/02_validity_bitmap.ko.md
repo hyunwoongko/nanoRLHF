@@ -264,21 +264,21 @@ Zero-copy의 철학대로 원본 Bitmap의 특정 구간을 가리키는 새로�
 우리가 지금 이 Bitmap의 어디부터 어디까지를 볼 것인지를 메타데이터(offset)로 관리하도록 구현합니다.
 
 이러한 방식으로 slicing을 구현하기 위해서는 absolute bit position이라는 개념이 필요합니다.
-absolute bit position은 논리적인 인덱스 i를 실제 버퍼 상의 비트 위치로 변환한 값입니다. 
+absolute bit position은 논리적인 인덱스 `i`를 실제 버퍼 상의 비트 위치로 변환한 값입니다. 
 이 문서에서는 이를 다음과 같이 정의합니다.
 
-- logical index: 사용자 입장에서 보이는 인덱스 i (0부터 시작)
+- logical index: 사용자 입장에서 보이는 인덱스 `i` (0부터 시작)
 - offset: 이 Bitmap view는 몇 번째 비트에서부터 읽어야 하는지 나타내는 값
-- absolute bit position: abs_bit = offset + i
+- absolute bit position: `abs_bit = offset + i`
 
 즉, 같은 Bitmap이라도 이미 어디선가 slicing 되었다면 0번부터 읽지 않아야 합니다.
-이를 offset이라는 값에 담아두고, logical index i에 offset을 더한 값을 absolute bit position으로 사용합니다.
+이를 offset이라는 값에 담아두고, logical index `i`에 offset을 더한 값을 absolute bit position으로 사용합니다.
 예를 들어 `offset = 3`이고 유저가 원하는 logical index가 `i = 2`라면 우리는 원본 비트맵의 2번째 원소를 조회하는 것이 아니라
 `abs_bit_position = 3 + 2 = 5`번째 비트를 조회해야 합니다.
 
 이제 코드를 살펴봅시다.
 
-위에서 언급한대로 logical index i를 absolute bit position으로 변환합니다.
+위에서 언급한대로 logical index `i`를 absolute bit position으로 변환합니다.
 
 ```python
 abs_bit_position = offset + i
@@ -293,9 +293,9 @@ new_byte, new_bit = divmod(abs_bit_position, 8)
 ```
 
 이 뷰를 표현하기 위해 몇 바이트가 필요한지 계산합니다.
-왜 new_bit + slice_length를 8로 나눈 후 올림을 하는지 주의깊게 살펴봅시다.
+왜 `new_bit + slice_length`를 8로 나눈 후 올림을 하는지 주의깊게 살펴봅시다.
 
-만약 new_bit가 3이고 slice_length가 10이라면,
+만약 `new_bit`가 3이고 `slice_length`가 10이라면,
 - new_bit + slice_length = 3 + 10 = 13
 - 13 / 8 = 1.625
 - 올림(1.625) = 2
@@ -309,7 +309,7 @@ needed_bytes = math.ceil((new_bit + slice_length) / 8)
 ```
 
 원본 버퍼에서 필요한 바이트 구간을 슬라이스하여 새로운 버퍼 뷰를 생성합니다.
-참고로 Buffer는 내부적으로 memoryview를 사용하기 때문에 이 과정에서 새로운 복사가 일어나지 않습니다.
+참고로 Buffer는 내부적으로 `memoryview`를 사용하기 때문에 이 과정에서 새로운 복사가 일어나지 않습니다.
 
 ```python
 sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]

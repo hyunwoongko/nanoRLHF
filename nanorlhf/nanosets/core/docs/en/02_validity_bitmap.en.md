@@ -266,21 +266,21 @@ Therefore, while keeping the original bitmap unchanged,
 we implement it so that metadata (offset) manages which range of this bitmap we are currently viewing.
 
 To implement slicing this way, we need the concept of absolute bit position.
-Absolute bit position is the value obtained by converting the logical index i into the bit position in the actual buffer.
+Absolute bit position is the value obtained by converting the logical index `i` into the bit position in the actual buffer.
 In this document, we define it as follows.
 
-- logical index: the index i visible to the user (starting from 0)
+- logical index: the index `i` visible to the user (starting from 0)
 - offset: the value indicating from which bit this Bitmap view should start reading
-- absolute bit position: abs_bit = offset + i
+- absolute bit position: `abs_bit = offset + i`
 
 In other words, even for the same bitmap, if it has already been sliced somewhere, we should not read from bit 0.
-We store that as the value offset, and use logical index i plus offset as the absolute bit position.
+We store that as the value offset, and use logical index `i` plus offset as the absolute bit position.
 For example, if `offset = 3` and the user wants logical index `i = 2`, we should not look up the 2nd element of the original bitmap,
 but rather the bit at `abs_bit_position = 3 + 2 = 5`.
 
 Now let's look at the code.
 
-As mentioned above, we convert logical index i into absolute bit position.
+As mentioned above, we convert logical index `i` into absolute bit position.
 
 ```python
 abs_bit_position = offset + i
@@ -295,9 +295,9 @@ new_byte, new_bit = divmod(abs_bit_position, 8)
 ```
 
 We compute how many bytes are needed to represent this view.
-Pay close attention to why we divide new_bit + slice_length by 8 and then take the ceiling.
+Pay close attention to why we divide `new_bit + slice_length` by 8 and then take the ceiling.
 
-If new_bit is 3 and slice_length is 10,
+If `new_bit` is 3 and `slice_length` is 10,
 - new_bit + slice_length = 3 + 10 = 13
 - 13 / 8 = 1.625
 - ceiling(1.625) = 2
@@ -311,7 +311,7 @@ needed_bytes = math.ceil((new_bit + slice_length) / 8)
 ```
 
 We slice the required byte range from the original buffer to create a new buffer view.
-For reference, Buffer internally uses memoryview, so no new copy occurs in this process.
+For reference, Buffer internally uses `memoryview`, so no new copy occurs in this process.
 
 ```python
 sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]
