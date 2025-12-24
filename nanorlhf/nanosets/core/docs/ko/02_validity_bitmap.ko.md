@@ -70,7 +70,7 @@ SIMD를 사용하면 CPU가 벡터화된 명령을 통해 이를 한 번에 처�
 현대 CPU는 메인 메모리보다 훨씬 빠릅니다. 그래서 데이터를 메모리에서 로드하는 시간이 오히려 병목이 될 수 있습니다.
 이러한 문제를 완화하기 위해 CPU는 캐시라는 작은 고속 메모리를 사용하는데, 최근에 접근한 데이터를 여기에 저장해 두었다가 다시 필요할 때 빠르게 접근할 수 있도록 합니다.
 
-![](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/core/assets/cache.png)
+![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/core/assets/cache.png?raw=true)
 
 메모리에서 데이터를 로드할 때, CPU는 한 번에 연속된 여러 바이트를 캐시에 올립니다.
 만약 데이터가 NumPy나 Arrow 배열처럼 메모리상에 연속적으로 저장되어 있다면, CPU는 한 번의 로드로 연속된 여러 원소를 캐시에 함께 올릴 수 있습니다.

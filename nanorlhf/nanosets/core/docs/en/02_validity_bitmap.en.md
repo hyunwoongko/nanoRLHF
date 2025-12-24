@@ -70,7 +70,7 @@ For this reason, libraries like Arrow require a contiguous memory layout, enabli
 Modern CPUs are much faster than main memory, so the time spent loading data from memory can become the bottleneck.
 To mitigate this, CPUs use a small, fast memory called cache, storing recently accessed data there so it can be accessed quickly when needed again.
 
-![](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/core/assets/cache.png)
+![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/core/assets/cache.png?raw=true)
 
 When loading data from memory, the CPU brings multiple contiguous bytes into the cache at once.
 If the data is stored contiguously in memory, like NumPy or Arrow arrays, the CPU can load multiple consecutive elements into the cache with a single load.
