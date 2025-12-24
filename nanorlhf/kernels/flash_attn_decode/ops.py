@@ -2,7 +2,6 @@ from typing import Optional
 
 import torch
 import triton
-from deprecated import deprecated
 
 from nanorlhf.kernels.flash_attn_decode.reduce_k import flash_attn_decode_kernel_reduce_k
 from nanorlhf.kernels.flash_attn_decode.split_k import (
@@ -174,7 +173,7 @@ def flash_attn_decode_paged(
     return o
 
 
-@deprecated
+# deprecated, kept for reference
 def flash_attn_decode(
     q: torch.Tensor,
     k: torch.Tensor,

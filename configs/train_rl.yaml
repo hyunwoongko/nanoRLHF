@@ -33,16 +33,16 @@ rollout:
   tensor_parallel_size: 2
   data_parallel_size: 2
   enforce_eager: false
-  temperature: 0.6
+  temperature: 0.7
   # The 0.6B model is often under-confident, the top-1 probability is very low.
-  # so we use temperature=0.6 to keep generations stable while still allowing some exploration.
+  # so we use temperature=0.7 to keep generations stable while still allowing some exploration.
 
 reward:
   name: compute_score
   path: nanorlhf.nanoverl.reward.custom_reward_fn
 
 optim:
-  lr: 2e-6
+  lr: 1e-6
   min_lr: 0
   lr_warmup_steps_ratio: 0.1
   lr_scheduler: cosine
@@ -65,7 +65,7 @@ training:
   default_local_dir: ./checkpoints
   project_name: math
   experiment_name: rl
-  total_epochs: 1
+  total_epochs: 3
   wandb: true
   seed: 42
   save_freq: 50
