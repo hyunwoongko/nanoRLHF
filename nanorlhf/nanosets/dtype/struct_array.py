@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from nanorlhf.nanosets.core.bitmap import Bitmap
-from nanorlhf.nanosets.core.buffer import Buffer
 from nanorlhf.nanosets.dtype.array import Array, ArrayBuilder
 from nanorlhf.nanosets.dtype.dtype import STRUCT
 from nanorlhf.nanosets.dtype.dtype_inference import get_struct_array_builder_from_rows
