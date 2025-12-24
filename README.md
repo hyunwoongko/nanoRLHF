@@ -102,7 +102,7 @@ and [Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse a
 bash ./scripts/eval_sft_model.sh $STEP
 ```
 
-#### 5) Preparing Reinforcement Learning Dataset
+#### 5) Prepare Reinforcement Learning Dataset
 Reinforcement learning is performed using [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) dataset.
 I removed samples that have one of 'yes', 'no', 'true' or 'false' as the answer, so about 84k samples are used for training.
 And [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset is used for validation.
