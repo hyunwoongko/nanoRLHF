@@ -88,10 +88,6 @@ def evaluate(model_outputs: list, dataset: Dataset) -> Tuple[dict, list]:
             else:
                 gold_answer = parse(sample["answer"])
 
-        print(f"Problem: {sample['problem']}")
-        print(f"Model text: {model_text}")
-        print(f"Gold answer: {gold_answer}")
-        print("-" * 100)
         model_answer = parse(get_unnormalized_answer(model_text))
         accuracy += int(verify(gold_answer, model_answer))
         model_outputs_for_saving.append(
