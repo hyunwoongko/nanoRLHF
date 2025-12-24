@@ -301,6 +301,7 @@ If `new_bit` is 3 and `slice_length` is 10,
 - new_bit + slice_length = 3 + 10 = 13
 - 13 / 8 = 1.625
 - ceiling(1.625) = 2
+
 We need a total of 2 bytes.
 
 This is because, to read 10 bits starting from the 3rd bit of the first byte in the buffer, we must read 5 bits from the 3rd bit to the end of the first byte,
