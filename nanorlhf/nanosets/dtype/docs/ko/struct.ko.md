@@ -72,7 +72,7 @@
 
 ## 4. 예제 코드
 
-### 1) 정수와 실수 패킹/언패킹
+### 정수와 실수 패킹/언패킹
 
 ```python
 import struct
@@ -89,7 +89,7 @@ print(unpacked)     # (1, 2.299999952316284) 처럼 보일 수 있습니다.
 
 부동소수점은 이진 표현 한계 때문에 원래 값과 미세하게 달라 보일 수 있습니다.
 
-### 2) 엔디안에 따른 바이트 차이 확인
+### 엔디안에 따른 바이트 차이 확인
 
 ```python
 import struct
@@ -100,7 +100,7 @@ print(struct.pack(">I", x).hex())  # 빅 엔디안
 print(struct.pack("<I", x).hex())  # 리틀 엔디안
 ```
 
-### 3) calcsize로 바이트 크기 확인
+### calcsize로 바이트 크기 확인
 
 ```python
 import struct
@@ -109,7 +109,7 @@ fmt = "<Ih?"
 print(struct.calcsize(fmt))  # 4 + 2 + 1 = 7 (정렬 없음)
 ```
 
-### 4) pack_into / unpack_from로 버퍼에 직접 쓰고 읽기
+### pack_into / unpack_from로 버퍼에 직접 쓰고 읽기
 
 ```python
 import struct
@@ -123,7 +123,7 @@ value = struct.unpack_from("<I", buf, 4)
 print(value)  # (42,)
 ```
 
-### 5) Struct 객체로 반복 작업 최적화
+### Struct 객체로 반복 작업 최적화
 
 ```python
 import struct

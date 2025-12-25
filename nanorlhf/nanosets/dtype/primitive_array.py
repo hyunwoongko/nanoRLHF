@@ -78,9 +78,10 @@ class PrimitiveArray(Array):
                 sub_indices = self.indices.slice(index_offset, index_length)
                 return PrimitiveArray(self.dtype, length, self.values, self.validity, sub_indices)
 
-        base_indices = normalized if self.is_contiguous() else [unpack_int32(self.indices, i) for i in normalized]
-        new_indices = pack_int32(base_indices)
-        return PrimitiveArray(self.dtype, len(base_indices), self.values, self.validity, new_indices)
+        else:
+            base_indices = normalized if self.is_contiguous() else [unpack_int32(self.indices, i) for i in normalized]
+            new_indices = pack_int32(base_indices)
+            return PrimitiveArray(self.dtype, len(base_indices), self.values, self.validity, new_indices)
 
     def to_list(self) -> List[Optional[PrimitiveType]]:
         output = []

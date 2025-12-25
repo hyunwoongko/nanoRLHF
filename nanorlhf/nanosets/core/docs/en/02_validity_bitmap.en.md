@@ -1,8 +1,8 @@
 # Validity Bitmap
 This document explains Validity Bitmap.
 
-## 1. What is a Validity Bitmap?
-A Validity Bitmap is a method for efficiently managing missing values (null values).
+## 1. What is Validity Bitmap?
+Validity Bitmap is a method for efficiently managing missing values (null values).
 Real-world datasets can contain many missing values (None, NaN, etc.).
 If we store such missing values together with the data, different Python data types get mixed.
 
