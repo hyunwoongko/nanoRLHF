@@ -17,17 +17,7 @@ This document explains what `PrimitiveArray` is, why it is needed, and what desi
 
 In summary, `PrimitiveArray` is an Arrow-style array structure that stores values, missingness, and (if needed) reference indices separately.
 
-## 2. Why store values in a binary Buffer?
-
-If you store `int` in a Python list, it internally stores `PyObject*` pointers, so values are scattered in memory and overhead increases. In contrast, `PrimitiveArray` stores primitive-type values in a contiguous byte buffer with a fixed size (e.g., int32 = 4 bytes).
-
-This structure has the following advantages.
-
-- Cache efficiency improves due to contiguous memory.
-- It is advantageous for low-level optimizations such as vectorization (SIMD).
-- Interoperability across languages/platforms becomes easier (the byte layout is explicit).
-
-## 3. Why use struct?
+## 2. Why use struct?
 
 `PrimitiveArray` needs to store Python values (integers/floats/booleans) into a byte buffer and read them back. Here, `struct` specifies how many bytes this type uses and what rule to use to interpret the bytes, performing pack/unpack.
 
@@ -39,7 +29,7 @@ This structure has the following advantages.
 
 Here, the format and element size are managed per dtype in the form `FMT[dtype] = (fmt, item_size)`. For example, int32 is generally 4 bytes and float64 is 8 bytes.
 
-## 4. Index management
+## 3. Index management
 
 The key point of `PrimitiveArray` is that logically it looks like an array of length `length`, but internally it may be a contiguous array (no indices), or a non-contiguous view with indices. If you organize the index-related concepts first, it becomes much easier to understand methods like `__getitem__` and `take`.
 
@@ -73,7 +63,7 @@ def base_index(self, idx: int) -> int:
 
 With this single concept, the same rule can be applied to all subsequent reads/writes.
 
-## 5. The length of PrimitiveArray (length)
+## 4. The length of PrimitiveArray (length)
 
 The key point of `PrimitiveArray.__init__` is how to represent the logical length (logical length).
 
@@ -82,7 +72,7 @@ The key point of `PrimitiveArray.__init__` is how to represent the logical lengt
 
 That is, if indices exists, this array becomes a view that holds the values as-is and reads only the positions pointed to by indices, and the logical length is determined by indices.
 
-## 6. `__getitem__`: How do we read values?
+## 5. `__getitem__`: How do we read values?
 
 `__getitem__` handles integer indices and slices.
 
@@ -111,7 +101,7 @@ For example, if `item_size = 4` (int32) and `base_index(key) = 10`, then `offset
 
 A slice (`array[start:stop:step]`) is delegated internally to `take(range(...))`. (The `take` method will be described below.)
 
-## 7. Why there is no `__setitem__`: aiming for immutability
+## 6. Why there is no `__setitem__`: aiming for immutability
 
 `PrimitiveArray` does not have `__setitem__`. This is because this implementation aims to treat arrays as immutable by following the design philosophy of Apache Arrow.
 
@@ -123,7 +113,7 @@ If you aim for an immutable structure, you get the following advantages.
 
 Therefore, rather than modifying values in place, `PrimitiveArray` recommends creating a brand-new array or creating a zero-copy view through methods like `from_list`, `builder.finish`, `take`, `slice`.
 
-## 8. `take(indices)`: The concrete behavior of selection operations
+## 7. `take(indices)`: The concrete behavior of selection operations
 
 `take` returns the result of selecting elements by specific indices as a new `PrimitiveArray`. The important point here is that it tries to express the result as a view while not copying the values buffer as much as possible (zero-copy).
 
@@ -211,7 +201,7 @@ The properties of this design are as follows.
 - The values buffer is never newly copied.
 - Even if you apply take multiple times, the result can accumulate as an indices-based view.
 
-## 9. `to_list`: Convert to a Python list
+## 8. `to_list`: Convert to a Python list
 
 `to_list` iterates through all elements and appends `None` if null, otherwise reads the value with `struct.unpack_from` and returns Python values.
 
@@ -229,7 +219,7 @@ return output
 
 This function is convenient for exporting outward, but since it creates Python objects via `struct.unpack_from`, it is costly for large-scale data.
 
-## 10. `from_list`: Create from a Python list
+## 9. `from_list`: Create from a Python list
 
 `from_list` infers the dtype of the input list (`infer_primitive_dtype`) or uses a dtype specified by the user. Then, using `PrimitiveArrayBuilder` described below, it does the following.
 
@@ -243,7 +233,7 @@ The reasons for strictly handling input value types per dtype are as follows.
 - bool can be represented as an integer internally, so it is allowed in some cases, but for BOOL dtype only bool is allowed.
 - int32 range checks prevent overflow.
 
-## 11. `infer_primitive_dtype`: dtype inference
+## 10. `infer_primitive_dtype`: dtype inference
 
 ```python
 def infer_primitive_dtype(values: List[Optional[PrimitiveType]]) -> DataType:
@@ -278,7 +268,7 @@ The `infer_primitive_dtype` function inspects the types of input values and infe
 Real Arrow would infer more complexly, but here we decide the dtype with a simple priority of float > int > bool.
 If [1, 3.14, True] is given, this list is inferred as float64.
 
-## 12. `PrimitiveArrayBuilder`: Building the buffer with `pack_into`
+## 11. `PrimitiveArrayBuilder`: Building the buffer with `pack_into`
 
 The builder does not stack Python values directly into bytes. Instead, it first collects the `values` list and `validity` list, and then builds the buffer at once at the end.
 

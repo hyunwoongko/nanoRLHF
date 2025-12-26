@@ -17,17 +17,7 @@
 
 정리하면, `PrimitiveArray`는 값과 결측치와 (필요시) 참조 인덱스를 분리하여 저장하는 Arrow 스타일의 배열 구조입니다.
 
-## 2. 왜 values를 Buffer에 바이너리로 저장하나요?
-
-파이썬 리스트에 `int`를 저장하면 내부적으로는 `PyObject*` 포인터가 저장되므로, 값이 메모리에 흩어지고 오버헤드가 커집니다. 반면 `PrimitiveArray`는 원시 타입 값을 정해진 크기(예: int32=4바이트)로 연속된 바이트 버퍼에 저장합니다.
-
-이 구조는 다음과 같은 장점이 있습니다.
-
-- 연속 메모리로 인해 캐시 효율이 좋아집니다.
-- 벡터화(SIMD)와 같은 저수준 최적화에 유리합니다.
-- 언어/플랫폼 간 호환이 쉬워집니다(바이트 레이아웃이 명확함).
-
-## 3. struct를 왜 쓰나요?
+## 2. struct를 왜 쓰나요?
 
 `PrimitiveArray`는 파이썬 값(정수/실수/불리언)을 바이트 버퍼에 저장하고, 다시 읽어오는 과정이 필요합니다. 여기서 `struct`는 이 타입은 몇 바이트이며 어떤 규칙으로 바이트를 해석할지를 지정해서 pack/unpack을 수행합니다.
 
@@ -39,7 +29,7 @@
 
 이때 `FMT[dtype] = (fmt, item_size)` 형태로 dtype별 포맷과 원소 크기를 관리합니다. 예를 들어 int32는 일반적으로 4바이트이며, float64는 8바이트입니다.
 
-## 4. 인덱스 관리
+## 3. 인덱스 관리
 
 `PrimitiveArray`의 핵심은 논리적으로는 길이가 `length`인 배열처럼 보이지만, 내부적으로는 contiguous 배열일 수도 있고(indices가 없음), indices가 있는 non-contiguous 뷰일 수도 있다는 점입니다. 
 이때 인덱스 관련 개념을 먼저 정리해 두면 이후 `__getitem__`과 `take` 등의 메서드를 이해하기가 훨씬 쉽습니다.
@@ -74,7 +64,7 @@ def base_index(self, idx: int) -> int:
 
 이 개념 하나로, 이후 모든 값 읽기/쓰기에서 동일한 규칙을 적용할 수 있습니다.
 
-## 5. PrimitiveArray의 길이(length)
+## 4. PrimitiveArray의 길이(length)
 
 `PrimitiveArray.__init__`의 중요한 포인트는 논리적 길이(logical length)를 어떻게 표현하는가 입니다.
 
@@ -83,7 +73,7 @@ def base_index(self, idx: int) -> int:
 
 즉, indices가 존재하면 이 배열은 values를 그대로 들고 있으면서 indices가 가리키는 위치만 읽는 뷰가 되고, 논리적 길이는 indices에 의해 결정됩니다.
 
-## 6. `__getitem__`: 값을 어떻게 읽나요?
+## 5. `__getitem__`: 값을 어떻게 읽나요?
 
 `__getitem__`은 정수 인덱스와 슬라이스를 처리합니다.
 
@@ -112,7 +102,7 @@ def __getitem__(self, key: Union[int, slice]):
 
 슬라이스(`array[start:stop:step]`)는 내부적으로 `take(range(...))`로 위임하여 처리합니다. (`take` 메서드에 대해서는 아래에서 후술합니다.)
 
-## 7. `__setitem__`이 없는 이유: immutable 지향
+## 6. `__setitem__`이 없는 이유: immutable 지향
 
 `PrimitiveArray`에는 `__setitem__`이 없습니다. 이는 이 구현이 Apache Arrow의 설계 철학을 따라 배열을 기본적으로 immutable(불변)로 다루는 방향을 지향하기 때문입니다.
 
@@ -124,7 +114,7 @@ def __getitem__(self, key: Union[int, slice]):
 
 따라서 `PrimitiveArray`는 값을 제자리에서 수정하기보다는, `from_list`, `builder.finish`, `take`, `slice` 같은 방식으로 아예 새로운 배열을 생성하거나 zero-copy 뷰를 만들어내는 방식을 권장합니다.
 
-## 8. `take(indices)`: 선택 연산의 구체적인 동작
+## 7. `take(indices)`: 선택 연산의 구체적인 동작
 
 ```python
 def take(self, indices: Sequence[int]):
@@ -242,7 +232,7 @@ return PrimitiveArray(self.dtype, len(base_indices), self.values, self.validity,
 - values 버퍼는 절대 새롭게 복사하지 않습니다.
 - take를 여러 번 적용해도 결과는 indices 기반의 뷰로 누적될 수 있습니다.
 
-## 9. `to_list`: 파이썬 리스트로 변환
+## 8. `to_list`: 파이썬 리스트로 변환
 
 `to_list`는 모든 원소를 순회하면서 null이면 `None`, 아니면 `struct.unpack_from`으로 값을 읽어 파이썬 값으로 반환합니다.
 
@@ -260,7 +250,7 @@ return output
 
 이 함수는 외부로 내보내는 용도로는 편리하지만, `struct.unpack_from`에 의해 파이썬 객체를 생성하므로 대규모 데이터에서는 비용이 큽니다.
 
-## 10. `from_list`: 파이썬 리스트로부터 생성하기
+## 9. `from_list`: 파이썬 리스트로부터 생성하기
 
 `from_list`는 입력 리스트의 dtype을 추론하거나(`infer_primitive_dtype`) 사용자가 지정한 dtype을 사용합니다. 
 그리고 후술할 `PrimitiveArrayBuilder`를 사용하여 다음을 수행합니다.
@@ -275,7 +265,7 @@ dtype별로 입력 값 타입을 엄격히 처리하는 이유는 다음과 같�
 - bool은 내부적으로 정수로도 표현 가능하므로 일부 경우 허용되지만, BOOL dtype에서는 bool만 허용합니다.
 - int32 범위 검사를 통해 overflow를 방지합니다.
 
-## 11. `infer_primitive_dtype`: dtype 추론
+## 10. `infer_primitive_dtype`: dtype 추론
 ```python
 def infer_primitive_dtype(values: List[Optional[PrimitiveType]]) -> DataType:
     saw_float = False
@@ -308,7 +298,7 @@ def infer_primitive_dtype(values: List[Optional[PrimitiveType]]) -> DataType:
 실제 Arrow는 더 복잡하게 추론하겠지만 여기에서는 심플하게 float > int > bool 우선순위로 dtype을 결정합니다.
 만약 [1, 3.14, True]가 들어오면 이 리스트는 float64로 추론됩니다.
 
-## 12. `PrimitiveArrayBuilder`: `pack_into로` 버퍼 구성하기
+## 11. `PrimitiveArrayBuilder`: `pack_into로` 버퍼 구성하기
 
 Builder는 파이썬 값들을 바로 bytes로 쌓지 않고, 우선 `values` 리스트와 `validity` 리스트를 모아둔 다음, 마지막에 한 번에 버퍼를 구성합니다.
 
