@@ -38,6 +38,7 @@ validity = [1, 0, 1, 1]  # 1 indicates a valid value, 0 indicates a missing valu
 By separating values from validity, numeric data can be stored in a compact, contiguous memory block (int32, float64, etc.).
 We can store this in byte-level (`bytearray`), ensuring that the data is stored in a physically contiguous space.
 So we can solve the three issues mentioned above.
+
 ```python
 values = bytearray([10, 0, 30, 40])  # int with contiguous memory layout
 validity = bytearray([0b00001011])  # Bitmap to store missing-value information

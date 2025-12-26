@@ -48,11 +48,11 @@ class Bitmap:
             - High overhead: Each access goes through a Python object wrapper.
 
             By separating values and their validity information,
-            the numeric data can be stored as a compact, contiguous memory block (e.g. int32, float64, etc.),
+            the numeric data can be stored as a compact, contiguous memory block (e.g. int32, float64, etc.).
             while the validity is tracked by a lightweight bitmap that uses only 1 bit per element.
 
-            >>> values  = [10, 0, 30, 40]   # int32 array
-            >>> bitmap  = [1, 0, 1, 1]       # 1 means valid, 0 means null
+            >>> values  = bytearray([10, 0, 30, 40])   # int32 array
+            >>> bitmap  = bytearray([0b00001011])       # 1 means valid, 0 means null
 
             This design provides three major advantages:
             1. Speed: Contiguous memory enables SIMD and vectorized operations.
