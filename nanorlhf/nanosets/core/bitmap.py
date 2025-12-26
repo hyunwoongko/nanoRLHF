@@ -52,7 +52,7 @@ class Bitmap:
             while the validity is tracked by a lightweight bitmap that uses only 1 bit per element.
 
             >>> values  = bytearray([10, 0, 30, 40])   # int32 array
-            >>> bitmap  = bytearray([0b00001011])       # 1 means valid, 0 means null
+            >>> bitmap  = bytearray([0b00001011])      # 1 means valid, 0 means null
 
             This design provides three major advantages:
             1. Speed: Contiguous memory enables SIMD and vectorized operations.
