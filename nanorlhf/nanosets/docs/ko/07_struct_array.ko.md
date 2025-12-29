@@ -2,7 +2,7 @@
 
 이 문서에서는 `StructArray`가 무엇인지, 왜 필요한지, 그리고 내부 구현이 어떤 설계 의도를 가지는지 설명합니다. `StructArray`는 각 row를 파이썬 `dict` 객체로 그대로 들고 있지 않고, **필드별 child Array들을 컬럼 형태로 저장**한 뒤, row 단위의 결측치(null)는 **Validity Bitmap**으로 분리하여 관리하는 Arrow 스타일의 구조체(struct) 배열 타입입니다.
 
-## 1. Columnar(컬럼 지향) 구조를 사용하나요?
+## 1. 왜 Columnar(컬럼 지향) 구조를 사용하나요?
 
 `StructArray`를 이해하는 핵심은, 데이터가 **row-oriented(행 지향)** 이 아니라 **columnar(열 지향)** 으로 저장된다는 점입니다.
 

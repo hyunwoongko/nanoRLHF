@@ -2,7 +2,7 @@
 
 This document explains what `StructArray` is, why it is needed, and what design intentions its internal implementation has. `StructArray` is an Arrow-style struct array type that does not store each row as a Python `dict` object as-is, but instead stores **field-wise child Arrays in a columnar form**, and manages row-level missingness (null) separately via a **Validity Bitmap**.
 
-## 1. Do we use a columnar (column-oriented) layout?
+## 1. Why do we use a columnar (column-oriented) layout?
 
 The key to understanding `StructArray` is that the data is stored not in a **row-oriented** manner but in a **columnar (column-oriented)** manner.
 
