@@ -1,4 +1,4 @@
-# IPC
+# IPC (Inter-Process Communication)
 This document explains the IPC (Inter-Process Communication) file format used in nanosets. 
 The goal is to handle data as close to zero-copy as possible when serializing/deserializing a `Table` to/from a file, and in particular to reduce unnecessary copies on the read path by using `mmap`-based memory mapping.
 
