@@ -376,11 +376,11 @@ def read_table(path: str) -> Table:
             scalar_dtype = STR_TO_TORCH_DTYPE[tensor_dtype_name]
             elem_shape = list(tensor_shape)
 
-            values_buf = buffers[values_idx]
+            values_buffer = buffers[values_idx]
             num_elems_per_tensor = 1 if not elem_shape else math.prod(elem_shape)
             total_elems = base_length * num_elems_per_tensor
 
-            base_1d = torch.frombuffer(values_buf.data, dtype=scalar_dtype, count=total_elems)
+            base_1d = torch.frombuffer(values_buffer.data, dtype=scalar_dtype, count=total_elems)
             base_block = base_1d.view(base_length, *elem_shape) if elem_shape else base_1d.view(base_length)
 
             base_tensors: List[torch.Tensor] = [base_block[i] for i in range(base_length)]
@@ -406,10 +406,10 @@ def read_table(path: str) -> Table:
             kind = inputs["kind"]
 
             if kind == "primitive":
-                values_buf = buffers[inputs["values"]]
+                values_buffer = buffers[inputs["values"]]
                 _, item_size = FMT[data_type]
-                base_length = len(values_buf) // item_size
-                return PrimitiveArray(data_type, base_length, values_buf, validity, indices)
+                base_length = len(values_buffer) // item_size
+                return PrimitiveArray(data_type, base_length, values_buffer, validity, indices)
 
             if kind == "string":
                 offsets = buffers[inputs["offsets"]]

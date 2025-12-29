@@ -129,7 +129,9 @@ def main(
     eval_output, model_outputs_for_saving = evaluate(model_outputs, dataset)
     print(f"Evaluation result: {eval_output}")
 
-    eval_result_dir = os.path.join("eval", args.model.split("/")[-1], args.test)
+    paths = args.model.split("/")
+    model_step_path = f"{paths[-2]}_{paths[-1]}"
+    eval_result_dir = os.path.join("eval", model_step_path, args.test)
     os.makedirs(eval_result_dir, exist_ok=True)
 
     eval_result_path = os.path.join(eval_result_dir, "score.json")

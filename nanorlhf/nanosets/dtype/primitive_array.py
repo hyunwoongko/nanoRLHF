@@ -159,6 +159,7 @@ class PrimitiveArray(Array):
             if self.is_null(key):
                 return None
             offset = self.base_index(key) * self.item_size
+            # why indexing [0]? -> unpack_from returns a tuple of (value1, value2, ...)
             return struct.unpack_from(self.fmt, self.values.data, offset)[0]
 
         if isinstance(key, slice):

@@ -76,7 +76,7 @@ SIMD를 사용하면 CPU가 벡터화된 명령을 통해 이를 한 번에 처�
 현대 CPU는 메인 메모리보다 훨씬 빠릅니다. 그래서 데이터를 메모리에서 로드하는 시간이 오히려 병목이 될 수 있습니다.
 이러한 문제를 완화하기 위해 CPU는 캐시라는 작은 고속 메모리를 사용하는데, 최근에 접근한 데이터를 여기에 저장해 두었다가 다시 필요할 때 빠르게 접근할 수 있도록 합니다.
 
-![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/core/assets/cache.png?raw=true)
+![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/docs/assets/cache.png?raw=true)
 
 메모리에서 데이터를 로드할 때, CPU는 한 번에 연속된 여러 바이트를 캐시에 올립니다.
 만약 데이터가 NumPy나 Arrow 배열처럼 메모리상에 연속적으로 저장되어 있다면, CPU는 한 번의 로드로 연속된 여러 원소를 캐시에 함께 올릴 수 있습니다.
@@ -257,10 +257,10 @@ def slice(buffer: Buffer, offset: int, i: int, slice_length: int) -> Bitmap:
     """i부터 i + slice_length 까지의 비트를 참조하는 새로운 Bitmap 뷰를 생성합니다."""
 
     abs_bit_position = offset + i
-    new_byte, new_bit = divmod(abs_bit_position, 8)
-    needed_bytes = math.ceil((new_bit + slice_length) / 8)
-    sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]
-    return Bitmap(slice_length, sliced_buffer, offset=new_bit)
+    byte, bit = divmod(abs_bit_position, 8)
+    needed_bytes = math.ceil((bit + slice_length) / 8)
+    sliced_buffer = buffer.data[byte:byte + needed_bytes]
+    return Bitmap(slice_length, sliced_buffer, offset=bit)
 ```
 
 Bitmap slicing 구현의 핵심은 원본 Bitmap을 복사하여 새로운 Bitmap을 만드는 것이 아니라,
@@ -292,17 +292,17 @@ abs_bit_position = offset + i
 
 absolute bit position을 사용해 새로운 뷰의 시작 위치를 계산합니다.
 만약 `i`가 2이고 `offset`이 3이라면 absolute bit position은 5가 되고,
-new_byte는 0, new_bit는 5가 됩니다.
+byte는 0, bit는 5가 됩니다.
 
 ```python
-new_byte, new_bit = divmod(abs_bit_position, 8)
+byte, bit = divmod(abs_bit_position, 8)
 ```
 
 이 뷰를 표현하기 위해 몇 바이트가 필요한지 계산합니다.
-왜 `new_bit + slice_length`를 8로 나눈 후 올림을 하는지 주의깊게 살펴봅시다.
+왜 `bit + slice_length`를 8로 나눈 후 올림을 하는지 주의깊게 살펴봅시다.
 
-만약 `new_bit`가 3이고 `slice_length`가 10이라면,
-- new_bit + slice_length = 3 + 10 = 13
+만약 `bit`가 3이고 `slice_length`가 10이라면,
+- bit + slice_length = 3 + 10 = 13
 - 13 / 8 = 1.625
 - 올림(1.625) = 2
 
@@ -312,20 +312,20 @@ new_byte, new_bit = divmod(abs_bit_position, 8)
 나머지 5개 비트는 2번째 바이트에서 읽어야 하기 때문입니다.
 
 ```python
-needed_bytes = math.ceil((new_bit + slice_length) / 8)
+needed_bytes = math.ceil((bit + slice_length) / 8)
 ```
 
 원본 버퍼에서 필요한 바이트 구간을 슬라이스하여 새로운 버퍼 뷰를 생성합니다.
 참고로 Buffer는 내부적으로 `memoryview`를 사용하기 때문에 이 과정에서 새로운 복사가 일어나지 않습니다.
 
 ```python
-sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]
+sliced_buffer = buffer.data[byte:byte + needed_bytes]
 ```
 
 마지막으로 새로운 Bitmap 뷰를 생성하여 반환합니다.
 
 ```python
-return Bitmap(slice_length, sliced_buffer, offset=new_bit)
+return Bitmap(slice_length, sliced_buffer, offset=bit)
 ```
 
 그리고 기존의 `get_validity` 및 `set_validity` 함수들은 이 새로운 offset 메타데이터를 사용하도록 수정되어야 합니다.

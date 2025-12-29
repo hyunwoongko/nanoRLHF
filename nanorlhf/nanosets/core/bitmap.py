@@ -344,8 +344,8 @@ class Bitmap:
             return Bitmap(0)
 
         abs_bit_position = self.bit_offset + offset
-        new_byte, new_bit = divmod(abs_bit_position, 8)
+        byte, bit = divmod(abs_bit_position, 8)
 
-        needed_bytes = math.ceil((new_bit + length) / 8)
-        sliced_buffer = self.buffer.slice(new_byte, needed_bytes)
-        return Bitmap(length, sliced_buffer, new_bit)
+        needed_bytes = math.ceil((bit + length) / 8)
+        sliced_buffer = self.buffer.slice(byte, needed_bytes)
+        return Bitmap(length, sliced_buffer, bit)

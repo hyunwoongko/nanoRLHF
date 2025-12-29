@@ -45,11 +45,11 @@ In general, if you want to create a binary format "in the same way every time", 
 
 ### Commonly used type codes
 
-- `x` : 1-byte padding  
+- `?` : boolean (1 byte)
+- `x` : 1-byte padding (padding means a space that is not data)
 - `c` : 1-byte character (bytes of length 1)  
 - `s` : N-byte string (you must specify the length in front like `Ns`)  
-- `p` : Pascal string (in the form `Np`, the first 1 byte stores the length, followed by the data)  
-- `?` : boolean (1 byte)
+- `p` : Pascal string (in the form `Np`, the first 1 byte stores the length, followed by the data)
 
 Integer types:
 - `b` / `B` : 1-byte signed/unsigned  
@@ -116,29 +116,17 @@ import struct
 
 buf = bytearray(16)
 
-struct.pack_into("<I", buf, 4, 42)   # write 42 as uint32 starting at offset 4
+# Pack the 32-bit integer 42 starting from offset 4, i.e., at buf[4:8]
+struct.pack_into("<I", buf, 4, 42) 
 print(buf.hex())
 
 value = struct.unpack_from("<I", buf, 4)
 print(value)  # (42,)
 ```
 
-### 5) Optimizing repeated work with a Struct object
-
-```python
-import struct
-
-st = struct.Struct("<Ih?")
-data = st.pack(100, -2, True)
-print(data.hex())
-
-print(st.unpack(data))  # (100, -2, True)
-```
-
 ## 5. Little-endian and big-endian
 
 Endianness (Endian) refers to **the order in which bytes are arranged** when storing **a value consisting of multiple bytes** in memory.  
-The important point is that **the bit order does not change; the byte sequence order changes**.
 
 - Little Endian: stores the **least significant byte (LSB)** first.  
 - Big Endian: stores the **most significant byte (MSB)** first.

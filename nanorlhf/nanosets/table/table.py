@@ -115,8 +115,9 @@ class Table:
             empty_columns = [col.take([]) for col in first_batch.columns]
             empty_batch = RecordBatch(self.schema, empty_columns)
             return Table.from_batches([empty_batch])
-        remaining = length
+
         batch_start_global = 0
+        remaining = length
         new_batches: List[RecordBatch] = []
         for batch in self.batches:
             batch_length = batch.length
@@ -124,6 +125,9 @@ class Table:
             if batch_end_global <= offset:
                 batch_start_global = batch_end_global
                 continue
+            # table.slice(10, 25): 10 ~ 35
+            # if batch_start_global is 7, this_batch[3:] is needed.
+            # so local_start is offset - batch_start_global
             local_start = max(0, offset - batch_start_global)
             local_available = batch_length - local_start
             local_len = min(remaining, local_available)

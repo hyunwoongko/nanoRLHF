@@ -76,7 +76,7 @@ For this reason, libraries like Arrow require a contiguous memory layout, enabli
 Modern CPUs are much faster than main memory, so the time spent loading data from memory can become the bottleneck.
 To mitigate this, CPUs use a small, fast memory called cache, storing recently accessed data there so it can be accessed quickly when needed again.
 
-![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/core/assets/cache.png?raw=true)
+![](https://github.com/hyunwoongko/nanoRLHF/blob/main/nanorlhf/nanosets/docs/assets/cache.png?raw=true)
 
 When loading data from memory, the CPU brings multiple contiguous bytes into the cache at once.
 If the data is stored contiguously in memory, like NumPy or Arrow arrays, the CPU can load multiple consecutive elements into the cache with a single load.
@@ -259,10 +259,10 @@ def slice(buffer: Buffer, offset: int, i: int, slice_length: int) -> Bitmap:
     """Create a new Bitmap view that references bits from i to i + slice_length."""
 
     abs_bit_position = offset + i
-    new_byte, new_bit = divmod(abs_bit_position, 8)
-    needed_bytes = math.ceil((new_bit + slice_length) / 8)
-    sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]
-    return Bitmap(slice_length, sliced_buffer, offset=new_bit)
+    byte, bit = divmod(abs_bit_position, 8)
+    needed_bytes = math.ceil((bit + slice_length) / 8)
+    sliced_buffer = buffer.data[byte:byte + needed_bytes]
+    return Bitmap(slice_length, sliced_buffer, offset=bit)
 ```
 
 The key idea of bitmap slicing is not to copy the original bitmap and create a new bitmap,
@@ -294,17 +294,17 @@ abs_bit_position = offset + i
 
 Using absolute bit position, we compute the starting position of the new view.
 If `i` is 2 and `offset` is 3, absolute bit position is 5,
-and new_byte is 0 and new_bit is 5.
+and byte is 0 and bit is 5.
 
 ```python
-new_byte, new_bit = divmod(abs_bit_position, 8)
+byte, bit = divmod(abs_bit_position, 8)
 ```
 
 We compute how many bytes are needed to represent this view.
-Pay close attention to why we divide `new_bit + slice_length` by 8 and then take the ceiling.
+Pay close attention to why we divide `bit + slice_length` by 8 and then take the ceiling.
 
-If `new_bit` is 3 and `slice_length` is 10,
-- new_bit + slice_length = 3 + 10 = 13
+If `bit` is 3 and `slice_length` is 10,
+- bit + slice_length = 3 + 10 = 13
 - 13 / 8 = 1.625
 - ceiling(1.625) = 2
 
@@ -314,20 +314,20 @@ This is because, to read 10 bits starting from the 3rd bit of the first byte in 
 and the remaining 5 bits must be read from the second byte.
 
 ```python
-needed_bytes = math.ceil((new_bit + slice_length) / 8)
+needed_bytes = math.ceil((bit + slice_length) / 8)
 ```
 
 We slice the required byte range from the original buffer to create a new buffer view.
 For reference, Buffer internally uses `memoryview`, so no new copy occurs in this process.
 
 ```python
-sliced_buffer = buffer.data[new_byte:new_byte + needed_bytes]
+sliced_buffer = buffer.data[byte:byte + needed_bytes]
 ```
 
 Finally, we create and return the new Bitmap view.
 
 ```python
-return Bitmap(slice_length, sliced_buffer, offset=new_bit)
+return Bitmap(slice_length, sliced_buffer, offset=bit)
 ```
 
 And the existing `get_validity` and `set_validity` functions must be modified to use this new offset metadata.

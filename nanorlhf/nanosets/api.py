@@ -12,11 +12,7 @@ from nanorlhf.nanosets.utils import DEFAULT_BATCH_SIZE, ext
 
 class Dataset:
     def __init__(self, table: Table):
-        self._table = table
-
-    @property
-    def table(self) -> Table:
-        return self._table
+        self.table = table
 
     def __getitem__(self, item):
         if isinstance(item, int):
@@ -33,10 +29,10 @@ class Dataset:
             raise TypeError("Invalid argument type.")
 
     def __len__(self) -> int:
-        return self._table.length
+        return self.table.length
 
     def __repr__(self) -> str:
-        return f"Dataset(num_rows={len(self)}, schema={self._table.schema})"
+        return f"Dataset(num_rows={len(self)}, schema={self.table.schema})"
 
     @classmethod
     def from_list(
@@ -51,31 +47,31 @@ class Dataset:
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         with open(path, "wb") as fp:
-            write_table(fp, self._table)
+            write_table(fp, self.table)
 
     def to_json(self, path: str, lines: bool = True) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
         with open(path, "w", encoding="utf-8") as fp:
             if lines:
-                to_jsonl(fp, self._table)
+                to_jsonl(fp, self.table)
             else:
-                to_json(fp, self._table)
+                to_json(fp, self.table)
 
     def to_dict(self) -> List[Optional[dict]]:
-        return self._table.to_list()
+        return self.table.to_list()
 
     def select_columns(self, column_names: List[str]) -> "Dataset":
-        return Dataset(self._table.select(column_names))
+        return Dataset(self.table.select(column_names))
 
     def remove_columns(self, column_names: List[str]) -> "Dataset":
-        all_names = self._table.column_names()
+        all_names = self.table.column_names()
         drop_set = set(column_names)
         keep = [name for name in all_names if name not in drop_set]
-        return Dataset(self._table.select(keep))
+        return Dataset(self.table.select(keep))
 
     def select(self, indices: Sequence[int]) -> "Dataset":
-        return Dataset(self._table.take(indices))
+        return Dataset(self.table.take(indices))
 
     def shuffle(self, seed: Optional[int] = None) -> "Dataset":
         rng = random.Random(seed)
@@ -94,7 +90,7 @@ class Dataset:
     ) -> "Dataset":
         new_batches: List[RecordBatch] = []
         if not batched:
-            for batch in self._table.batches:
+            for batch in self.table.batches:
                 rows = batch.to_list()
                 out_rows: List[Optional[Dict[str, Any]]] = []
                 for row in rows:
@@ -116,7 +112,7 @@ class Dataset:
                 new_batches.append(RecordBatch.from_list(mapped))
                 buffer = []
 
-            for batch in self._table.batches:
+            for batch in self.table.batches:
                 rows = batch.to_list()
                 for row in rows:
                     buffer.append(row)
@@ -131,16 +127,16 @@ class Dataset:
     ) -> "Dataset":
         new_batches: List[RecordBatch] = []
         buffer: List[Optional[Dict[str, Any]]] = []
-        bsz = batch_size if batch_size is not None and batch_size > 0 else None
+        batch_size = batch_size if batch_size is not None and batch_size > 0 else None
 
-        for batch in self._table.batches:
+        for batch in self.table.batches:
             rows = batch.to_list()
             for row in rows:
                 if row is None:
                     continue
                 if predicate(row):
                     buffer.append(row)
-                    if bsz is not None and len(buffer) >= bsz:
+                    if batch_size is not None and len(buffer) >= batch_size:
                         new_batches.append(RecordBatch.from_list(buffer))
                         buffer = []
 
@@ -148,9 +144,9 @@ class Dataset:
             new_batches.append(RecordBatch.from_list(buffer))
 
         if not new_batches:
-            first_batch = self._table.batches[0]
+            first_batch = self.table.batches[0]
             empty_cols = [col.take([]) for col in first_batch.columns]
-            empty_batch = RecordBatch(self._table.schema, empty_cols)
+            empty_batch = RecordBatch(self.table.schema, empty_cols)
             return Dataset(Table.from_batches([empty_batch]))
 
         return Dataset(Table.from_batches(new_batches))
