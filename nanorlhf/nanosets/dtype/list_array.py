@@ -92,14 +92,6 @@ class ListArray(Array):
             validity (Optional[Bitmap]): Optional validity bitmap (1 = valid, 0 = null).
             indices (Optional[Buffer]): Optional int32 buffer mapping logical indices -> physical list indices.
 
-        Raises:
-            ValueError:
-                - If offsets buffer size is not a multiple of 4 bytes (int32).
-                - If offsets does not contain at least one entry (needed to define an empty array).
-                - If offsets refer to more child elements than exist in `child`.
-                - If indices buffer size is not a multiple of 4 bytes when indices is provided.
-                - If `indices` is None and the provided `length` does not match the computed base_length.
-
         Discussion:
             Q. How is base_length computed from offsets?
                 Offsets store int32 entries. If offsets contains N entries, then it can describe N-1 lists,
@@ -162,11 +154,6 @@ class ListArray(Array):
             Union[Optional[list], "ListArray"]:
                 - If key is int: returns a Python list (materialized) or None.
                 - If key is slice: returns a ListArray view/selection.
-
-        Raises:
-            IndexError: If the computed base (physical) index is outside [0, base_length).
-            ValueError: If offsets define an invalid child range for the target element.
-            TypeError: If key is neither int nor slice.
 
         Discussion:
             Q. What happens when key is an integer?
@@ -418,10 +405,6 @@ class ListArray(Array):
         Returns:
             ListArray: A newly constructed contiguous ListArray (indices=None).
 
-        Raises:
-            ValueError: If the element type cannot be inferred (all rows are None or empty).
-            TypeError: If mixed element types are found during inference.
-
         Discussion:
             Q. Why infer a child builder?
                 A ListArray stores its payload in a single child Array, so it must decide what ArrayBuilder to use
@@ -529,9 +512,6 @@ class ListArrayBuilder(ArrayBuilder):
         Returns:
             ListArrayBuilder: Returns self to allow chaining.
 
-        Raises:
-            TypeError: If value is not None and is not an iterable, or if it is a string/bytes-like iterable.
-
         Discussion:
             Q. What exactly is stored when value is None?
                 The builder appends:
@@ -580,11 +560,6 @@ class ListArrayBuilder(ArrayBuilder):
 
         Returns:
             ListArray: A contiguous ListArray (indices=None) constructed from the builder state.
-
-        Raises:
-            ValueError:
-                - If validity length does not match the number of appended rows.
-                - If offsets length is not num_items + 1.
 
         Discussion:
             Q. Why must validity length match num_items?

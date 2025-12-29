@@ -19,11 +19,6 @@ def infer_primitive_dtype(values: List[Optional[PrimitiveType]]) -> DataType:
             - INT64 if no float is present and any non-null int is present.
             - BOOL if only bool values (and/or None) are present.
 
-    Raises:
-        ValueError:
-            - If a non-null value is not one of (bool, int, float).
-            - If all values are None (or the list contains no inferable non-null primitives).
-
     Discussion:
         Q. Why does float take precedence over int and bool?
             In mixed Python numeric inputs, floats imply fractional values and cannot be represented losslessly
@@ -83,15 +78,6 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
             - StringArrayBuilder for str elements.
             - PrimitiveArrayBuilder for bool/int/float elements (dtype inferred by infer_primitive_dtype).
             - TensorArrayBuilder for torch tensor elements.
-
-    Raises:
-        ValueError:
-            - If no non-null element sample can be found (all rows are None or empty, or contain only None elements).
-            - If a sampled primitive value has an unsupported type for primitive inference.
-        TypeError:
-            - If mixed element types are detected (e.g., some elements are str but others are not str).
-            - If nested list inference encounters a non-list element where a nested list is expected.
-            - If an unsupported element type is encountered.
 
     Discussion:
         Q. Why does it search for a "sample" element first?

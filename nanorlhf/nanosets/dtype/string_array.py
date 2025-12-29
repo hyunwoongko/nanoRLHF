@@ -101,13 +101,6 @@ class StringArray(Array):
             validity (Optional[Bitmap]): Optional validity bitmap (1 = valid, 0 = null).
             indices (Optional[Buffer]): Optional int32 buffer mapping logical indices -> physical indices.
 
-        Raises:
-            ValueError:
-                - If offsets buffer size is not a multiple of 4 bytes (int32).
-                - If offsets does not contain at least one entry (needed to define an empty array).
-                - If indices buffer size is not a multiple of 4 bytes when indices is provided.
-                - If `indices` is None and the provided `length` does not match the computed physical_length.
-
         Discussion:
             Q. How is physical_length computed from offsets?
                 Offsets store int32 entries. If offsets contains N entries, then it can describe N-1 strings,
@@ -160,11 +153,6 @@ class StringArray(Array):
             Union[Optional[str], "StringArray"]:
                 - If key is int: returns a Python str or None.
                 - If key is slice: returns a StringArray view/selection.
-
-        Raises:
-            IndexError: If the computed base (physical) index is outside [0, physical_length).
-            ValueError: If offsets define an invalid byte range for the target element.
-            TypeError: If key is neither int nor slice.
 
         Discussion:
             Q. What happens when key is an integer?
@@ -507,9 +495,6 @@ class StringArrayBuilder(ArrayBuilder):
         Returns:
             StringArrayBuilder: Returns self to allow chaining.
 
-        Raises:
-            TypeError: If value is not None and not a str.
-
         Discussion:
             Q. What exactly is stored when value is None?
                 The builder appends:
@@ -546,9 +531,6 @@ class StringArrayBuilder(ArrayBuilder):
 
         Returns:
             StringArray: A contiguous StringArray (indices=None) constructed from the builder state.
-
-        Raises:
-            ValueError: If offsets length is not num_items + 1.
 
         Discussion:
             Q. Why must offsets length be num_items + 1?

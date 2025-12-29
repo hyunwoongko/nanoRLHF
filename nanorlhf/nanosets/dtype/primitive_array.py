@@ -86,12 +86,6 @@ class PrimitiveArray(Array):
             validity (Optional[Bitmap]): Optional validity bitmap (1 = valid, 0 = null).
             indices (Optional[Buffer]): Optional int32 buffer mapping logical indices -> base indices.
 
-        Raises:
-            AssertionError: If dtype is not supported by `FMT`.
-            ValueError:
-                - If the values buffer size does not match `length * item_size` for contiguous arrays.
-                - If indices buffer size is not a multiple of 4 bytes for non-contiguous arrays.
-
         Discussion:
             Q. How is the logical length determined?
                 If `indices` is present, the logical length is `len(indices) // 4`, because `indices` stores
@@ -323,11 +317,6 @@ class PrimitiveArray(Array):
         Returns:
             PrimitiveArray: A newly constructed contiguous PrimitiveArray (indices=None).
 
-        Raises:
-            ValueError: If the inferred/provided dtype is not supported by `FMT`.
-            TypeError: If values in `data` are incompatible with the chosen dtype.
-            OverflowError: If INT32 is requested and an int value is outside the int32 range.
-
         Discussion:
             Q. How is dtype chosen?
                 - If dtype is given, it is used as-is.
@@ -434,9 +423,6 @@ class PrimitiveArrayBuilder(ArrayBuilder):
 
         Args:
             dtype (DataType): Target dtype to build. Must exist in `FMT`.
-
-        Raises:
-            AssertionError: If dtype is not supported by `FMT`.
 
         Discussion:
             Q. How does the builder know how many bytes each element needs?

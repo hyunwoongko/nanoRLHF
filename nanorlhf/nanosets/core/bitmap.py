@@ -120,15 +120,12 @@ class Bitmap:
             # for zero-copy initialization
             self.buffer: Buffer = buffer
 
-    def check_bound(self, i: int) -> None:
+    def check_bound(self, i: int):
         """
         Check if the given index is within the valid range of the bitmap.
 
         Args:
             i (int): Index to check.
-
-        Raises:
-            IndexError: If the index is out of range.
         """
         if not (0 <= i < self.num_bits):
             raise IndexError(f"Bitmap index {i} out of range [0, {self.num_bits})")

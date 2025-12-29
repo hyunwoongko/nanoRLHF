@@ -50,7 +50,7 @@ def write_table(fp, table: Table):
         return {"kind": dt.name}
 
     def encode_tensor_array(arr: TensorArray, meta: dict) -> None:
-        base_tensors = arr._tensors
+        base_tensors = arr.tensors
         base_length = len(base_tensors)
         meta["kind"] = "tensor"
         meta["base_length"] = base_length
