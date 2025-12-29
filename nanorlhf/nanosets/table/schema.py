@@ -39,4 +39,5 @@ class Schema:
         return names.index(name)
 
     def __len__(self) -> int:
+        """Return the number of fields in the schema."""
         return len(self.fields)
