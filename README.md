@@ -20,6 +20,7 @@ Inspired by projects like [Karpathy’s nano series](https://github.com/karpathy
 Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
 
 ## Contents 
+Red circle means not started, yellow means in-progress, and green means completed.
 
 | Code | Docs | Packages                                                                          | Description                       | References                                                                                                         | Examples                                                                            |
 |------|------|-----------------------------------------------------------------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------|
@@ -29,10 +30,6 @@ Even without massive resources, I still believe that individuals can create mean
 | 🟢   | 🔴   | [`nanoray`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoray)   | distributed computing engine      | [ray](https://github.com/ray-project/ray)                                                                          | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanoray.py)  |
 | 🟢   | 🔴   | [`nanoverl`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoverl) | RLHF training framework           | [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF),                      | [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/scripts)              |
 | 🟢   | 🔴   | [`kernels`](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)   | various triton kernels            | [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident) | [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)  |
-
-- Red: Not started
-- Yellow: In-progress
-- Green: Completed
 
 ## Pre-requisites
 I worked on this project using a single server with 8 * H200 GPUs. 
