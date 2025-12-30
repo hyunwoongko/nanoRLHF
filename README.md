@@ -1,4 +1,4 @@
-# nanoRLHF: from-scratch journey into how LLMs and RLHF really work.
+# nanoRLHF
 
 <p align="center">
   <a href="https://github.com/karpathy/nanoGPT">
