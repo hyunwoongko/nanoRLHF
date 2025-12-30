@@ -222,9 +222,6 @@ return TensorArray(base_tensors, validity, indices)
 - reshape it to `(base_length, *shape)` via `.view(...)`
 - slice per-row as `base_block[i]`, then wrap them in `TensorArray`
 
-### Note on the phrase "when possible"
-It is risky to assume `torch.frombuffer` is always 100% Zero-copy. Internal behavior can vary depending on environment, buffer type, alignment, and constraints. However, the goal of this IPC design is "to map the file with `mmap` and make it possible to place tensor views on top of that buffer."
-
 ## 8. IPC: 3-line summary
 - `mmap` maps file data from the kernel page cache into the user virtual address space, reducing the "second Copy (kernel → user)" (Zero-copy oriented).
 - `read_table` creates `Buffer`s via `mmap` + `memoryview` slices, aiming to re-reference `values`/`offsets`/`validity`/`indices` on top of the file mapping with Zero-copy.

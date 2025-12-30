@@ -224,9 +224,6 @@ return TensorArray(base_tensors, validity, indices)
 - `.view(...)`로 `(base_length, *shape)`로 reshape해서
 - row 단위로 `base_block[i]`를 꺼내 리스트를 만든 뒤 `TensorArray`로 감쌉니다.
 
-### 주의: "가능한 경우"라는 표현의 의미
-`torch.frombuffer`가 항상 100% Zero-copy로 동작한다고 단정하면 위험합니다. 환경/버퍼 타입/정렬/제약 등에 따라 내부 동작이 달라질 수 있습니다. 다만 이 IPC 설계의 목표는 "`mmap`으로 파일을 매핑하고 그 버퍼 위에 텐서 뷰를 얹을 수 있게 만드는 것"입니다.
-
 ## 8. IPC: 3줄 요약
 - `mmap`은 파일을 유저 공간으로 복사해 들고 오는 대신, 커널 페이지 캐시의 파일 데이터를 유저 가상 주소 공간에 매핑해 "두 번째 Copy(커널→유저)"를 줄입니다(Zero-copy 지향).
 - `read_table`은 `mmap` + `memoryview` 슬라이스로 `Buffer`들을 만들어, `values`/`offsets`/`validity`/`indices`를 파일 위에서 Zero-copy로 재참조하는 것을 목표로 합니다.
