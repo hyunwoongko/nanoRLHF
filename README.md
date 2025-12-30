@@ -53,52 +53,52 @@ pip install -e .
 I recommend approaching this repository as a learn-by-building course: first install the library, then study the modules below in order from top to bottom, running each module’s example as you go. Once you’ve worked through all modules, finish by running the full RLHF training pipeline end-to-end.
 
 ### 1) `nanosets`: Arrow-like zero-copy dataset library
-- Implementation: [nanosets](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanosets)
+- Implementation: [nanosets](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets)
 - Textbook: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs)
-- Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanosets.py)
+- Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanosets.py)
 - References: [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)
 
 `nanosets` is a minimal Arrow-like columnar dataset library focusing on zero-copy and clarity.
 The goal is to understand how columnar data formats work without copying and how they are implemented from scratch.
 
 ### 2) `nanoray`: Distributed computing engine
-- Implementation: [nanoray](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoray)
+- Implementation: [nanoray](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray)
 - Textbook: In progress
-- Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanoray.py)
+- Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanoray.py)
 - References: [ray](https://github.com/ray-project/ray)
 
 `nanoray` is a minimal distributed computing engine inspired by Ray. 
 The goal is to understand how distributed execution works and how to build a simple distributed computing framework from scratch.
 
 ### 3) `nanotron`: 3D parallelism engine
-- Implementation: [nanotron](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanotron)
+- Implementation: [nanotron](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanotron)
 - Textbook: Not started
-- Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanotron.py)
+- Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanotron.py)
 - References: [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)
 
 `nanotron` implements 3D parallelism (data, tensor, pipeline) from scratch, focusing on clarity over efficiency. 
 The goal is to understand why and how large models are parallelized across many GPUs.
 
 ### 4) `kernels`: Set of Triton kernels
-- Implementation: [kernels](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)
+- Implementation: [kernels](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/kernels)
 - Textbook: Not started
-- Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)
+- Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/kernels.py)
 - References: [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident)
 
 `kernels` is a set of custom Triton kernels for LLM training and inference.
 The goal is to understand what optimizations matter in practice and how they are implemented at the kernel level.
 
 ### 5) `nanovllm`: High performance inference engine
-- Implementation: [nanovllm](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanovllm)
+- Implementation: [nanovllm](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanovllm)
 - Textbook: Not started
-- Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanovllm.py)
+- Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanovllm.py)
 - References: [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)
 
 `nanovllm` is a minimal high-performance inference engine for LLMs.
 The goal is to understand how to make inference fast in practice, including paged attention and efficient batching.
 
 ### 6) `nanoverl`: RLHF training framework
-- Implementation: [nanoverl](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoverl)
+- Implementation: [nanoverl](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoverl)
 - Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/scripts)
 - References: [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF)
