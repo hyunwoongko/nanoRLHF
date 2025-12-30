@@ -435,11 +435,11 @@ batch_idx = bisect_right(batch_starts, idx) - 1
 그 위치에서 1을 빼면 "idx 이하인 시작점 중 가장 오른쪽"을 가리키게 됩니다. 즉, 그게 idx가 속한 배치가 됩니다.
 
 예시: `batch_starts = [0, 3, 8]`
-- `idx = 0`  -> `bisect_right(...)=1` -> `batch_idx=0`
-- `idx = 2`  -> `bisect_right(...)=1` -> `batch_idx=0`
-- `idx = 3`  -> `bisect_right(...)=2` -> `batch_idx=1`
-- `idx = 7`  -> `bisect_right(...)=2` -> `batch_idx=1`
-- `idx = 8`  -> `bisect_right(...)=3` -> `batch_idx=2`
+- `idx = 0`  → `bisect_right(...)=1` → `batch_idx=0`
+- `idx = 2`  → `bisect_right(...)=1` → `batch_idx=0`
+- `idx = 3`  → `bisect_right(...)=2` → `batch_idx=1`
+- `idx = 7`  → `bisect_right(...)=2` → `batch_idx=1`
+- `idx = 8`  → `bisect_right(...)=3` → `batch_idx=2`
 
 그 다음 로컬 인덱스로 바꿉니다.
 

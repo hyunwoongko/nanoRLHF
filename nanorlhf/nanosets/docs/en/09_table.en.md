@@ -428,11 +428,11 @@ batch_idx = bisect_right(batch_starts, idx) - 1
 `bisect_right(batch_starts, idx)` returns the insertion position that keeps ordering if we inserted `idx`. Subtracting 1 gives the "rightmost start <= idx", i.e., the batch containing idx.
 
 Example: `batch_starts = [0, 3, 8]`
-- `idx = 0`  -> `bisect_right(...)=1` -> `batch_idx=0`
-- `idx = 2`  -> `bisect_right(...)=1` -> `batch_idx=0`
-- `idx = 3`  -> `bisect_right(...)=2` -> `batch_idx=1`
-- `idx = 7`  -> `bisect_right(...)=2` -> `batch_idx=1`
-- `idx = 8`  -> `bisect_right(...)=3` -> `batch_idx=2`
+- `idx = 0`  → `bisect_right(...)=1` → `batch_idx=0`
+- `idx = 2`  → `bisect_right(...)=1` → `batch_idx=0`
+- `idx = 3`  → `bisect_right(...)=2` → `batch_idx=1`
+- `idx = 7`  → `bisect_right(...)=2` → `batch_idx=1`
+- `idx = 8`  → `bisect_right(...)=3` → `batch_idx=2`
 
 Then convert to local index:
 
