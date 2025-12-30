@@ -194,7 +194,7 @@ validity = Bitmap(validity_length, validity_buffer)
 
 That is, the validity bitmap also references the file-mapped memory directly.
 
-## 7. `TensorArray` and `torch.frombuffer`: the key point when combined with `mmap`
+## 7. `TensorArray` and `torch.frombuffer`
 For IPC, `TensorArray` does not "store each row tensor separately." Instead, it stores the raw bytes from stacking tensors into one blob (`values`).
 
 When reading, the crucial function is `torch.frombuffer`.

@@ -195,7 +195,7 @@ validity = Bitmap(validity_length, validity_buffer)
 
 즉, validity bitmap도 파일 매핑 메모리를 그대로 참조합니다.
 
-## 7. `TensorArray`와 `torch.frombuffer`: `mmap`과 결합되는 핵심 포인트
+## 7. `TensorArray`와 `torch.frombuffer`
 `TensorArray`는 IPC에서 "row마다 텐서를 따로 저장"하지 않고, 텐서들을 하나로 `stack`한 raw bytes를 `values` blob 하나로 저장합니다.
 
 읽을 때 중요한 함수가 `torch.frombuffer`입니다.
