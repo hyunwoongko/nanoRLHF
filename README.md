@@ -20,7 +20,7 @@ Inspired by projects like [Karpathy’s nano series](https://github.com/karpathy
 Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
 
 ## Contents 
-Read the textbook in order from top to bottom. (nanosets to nanoverl)
+Read the textbook in order from top to bottom. (from nanosets to nanoverl)
 
 | Implementation                                                                  | Description                       | Textbook                                                                         | Examples                                                                       | References                                                                                                         |
 |---------------------------------------------------------------------------------|-----------------------------------|----------------------------------------------------------------------------------|--------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------|
