@@ -108,7 +108,7 @@ The goal is to understand how to make inference fast in practice, including page
 `nanoverl` is a minimal RLHF training framework focusing on clarity.
 The goal is to understand how RLHF training pipelines are structured, including SFT, RL algorithms and asynchronous RL.
 
-### 7) RLHF training pipeline
+### 7) Let's put it all together: Full RLHF Training Pipeline
 This section is the final step after you have studied all the modules above.
 
 #### Prepare Supervised Fine-tuning Dataset
