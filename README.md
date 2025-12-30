@@ -22,17 +22,17 @@ By the end, you should be able to:
 - Understand what makes inference fast in practice.
 - Tie everything together into a RLHF training workflow.
 
-If you learn these pieces in a clean, minimal codebase, you get practical, on-the-job benefits:
-- **Easier debugging in real-world frameworks**: when something goes wrong in libraries like `verl` or `NeMo-RL` (wrong outputs, hangs, weird throughput, silent performance regressions), you can reason from first principles about where the issue likely lives and trace it quickly without treating the framework as a black box.
-- **Better at extending and customizing systems-style code**: because you become comfortable reading and writing minimal implementations of the same building blocks, adding features (or making targeted custom changes) in larger codebases becomes much more approachable and less risky.
-- **Stronger bottleneck analysis and performance tuning**: when efficiency drops, you can map symptoms to the correct layer (data format & copying, scheduling/execution, parallelism/collectives, kernels/attention, inference caching) and focus your optimization effort where it actually matters.
+Practical benefits:
+- Debug issues in real-world frameworks with less guesswork.
+- Make targeted custom changes with more confidence.
+- Analyze performance drops and locate the real bottleneck faster.
 
 ## Pre-requisites
 I worked on this project using a single server with 8 * H200 GPUs.  
 It should also run well on A100 80GB GPUs, but to fully experiment with all features including 3D parallelism, a server with at least 8 GPUs is required.
 
 ## Installation
-In this project, internal APIs from libraries such as Hugging Face Transformers are used in a hackable way, so all dependency versions except PyTorch are strictly pinned.  
+In this project, internal APIs from libraries such as Hugging Face Transformers are used in a hacky way, so all dependency versions except PyTorch are strictly pinned.  
 It is strongly recommended to run the code in an isolated environment such as a Conda virtual environment.
 
 ```bash
@@ -49,98 +49,69 @@ cd nanoRLHF
 pip install -e .
 ```
 
-## Learning path
-I recommend finishing the course in this order:
+## Courses
+Recommended order:
 
-1) Install the library. 
-2) Study each module in the order below.
-3) After finishing a module, run its example to validate your mental model.
-4) Finally, run the full RLHF training pipeline following the README steps. 
+1) Install the library.  
+2) Study each module below (top to bottom).  
+3) Run the example after studying each module.  
+4) Finish by running the RLHF training pipeline.
 
-The key idea is simple: learn the building blocks first, then run the end-to-end pipeline once you understand what each piece is responsible for.
-
-### 1) `nanosets`
-`nanosets` is a small, Arrow-like zero-copy dataset library. If you have used Apache Arrow or Hugging Face Datasets before, the goal here is to show what those fast dataset abstractions really mean under the hood—using minimal code that you can actually read end-to-end.
-
-At the core, you should walk away with a concrete mental model of columnar data: values live in contiguous buffers, nulls are tracked separately (validity), variable-length data relies on offsets, and a schema defines how everything is interpreted. The key design idea is zero-copy: slicing, taking, and selecting often create views instead of materializing new Python objects, so dataset operations can stay cheap even at scale.
-
-This matters because the data layer quietly determines how painful everything else becomes. If your pipeline is copy-heavy, the GPU waits. If memory layout is unclear, correctness bugs and performance regressions are hard to track down. Once you understand how a columnar, zero-copy dataset is represented, it becomes much easier to reason about where time and memory go—and why batch-oriented structures like `RecordBatch` and `Table` are such a natural fit for modern training workflows.
-
-Resources:
+### 1) `nanosets`: Arrow-like zero-copy dataset library
 - Implementation: [nanosets](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanosets)
 - Textbook: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs)
 - Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanosets.py)
 - References: [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)
 
-### 2) `nanoray`
-`nanoray` is a tiny distributed computing engine inspired by Ray. The goal is not to replace Ray, but to make the “distributed execution layer” feel understandable: tasks, workers, scheduling, and what it means to move data between processes or machines.
+`nanosets` is a small, Arrow-like zero-copy dataset library. 
+It focuses on what columnar storage means in practice (buffers, validity, offsets, schema) and how zero-copy operations (slice/take/select) can be implemented as views.
 
-When you study this module, you should focus on the mental model of execution. What is a task? Who executes it? How are workers created and reused? How does scheduling decide where work goes? What are the costs and failure modes when you pass data around?
-
-This matters because RLHF pipelines are naturally concurrent: you often need multiple rollouts happening while rewards are computed and evaluations run. Many real-world issues show up as hangs, strange slowdowns, or throughput collapses that look mysterious until you understand the distributed layer. Once you can reason about scheduling and data movement, debugging these problems becomes much more grounded.
-
-Resources:
+### 2) `nanoray`: Tiny distributed computing engine
 - Implementation: [nanoray](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoray)
 - Textbook: In progress
 - Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanoray.py)
 - References: [ray](https://github.com/ray-project/ray)
 
-### 3) `nanotron`
-`nanotron` is a minimal model and data parallelism engine inspired by Megatron-style training. This module is where scaling becomes an architectural problem: you are not just “using more GPUs,” you are choosing parallelism strategies and accepting communication costs.
+`nanoray` is a tiny distributed computing engine inspired by Ray. 
+It’s meant to make the distributed layer readable: object refs and stores, tasks, workers, scheduling, and the costs of moving data around.
 
-The main thing to understand here is what each parallelism type is responsible for (data parallel, tensor parallel, pipeline parallel, and why 3D parallelism exists). You should also build intuition for where communication happens (all-reduce / all-gather patterns) and why those operations dominate scalability once the model is large.
-
-This matters because most training failures and inefficiencies at scale come from mismatched parallelism choices, unstable collective patterns, or memory constraints that force awkward tradeoffs. Once you understand the mechanism, you are better equipped to tune throughput, memory usage, and stability without guessing.
-
-Resources:
+### 3) `nanotron`: Minimal 3D parallelism engine
 - Implementation: [nanotron](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanotron)
 - Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanotron.py)
 - References: [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)
 
-### 4) `kernels`
-`kernels` is a collection of Triton kernels inspired by projects like FlashAttention. The goal is to show why certain pieces of GPU code are worth special handling: many training workloads are bottlenecked not by high-level Python, but by a handful of extremely hot operations.
+`nanotron` is a minimal 3D parallelism engine inspired by Megatron-style training. It covers the core ideas behind data/tensor/pipeline parallelism and where communication costs appear in practice.
 
-When studying this module, focus on the difference between compute and memory bottlenecks, and why attention-related operators tend to dominate runtime. You do not need to become a GPU kernel expert here; the goal is to understand what these kernels are optimizing for (memory traffic, launch overhead, fusion, and numerical stability tradeoffs).
-
-This matters because systems performance often comes down to a few critical kernels. Even small improvements in a hot path can translate into large end-to-end speedups. More importantly, you gain intuition for what to measure and what to ignore when performance feels off.
-
-Resources:
+### 4) `kernels`: A set of Triton kernels
 - Implementation: [kernels](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/kernels)
 - Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/kernels.py)
 - References: [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident)
 
-### 5) `nanovllm`
-`nanovllm` is a small, high-performance inference engine inspired by vLLM. The central idea is that inference is not just “forward pass in eval mode.” It is a scheduling and memory-management problem: batching, request multiplexing, and KV-cache behavior often decide throughput.
+`kernels` contains Triton kernels inspired by FlashAttention. The goal is to build intuition for why certain GPU ops dominate runtime and what these kernels optimize (memory traffic, fusion, launch overhead).
 
-While reading this module, focus on what makes inference fast in practice. How does batching work when requests have different lengths? What is the role of caching, and why does it change performance characteristics? Why does throughput-oriented inference look structurally different from training loops?
-
-This matters because RLHF is generation-heavy. Rollouts and evaluation can become the dominant cost if inference throughput is poor. Understanding inference internals helps you design rollout and evaluation loops that are both correct and efficient.
-
-Resources:
+### 5) `nanovllm`: High performance inference engine
 - Implementation: [nanovllm](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanovllm)
 - Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanorlhf/tree/main/examples/nanovllm.py)
 - References: [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)
 
-### 6) `nanoverl`
-`nanoverl` is a minimal RLHF training framework inspired by verl and similar PPO-based systems. This module is where everything comes together: generation, reward computation / verification, advantage estimation, policy/value updates, and evaluation.
+`nanovllm` is a high performance inference engine inspired by vLLM. It focuses on throughput-oriented inference: batching, scheduling, and KV-cache-style ideas that matter for generation-heavy workflows.
 
-When studying this module, focus on the pipeline-level flow rather than individual formulas. What gets generated, how it gets scored, how advantages are computed, how updates are applied, and how evaluation is done. The goal is to see RLHF as a connected system, not a pile of scripts.
-
-This matters because this is the part you will likely want to modify. Once you understand the flow, you can experiment with reward shaping, sampling strategies, dataset variants, and evaluation settings with much more confidence.
-
-Resources:
+### 6) `nanoverl`: minimal RLHF framework
 - Implementation: [nanoverl](https://github.com/hyunwoongko/nanorlhf/tree/main/nanorlhf/nanoverl)
 - Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/scripts)
 - References: [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF)
 
-## Let’s dive into RLHF training
-This section is the final step after you have studied the modules above. You can still run it immediately, but it becomes much more meaningful once the internals are familiar.
+`nanoverl` is a minimal RLHF framework inspired by PPO-style systems like verl. 
+It ties the pieces together: generation, scoring/verification, advantage estimation, updates, and evaluation.
 
-#### 1) Prepare Supervised Fine-tuning Dataset
+### 7) RLHF training pipeline
+This section is the final step after you have studied all the modules above.
+
+#### Prepare Supervised Fine-tuning Dataset
 In the examples included in this project, supervised fine-tuning is performed using [NuminaMath-CoT-Small-Hard-200k](https://huggingface.co/datasets/NotASI/NuminaMath-CoT-Small-Hard-200k).  
 From the original dataset, 180k samples are used as training data, and 1k samples are used as validation data.  
 Running the following command will tokenize the dataset and save it as zero-copy `.nano` format (similar with `.arrow` format).
@@ -149,7 +120,7 @@ Running the following command will tokenize the dataset and save it as zero-copy
 bash ./scripts/prepare_sft_data.sh
 ```
 
-#### 2) Supervised Fine-tuning
+#### Supervised Fine-tuning
 Supervised fine-tuning is performed using [Qwen3-0.6B-base](https://huggingface.co/Qwen/Qwen3-0.6B-base) model with 3D parallelism by default config.  
 If you want to modify hyperparameters, please edit `configs/train_sft.yaml` file.  
 Running the following command will start supervised fine-tuning. Moreover, you can monitor the training process if you have a wandb account.
@@ -160,7 +131,7 @@ Running the following command will start supervised fine-tuning. Moreover, you c
 bash ./scripts/train_sft.sh
 ```
 
-#### 3) Merge Parallelized Checkpoints
+#### Merge Parallelized Checkpoints
 After supervised fine-tuning is completed, the parallelized checkpoints are saved in the directory you specified (default is `./checkpoints`).  
 To use the model for inference or further training, you need to merge the parallelized checkpoints into a single model checkpoint.  
 The following script will merge the checkpoints and save them in `$YOUR_CHECKPOINT_PATH/merged` directory.
@@ -169,7 +140,7 @@ The following script will merge the checkpoints and save them in `$YOUR_CHECKPOI
 bash ./scripts/merge_sft_model.sh $STEP
 ```
 
-#### 4) Evaluate Supervised Fine-tuned Model
+#### Evaluate Supervised Fine-tuned Model
 After merging the supervised fine-tuned model, you can evaluate it using the following script.  
 The evaluation is performed using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset (500 samples from MATH dataset), and [Math-Verify](https://github.com/huggingface/Math-Verify) is used to parse and verify the model's generated output.
 
@@ -185,7 +156,7 @@ The evaluation is performed using [MATH-500](https://huggingface.co/datasets/Hug
 bash ./scripts/eval_sft_model.sh $STEP
 ```
 
-#### 5) Prepare Reinforcement Learning Dataset
+#### Prepare Reinforcement Learning Dataset
 Reinforcement learning is performed using [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) dataset.  
 I removed samples that have one of 'yes', 'no', 'true' or 'false' as the answer, so about 84k samples are used for training.  
 And [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset is used for validation.  
@@ -195,7 +166,7 @@ Running the following command will tokenize the dataset and save it as zero-copy
 bash ./scripts/prepare_rl_data.sh
 ```
 
-#### 6) Reinforcement Learning
+#### Reinforcement Learning
 Reinforcement learning is performed using PPO algorithm with the SFT model at 2000 steps as the initial policy.  
 To improve training efficiency, [One-step off-policy asynchronous RL](https://github.com/volcengine/verl/tree/main/recipe/one_step_off_policy) is applied.  
 If you want to modify hyperparameters, please edit `configs/train_rl.yaml` file.  
@@ -209,7 +180,7 @@ Running the following command will start reinforcement learning. Moreover, you c
 bash ./scripts/train_rl.sh
 ```
 
-#### 7) Merge Parallelized Checkpoints
+#### Merge Parallelized Checkpoints
 After reinforcement learning is completed, the parallelized checkpoints are saved in the directory you specified (default is `./checkpoints`).  
 To use the model for inference or further training, you need to merge the parallelized checkpoints into a single model checkpoint.  
 The following script will merge the checkpoints and save them in `$YOUR_CHECKPOINT_PATH/merged` directory.
@@ -218,7 +189,7 @@ The following script will merge the checkpoints and save them in `$YOUR_CHECKPOI
 bash ./scripts/merge_rl_model.sh $STEP
 ```
 
-#### 8) Evaluate Reinforcement Learning Model
+#### Evaluate Reinforcement Learning Model
 After merging the reinforcement learning model, you can evaluate it using the following script.  
 The evaluation is performed same as the supervised fine-tuned model using [MATH-500](https://huggingface.co/datasets/HuggingFaceH4/MATH-500) dataset.  
 Qwen3-0.6B (non-thinking) model is also evaluated as a reference.
