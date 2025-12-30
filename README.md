@@ -96,8 +96,9 @@ The goal is to understand what optimizations matter in practice and how they are
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanovllm.py)
 - References: [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)
 
-`nanovllm` is a minimal high-performance inference engine for LLMs.
-The goal is to understand how to make inference fast in practice, including paged attention and efficient batching.
+`nanovllm` is a minimal high-performance inference engine for LLMs, built to understand what makes inference fast in practice, including paged attention and efficient batching. 
+
+Thanks to the excellent [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm) project, this module began as a study-driven reimplementation and was then adapted to fit our stack and parallelism design.
 
 ### 6) `nanoverl`: RLHF Training Framework
 - Implementation: [nanoverl](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoverl)
