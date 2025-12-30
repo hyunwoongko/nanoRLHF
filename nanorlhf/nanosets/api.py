@@ -5,7 +5,6 @@ from typing import List, Optional, Union, Callable, Dict, Any, Sequence
 from nanorlhf.nanosets.io.ipc import read_table, write_table
 from nanorlhf.nanosets.io.json_io import from_json, from_jsonl, to_json, to_jsonl
 from nanorlhf.nanosets.table.record_batch import RecordBatch
-from nanorlhf.nanosets.table.schema import Schema
 from nanorlhf.nanosets.table.table import Table
 from nanorlhf.nanosets.utils import DEFAULT_BATCH_SIZE, ext
 
