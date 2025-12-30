@@ -56,7 +56,7 @@ I recommend approaching this repository as a learn-by-building course: first ins
 
 ### 1) `nanosets`: Arrow-like Zero-copy Dataset Library
 - Implementation: [nanosets](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets)
-- Textbook: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs)
+- Textbook: [English](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs/en),  [Korean](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs/ko)
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanosets.py)
 - References: [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)
 
