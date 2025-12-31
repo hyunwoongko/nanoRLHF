@@ -14,7 +14,7 @@ The key to understanding `StructArray` is that the data is stored not in a **row
   - It is natural for reading and writing by row, but memory access can be scattered when repeatedly processing only a specific field.
 
 - **Columnar**
-  - Values are collected per field and stored by “column”.
+  - Values are collected per field and stored by "column".
   - Example: `name = [Kevin, Ada, ...]`, `age = [30, 31, ...]`
   - Values of the same field are laid out contiguously, which is advantageous for per-field operations.
 
@@ -37,7 +37,7 @@ The key to understanding `StructArray` is that the data is stored not in a **row
     and applying the same `take` to `children` preserves row alignment.
 
 - **Good for sharing across languages/runtimes**
-  - A “field-wise arrays + metadata” shape fits well with Arrow-family formats,
+  - A "field-wise arrays + metadata" shape fits well with Arrow-family formats,
     making it easier to share/exchange the same structure across different systems.
 
 ## 2. What is StructArray?

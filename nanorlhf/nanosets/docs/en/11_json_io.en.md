@@ -7,7 +7,7 @@ Here, rows-only means that the JSON root is a list of rows.
 - Each row is a `dict` (e.g., `{"name": "Kevin", "age": 30}`), or
 - If it is a null row, it is `None` (in JSON, `null`).
 
-Columnar schema/buffer information is not stored together in JSON. Instead, it focuses on “materializing rows into Python objects and dumping them to JSON.”
+Columnar schema/buffer information is not stored together in JSON. Instead, it focuses on "materializing rows into Python objects and dumping them to JSON."
 In other words, when exporting to JSON, you give up most of the columnar benefits (contiguous buffers, type stability, zero-copy) and gain readability and general portability.
 
 ## 2. Type definitions: `Row`, `TableLike`
@@ -28,9 +28,9 @@ That is, the functions are unified around reading/writing at the row level, taki
 `materialize(obj)` calls `list(iter_rows(obj))` internally, bringing all rows into memory at once.
 
 ### Why is this function needed?
-Some output formats/libraries require an “entire list” shape. A representative case is `to_json`.
+Some output formats/libraries require an "entire list" shape. A representative case is `to_json`.
 
-- Since `to_json` produces a JSON root that is a “list,” the simplest implementation is to first build the rows list and then call `json.dump(rows, ...)`.
+- Since `to_json` produces a JSON root that is a "list," the simplest implementation is to first build the rows list and then call `json.dump(rows, ...)`.
 
 In contrast, `to_jsonl` can write line by line, so it does not need to materialize everything.
 
@@ -53,10 +53,10 @@ In contrast, `to_jsonl` can write line by line, so it does not need to materiali
 Key points:
 
 - Since the input JSON is already a list of rows, reconstructing the `Table` also uses a row-based constructor (`from_list`).
-- Because a `Table` is internally composed of `RecordBatch`es, `batch_size` determines “how many rows to group per batch.”
+- Because a `Table` is internally composed of `RecordBatch`es, `batch_size` determines "how many rows to group per batch."
 
 ### Why does `batch_size` exist?
-If you build one very large chunk, it can be heavy in terms of memory/cache, while splitting too small can add overhead. So an option for “how many rows per chunk” appears.
+If you build one very large chunk, it can be heavy in terms of memory/cache, while splitting too small can add overhead. So an option for "how many rows per chunk" appears.
 
 ## 8. `from_jsonl(path, batch_size=DEFAULT_BATCH_SIZE)`: read JSONL
 `from_jsonl` parses each line with `json.loads(line)`, collects them into `rows: List[Row]`, then calls `Table.from_list(rows, batch_size=batch_size)`.
@@ -64,7 +64,7 @@ If you build one very large chunk, it can be heavy in terms of memory/cache, whi
 ## 9. When should you use this IO, and when should you use IPC?
 ### Good cases for this JSON/JSONL IO
 - Debugging: when you want to inspect `Table` contents directly as a human
-- General interchange: when you want to exchange data with other languages/environments as “row dicts” first
+- General interchange: when you want to exchange data with other languages/environments as "row dicts" first
 - Simple storage: when convenience matters more than performance/size
 
 ### Good cases for IPC

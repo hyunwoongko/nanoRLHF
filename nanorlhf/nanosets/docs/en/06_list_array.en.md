@@ -562,7 +562,7 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
   - If `sample` is a tensor, it validates that all elements are tensor or `None`, then returns `TensorArrayBuilder()`.
   - Otherwise, it does not support the type and raises an error.
 
-### Why does it strictly forbid “mixed types”?
+### Why does it strictly forbid mixed types?
 
 Since `ListArray` must internally represent child as a single `Array`, the child dtype (or structure) must be determined consistently. For example, if one row has strings and another row has numbers, it becomes ambiguous what dtype child should have, and subsequent operations also become unstable. Therefore, `infer_child_builder` decides a type based on a sample and then scans all rows, immediately raising an exception if the type rules are violated.
 

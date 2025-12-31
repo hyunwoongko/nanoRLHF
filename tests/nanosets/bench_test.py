@@ -322,9 +322,9 @@ if __name__ == "__main__":
 #      That deferred conversion cost makes partial materialization look slower.
 #
 # 3) Takeaways
-#    - NANO-IPC follows “defer parsing, pay as you go.” It shines when you scan a few
+#    - NANO-IPC follows "defer parsing, pay as you go." It shines when you scan a few
 #      columns repeatedly, do streaming/analytics, or want zero-copy interop.
-#    - JSON/JSONL follows “parse up front.” After paying the upfront cost, per-field
+#    - JSON/JSONL follows "parse up front." After paying the upfront cost, per-field
 #      access is very cheap.
 #    - The gap depends on column types. Numeric columns tend to be cheaper to
 #      materialize; strings and nested lists/structs cost more due to decoding and assembly.

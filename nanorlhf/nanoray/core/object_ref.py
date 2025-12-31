@@ -39,7 +39,7 @@ class ObjectRef(Generic[T]):
             inconsistencies. Immutability preserves safety and debuggability.
 
         Q. Is this like a `Future`?
-            Similar idea (“value not yet available”), but `ObjectRef` also encodes
+            Similar idea (value not yet available), but `ObjectRef` also encodes
             *location/ownership*. Futures model readiness; `ObjectRef` models both
             readiness and placement.
 

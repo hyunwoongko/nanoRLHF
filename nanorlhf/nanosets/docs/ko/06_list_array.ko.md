@@ -562,7 +562,7 @@ def infer_child_builder(rows: List[Optional[Iterable[Any]]]) -> ArrayBuilder:
   - `sample`이 tensor이면 전체 원소가 tensor 또는 `None`인지 검증한 뒤 `TensorArrayBuilder()`를 반환합니다.
   - 그 외 타입은 지원하지 않으므로 오류를 냅니다.
 
-### 왜 “혼합 타입”을 강하게 금지하나요?
+### 왜 혼합 타입을 강하게 금지하나요?
 
 `ListArray`는 내부적으로 child가 하나의 `Array`로 표현되어야 하므로, child의 dtype(또는 구조)이 단일하게 정해져야 합니다. 예를 들어 한 row에서는 문자열, 다른 row에서는 숫자가 섞이면 child를 어떤 dtype으로 만들어야 할지 모호해지고, 이후 연산도 불안정해집니다. 그래서 `infer_child_builder`는 샘플로 타입을 정한 뒤, 전체 rows를 순회하면서 해당 타입 규칙을 만족하지 않으면 즉시 예외를 발생시킵니다.
 
