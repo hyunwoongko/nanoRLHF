@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
-from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
+from nanorlhf.nanoray import Bundle, PlacementStrategy, NANORAY_BASE_PORT
 from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 from nanorlhf.nanoverl.dataset.sft_dataset import SFTDataset
 from nanorlhf.nanoverl.trainer.base_trainer import BaseTrainer
@@ -25,7 +25,8 @@ class SFTTrainer(BaseTrainer):
             * self.config.model.tensor_parallel_size
             * self.config.model.pipeline_parallel_size
         )
-        self.node_ids = self.init_ray(self.config)
+        self.init_ray(self.config)
+        self.pg = self.create_placement_groups()
 
         sft_workers = self.spawn_workers(self.config)
         self.sft_worker_group = SFTWorkerGroup(self.config, sft_workers)
@@ -54,19 +55,23 @@ class SFTTrainer(BaseTrainer):
         nodes = {}
         if self.global_world_size > 1:
             for rank in range(self.global_world_size):
-                nodes[f"node-{rank}"] = nanoray.NodeConfig(
+                nodes[f"global_rank={rank}"] = nanoray.NodeConfig(
+                    cpus=1.0,
+                    gpus=1.0,
                     rpc=True,
                     host=config.model.host,
                     port=NANORAY_BASE_PORT + rank,
                 )
         else:
-            nodes["node-0"] = nanoray.NodeConfig(
+            nodes["global_rank=0"] = nanoray.NodeConfig(
+                cpus=1.0,
+                gpus=1.0,
                 rpc=False,
                 host=config.model.host,
                 port=NANORAY_BASE_PORT,
             )
 
-        session = nanoray.init(nodes, default_node_id="node-0")
+        session = nanoray.init(nodes, default_node_id="global_rank=0")
         node_ids = list(session.workers.keys())
         if len(node_ids) < self.global_world_size:
             raise RuntimeError(
@@ -74,13 +79,16 @@ class SFTTrainer(BaseTrainer):
                 "please provide at least one NodeConfig per global rank."
             )
 
-        return node_ids
+    def create_placement_groups(self):
+        return nanoray.create_placement_group(
+            bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.global_world_size)],
+            strategy=PlacementStrategy.SPREAD,
+        )
 
     def spawn_workers(self, config):
         object_refs = []
         for global_rank in range(self.global_world_size):
-            node_id = self.node_ids[global_rank % len(self.node_ids)]
-            object_ref = SFTWorker.options(pinned_node_id=node_id).remote(
+            object_ref = SFTWorker.options(placement_group=self.pg, bundle_index=global_rank).remote(
                 config, rank=global_rank, total_steps=self.total_steps, blocking=False
             )
             object_refs.append(object_ref)

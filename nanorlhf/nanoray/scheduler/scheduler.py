@@ -2,10 +2,23 @@ import heapq
 from typing import Dict, List, Tuple, Optional, Protocol
 
 from nanorlhf.nanoray.core.object_ref import ObjectRef
-from nanorlhf.nanoray.core.placement import PlacementGroup, PlacementStrategy
+from nanorlhf.nanoray.core.placement import PlacementGroup, PlacementStrategy, Bundle
 from nanorlhf.nanoray.core.task import Task
 from nanorlhf.nanoray.scheduler.node_state import NodeState
 from nanorlhf.nanoray.scheduler.policies import SchedulingPolicy
+
+
+def sum_custom_resources(bundles: List[Bundle]) -> Dict[str, float]:
+    out: Dict[str, float] = {}
+    for b in bundles:
+        if b.resources:
+            for k, v in b.resources.items():
+                out[k] = float(out.get(k, 0.0)) + float(v)
+    return out
+
+
+def is_dummy_bundle(b) -> bool:
+    return b is None or (float(b.cpus) == 0.0 and float(b.gpus) == 0.0 and not (b.resources or {}))
 
 
 class WorkerLike(Protocol):
@@ -60,11 +73,7 @@ class Scheduler:
             so the scheduler doesn't need to know *how* execution happens.
     """
 
-    def __init__(
-        self,
-        policy: SchedulingPolicy,
-        nodes: Dict[str, tuple[WorkerLike, Dict[str, float]]]
-    ):
+    def __init__(self, policy: SchedulingPolicy, nodes: Dict[str, tuple[WorkerLike, Dict[str, float]]]):
         self.policy = policy
         self.nodes = nodes
         self.workers: Dict[str, WorkerLike] = {}
@@ -165,76 +174,107 @@ class Scheduler:
         return produced
 
     def eligible_nodes(self, task: Task) -> List[str]:
-        """
-        Find nodes that have enough available capacity for the given task.
-
-        Args:
-            task (Task): The task to check.
-
-        Returns:
-            List[str]: Node IDs that can run the task.
-        """
-        if getattr(task, "pinned_node_id", None):
-            nid = task.pinned_node_id
-            if nid in self.state and self.state[nid].can_run(task):
-                return [nid]
-            return []
-
-        # 1) Filter by capacity (baseline)
-        capacity_ok = [
-            nid for nid, state in self.state.items() if state.can_run(task)
-        ]
-
-        # 2) If placement grouped, refine the candidate set
         pg_id = getattr(task, "placement_group_id", None)
-        if not pg_id:
-            return capacity_ok
+        bundle_index = getattr(task, "bundle_index", 0) or 0
 
-        pg = self.placement_groups.get(pg_id, None)
-        if pg is None:
-            raise ValueError(
-                "`PlacementGroup` must be registered with the scheduler before use. "
-                "Use `nanorlhf.nanoray.create_placement_group(...)` rather than `PlacementGroup(...)` directly. "
-                "The `create_placement_group(...)` function will register it automatically."
-            )
+        def task_fits_in_bundle(b) -> None:
+            if task.num_cpus > float(b.cpus):
+                raise ValueError(f"Task num_cpus exceeds bundle cpus: task={task.num_cpus}, bundle={b.cpus}")
+            if task.num_gpus > float(b.gpus):
+                raise ValueError(f"Task num_gpus exceeds bundle gpus: task={task.num_gpus}, bundle={b.gpus}")
+            req = task.resources or {}
+            cap = b.resources or {}
+            for k, v in req.items():
+                if float(v) > float(cap.get(k, 0.0)):
+                    raise ValueError(f"Task resource exceeds bundle: key={k}, task={v}, bundle={cap.get(k, 0.0)}")
+
+        def get_pg_and_bundle():
+            if not pg_id:
+                return None, None
+            pg = self.placement_groups.get(pg_id, None)
+            if pg is None:
+                raise ValueError(
+                    "PlacementGroup must be registered before use. "
+                    "Use nanorlhf.nanoray.create_placement_group(...) to create it."
+                )
+            if bundle_index < 0 or bundle_index >= len(pg.bundles):
+                raise ValueError(
+                    f"bundle_index out of range: bundle_index={bundle_index}, num_bundles={len(pg.bundles)}"
+                )
+            b = pg.bundle(bundle_index)
+            if not is_dummy_bundle(b):
+                task_fits_in_bundle(b)
+            return pg, b
+
+        pg, bundle = get_pg_and_bundle()
+        dummy = is_dummy_bundle(bundle)
+
+        pinned = getattr(task, "pinned_node_id", None)
+        if pinned:
+            if pinned not in self.state:
+                return []
+
+            st = self.state[pinned]
+
+            if not pg_id or dummy:
+                return [pinned] if st.can_run(task) else []
+
+            assign = self.placement_group_assignment.setdefault(pg_id, {})
+            if pg.strategy == PlacementStrategy.PACK:
+                locked = assign.get("__pack__")
+                if locked and locked != pinned:
+                    return []
+                if locked == pinned:
+                    return [pinned]
+                can = st.can_reserve_bundle(
+                    Bundle(
+                        cpus=sum(float(b.cpus) for b in pg.bundles),
+                        gpus=sum(float(b.gpus) for b in pg.bundles),
+                        resources=sum_custom_resources(pg.bundles),
+                    )
+                )
+                return [pinned] if can else []
+
+            if pg.strategy == PlacementStrategy.SPREAD:
+                chosen = assign.get(bundle_index)
+                if chosen and chosen != pinned:
+                    return []
+                if chosen == pinned:
+                    return [pinned]
+                return [pinned] if st.can_reserve_bundle(bundle) else []
+
+            return [pinned]
+
+        if not pg_id or dummy:
+            return [nid for nid, st in self.state.items() if st.can_run(task)]
 
         assign = self.placement_group_assignment.setdefault(pg_id, {})
 
         if pg.strategy == PlacementStrategy.PACK:
-            # If group already packed to a node, stick to it.
             locked = assign.get("__pack__")
             if locked:
-                # The task will only run on the locked node if it has capacity
-                return [nid for nid in capacity_ok if nid == locked]
-            else:
-                # First placement will lock; for new keep capacity_ok
-                return capacity_ok
+                return [locked] if (locked in self.state) else []
 
-        elif pg.strategy == PlacementStrategy.SPREAD:
-            idx = getattr(task, "bundle_index", 0) or 0
-            chosen = assign.get(idx)
+            total_bundle = Bundle(
+                cpus=sum(float(b.cpus) for b in pg.bundles),
+                gpus=sum(float(b.gpus) for b in pg.bundles),
+                resources=sum_custom_resources(pg.bundles),
+            )
+            return [nid for nid, st in self.state.items() if st.can_reserve_bundle(total_bundle)]
+
+        if pg.strategy == PlacementStrategy.SPREAD:
+            chosen = assign.get(bundle_index)
             if chosen:
-                # Already assigned -> stick to it if capacity allows.
-                return [nid for nid in capacity_ok if nid == chosen]
-            else:
-                # Not yet assigned -> prefer unused nodes first.
-                used = set(assign.values())
-                prefer = [nid for nid in capacity_ok if nid not in used]
-                return prefer or capacity_ok
+                return [chosen] if (chosen in self.state) else []
 
-        # Unknown placement strategy -> ignore
-        return capacity_ok
+            capacity_ok = [nid for nid, st in self.state.items() if st.can_reserve_bundle(bundle)]
+            used = set(assign.values())
+            prefer = [nid for nid in capacity_ok if nid not in used]
+            return prefer or capacity_ok
+
+        return list(self.state.keys())
 
     def try_place(self, task: Task) -> Optional[ObjectRef]:
-        """
-        Attempt to place the task on an eligible node using the scheduling policy.
-
-        Args:
-            task (Task): The task to place.
-
-        Returns:
-            Optional[ObjectRef]: Result reference if placed, else `None`.
-        """
         cands = self.eligible_nodes(task)
         if not cands:
             return None
@@ -243,22 +283,55 @@ class Scheduler:
         if nid is None:
             return None
 
+        pg_id = getattr(task, "placement_group_id", None)
+        bundle_index = getattr(task, "bundle_index", 0) or 0
+
+        pg = None
+        bundle = None
+        if pg_id:
+            pg = self.placement_groups.get(pg_id, None)
+            if pg is None:
+                raise ValueError(
+                    "PlacementGroup must be registered before use. "
+                    "Use nanorlhf.nanoray.create_placement_group(...) to create it."
+                )
+            if bundle_index < 0 or bundle_index >= len(pg.bundles):
+                raise ValueError(
+                    f"bundle_index out of range: bundle_index={bundle_index}, num_bundles={len(pg.bundles)}"
+                )
+            bundle = pg.bundle(bundle_index)
+
+        use_reservation = bool(pg_id and pg is not None and not is_dummy_bundle(bundle))
+
         st = self.state[nid]
+
+        if use_reservation:
+            assign = self.placement_group_assignment.setdefault(pg_id, {})
+
+            if pg.strategy == PlacementStrategy.PACK:
+                locked = assign.get("__pack__")
+                if locked is None:
+                    for b in pg.bundles:
+                        st.reserve_bundle(b)
+                    assign["__pack__"] = nid
+                elif locked != nid:
+                    return None
+
+            elif pg.strategy == PlacementStrategy.SPREAD:
+                chosen = assign.get(bundle_index)
+                if chosen is None:
+                    st.reserve_bundle(bundle)
+                    assign[bundle_index] = nid
+                elif chosen != nid:
+                    return None
+
+            worker = self.workers[nid]
+            return worker.execute_task(task)
+
         st.allocate(task)
         try:
             worker = self.workers[nid]
-            ref = worker.execute_task(task)
-            # If PG, record the final assignment now that placement successful
-            pg_id = getattr(task, "placement_group_id", None)
-            if pg_id and pg_id in self.placement_groups:
-                pg = self.placement_groups[pg_id]
-                assign = self.placement_group_assignment.setdefault(pg_id, {})
-                if pg.strategy == PlacementStrategy.PACK:
-                    assign.setdefault("__pack__", nid)
-                elif pg.strategy == PlacementStrategy.SPREAD:
-                    idx = getattr(task, "bundle_index", 0) or 0
-                    assign.setdefault(idx, nid)
-            return ref
+            return worker.execute_task(task)
         finally:
             st.release(task)
 
@@ -273,11 +346,27 @@ class Scheduler:
         self.placement_group_assignment.setdefault(pg.pg_id, {})
 
     def unregister_placement_group(self, pg_id: str):
-        """
-        Unregister a placement group.
+        pg = self.placement_groups.get(pg_id, None)
+        assign = self.placement_group_assignment.get(pg_id, {})
 
-        Args:
-            pg_id (str): The ID of the placement group to unregister.
-        """
+        if pg is not None:
+            if pg.strategy == PlacementStrategy.PACK:
+                locked = assign.get("__pack__")
+                if locked and locked in self.state:
+                    st = self.state[locked]
+                    for b in pg.bundles:
+                        st.release_bundle(b)
+
+            elif pg.strategy == PlacementStrategy.SPREAD:
+                for k, nid in list(assign.items()):
+                    if k == "__pack__":
+                        continue
+                    if nid not in self.state:
+                        continue
+                    idx = int(k)  # noqa
+                    if idx < 0 or idx >= len(pg.bundles):
+                        continue
+                    self.state[nid].release_bundle(pg.bundles[idx])
+
         self.placement_groups.pop(pg_id, None)
         self.placement_group_assignment.pop(pg_id, None)

@@ -178,19 +178,34 @@ def init(
 
 
 def shutdown():
-    """
-    Stop RPC servers started by `init()` and clear bookkeeping.
-
-    Notes:
-        - This only stops servers launched by *this process*. Remote nodes you
-          registered by address are not affected.
-
-    Examples:
-        >>> shutdown()
-    """
     logger.info("Shutting down nanoray runtime")
 
-    # Stop servers (best-effort)
+    # 1) placement group / session cleanup (best-effort)
+    try:
+        from nanorlhf.nanoray.api import session as session_api
+
+        sess = getattr(session_api, "GLOBAL_SESSION", None)
+        if sess is not None:
+            # release placement group reservations
+            for pg_id in list(getattr(sess.scheduler, "placement_groups", {}).keys()):
+                try:
+                    sess.remove_placement_group(pg_id)
+                except Exception:
+                    pass
+
+            # shutdown local workers (actors/processes/threadpools)
+            for w in (sess.local_workers or {}).values():
+                try:
+                    if hasattr(w, "shutdown"):
+                        w.shutdown()
+                except Exception:
+                    pass
+
+            session_api.GLOBAL_SESSION = None
+    except Exception:
+        pass
+
+    # 2) Stop servers (best-effort)
     for nid, srv in list(SERVERS.items()):
         try:
             srv.stop()
@@ -198,4 +213,3 @@ def shutdown():
             pass
     SERVERS.clear()
     SERVER_THREADS.clear()
-

@@ -1,11 +1,10 @@
 from argparse import ArgumentParser
-from typing import List
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from nanorlhf import nanoray
-from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
+from nanorlhf.nanoray import Bundle, PlacementStrategy, NANORAY_BASE_PORT
 from nanorlhf.nanoverl.configs.rl_config import RLConfig
 from nanorlhf.nanoverl.dataset.rl_dataset import RLDataset
 from nanorlhf.nanoverl.reward.reward_manager import RewardManager
@@ -31,10 +30,11 @@ class RLTrainer(BaseTrainer):
         )
         self.rollout_world_size = self.config.rollout.data_parallel_size * self.config.rollout.tensor_parallel_size
         self.global_world_size = self.actor_world_size + self.rollout_world_size
-        self.node_ids = self.init_ray(self.config)
+        self.init_ray(self.config)
+        self.actor_pg, self.rollout_pg = self.create_placement_groups()
         self.reward_manager = RewardManager(self.config)
 
-        actor_workers, rollout_workers = self.spawn_workers(self.config, self.node_ids, self.total_steps)
+        actor_workers, rollout_workers = self.spawn_workers(self.config, self.total_steps)
         self.actor_critic_ref_worker_group = ActorCriticRefWorkerGroup(self.config, actor_workers)
         self.rollout_worker_group = RolloutWorkerGroup(self.config, rollout_workers)
 
@@ -62,6 +62,8 @@ class RLTrainer(BaseTrainer):
         nodes = {}
         for rank in range(self.actor_world_size):
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
+                cpus=1.0,
+                gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
                 port=NANORAY_BASE_PORT + rank,
@@ -69,6 +71,8 @@ class RLTrainer(BaseTrainer):
         for rank in range(self.rollout_world_size):
             rank = rank + self.actor_world_size
             nodes[f"rollout-global_rank={rank}"] = nanoray.NodeConfig(
+                cpus=1.0,
+                gpus=1.0,
                 rpc=True,
                 host=config.actor.host,
                 port=NANORAY_BASE_PORT + rank,
@@ -82,18 +86,23 @@ class RLTrainer(BaseTrainer):
                 "please provide at least one NodeConfig per global rank."
             )
 
-        return node_ids
+    def create_placement_groups(self):
+        actor_pg = nanoray.create_placement_group(
+            bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.actor_world_size)],
+            strategy=PlacementStrategy.SPREAD,
+        )
+        rollout_pg = nanoray.create_placement_group(
+            bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.rollout_world_size)],
+            strategy=PlacementStrategy.SPREAD,
+        )
+        return actor_pg, rollout_pg
 
-    def spawn_workers(self, config, node_ids: List[str], total_steps: int):
+    def spawn_workers(self, config, total_steps: int):
         actor_refs = []
         for actor_local_rank in range(self.actor_world_size):
-            node_id = node_ids[actor_local_rank % len(node_ids)]
-            actor_ref = ActorCriticRefWorker.options(pinned_node_id=node_id).remote(
-                config=config,
-                rank=actor_local_rank,
-                total_steps=total_steps,
-                blocking=False,
-            )
+            actor_ref = ActorCriticRefWorker.options(
+                placement_group=self.actor_pg, bundle_index=actor_local_rank
+            ).remote(config=config, rank=actor_local_rank, total_steps=total_steps, blocking=False)
             actor_refs.append(actor_ref)
 
         rollout_refs = []
@@ -101,10 +110,9 @@ class RLTrainer(BaseTrainer):
             for rollout_tp_rank in range(config.rollout.tensor_parallel_size):
                 rollout_local_rank = rollout_dp_rank * config.rollout.tensor_parallel_size + rollout_tp_rank
                 global_rank = self.actor_world_size + rollout_local_rank
-                node_id = node_ids[global_rank % len(node_ids)]
-                rollout_ref = RolloutWorker.options(pinned_node_id=node_id).remote(
-                    config=config, rank=global_rank, blocking=False
-                )
+                rollout_ref = RolloutWorker.options(
+                    placement_group=self.rollout_pg, bundle_index=rollout_local_rank
+                ).remote(config=config, rank=global_rank, blocking=False)
                 rollout_refs.append(rollout_ref)
 
         models = nanoray.get(actor_refs + rollout_refs)
@@ -115,8 +123,7 @@ class RLTrainer(BaseTrainer):
             for rollout_tp_rank in range(config.rollout.tensor_parallel_size):
                 rollout_local_rank = rollout_dp_rank * config.rollout.tensor_parallel_size + rollout_tp_rank
                 global_rank = self.actor_world_size + rollout_local_rank
-                tensor_parallel_worker = models[global_rank]
-                tensor_parallel_workers.append(tensor_parallel_worker)
+                tensor_parallel_workers.append(models[global_rank])
             rollouts.append(tensor_parallel_workers)
 
         actors = models[: self.actor_world_size]

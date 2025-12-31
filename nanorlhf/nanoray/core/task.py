@@ -119,16 +119,3 @@ class Task(Generic[T]):
             bundle_index=bundle_index,
         )
 
-    def summary(self) -> str:
-        """
-        Return a short human-friendly summary for logging and debugging.
-
-        Returns:
-            str: A string like `"tsk-9f3a12ab fn=add cpus=1.0 gpus=0.0 pg=None"`.
-        """
-        fn_name = getattr(self.fn, "__name__", str(self.fn))
-
-        return (
-            f"{self.task_id} fn={fn_name} "
-            f"cpus={self.num_cpus} gpus={self.num_gpus} "
-        )

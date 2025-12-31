@@ -6,7 +6,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from nanorlhf import nanoray
-from nanorlhf.nanoray.api.initialization import NANORAY_BASE_PORT
+from nanorlhf.nanoray import Bundle, PlacementStrategy, NANORAY_BASE_PORT
 from nanorlhf.nanovllm.core.model_runner import ModelRunner
 from nanorlhf.nanovllm.core.scheduler import Scheduler
 from nanorlhf.nanovllm.core.sequence import Sequence
@@ -27,7 +27,8 @@ class LLMEngine:
         self.tokenizer = AutoTokenizer.from_pretrained(config.model)
         config.eos = self.tokenizer.eos_token_id
 
-        self.node_ids = self.init_ray(config)
+        self.init_ray(config)
+        self.pg = self.create_placement_groups()
         self.model_runners = self.create_model(config)
 
         model_runner_config = self.model_runners[0][0].get_config.remote(blocking=True)  # noqa
@@ -38,24 +39,42 @@ class LLMEngine:
         nodes = {}
         if self.global_world_size > 1:
             for global_rank in range(self.global_world_size):
-                nodes[f"node-{global_rank}"] = nanoray.NodeConfig(
-                    cpus=4.0, gpus=1.0, rpc=True, host=config.host, port=NANORAY_BASE_PORT + global_rank
+                nodes[f"global_rank={global_rank}"] = nanoray.NodeConfig(
+                    cpus=1.0,
+                    gpus=1.0,
+                    rpc=True,
+                    host=config.host,
+                    port=NANORAY_BASE_PORT + global_rank,
                 )
         else:
-            nodes["node-0"] = nanoray.NodeConfig(
-                cpus=4.0, gpus=1.0, rpc=False, host=config.host, port=NANORAY_BASE_PORT
+            nodes["global_rank=0"] = nanoray.NodeConfig(
+                cpus=1.0,
+                gpus=1.0,
+                rpc=False,
+                host=config.host,
+                port=NANORAY_BASE_PORT,
             )
 
-        session = nanoray.init(nodes, default_node_id="node-0")
-        return list(session.workers.keys())
+        session = nanoray.init(nodes, default_node_id="global_rank=0")
+        node_ids = list(session.workers.keys())
+        if len(node_ids) < self.global_world_size:
+            raise RuntimeError(
+                "`nanoray` was initialized with fewer nodes than `global_world_size`; "
+                "please provide at least one NodeConfig per global rank."
+            )
+
+    def create_placement_groups(self):
+        return nanoray.create_placement_group(
+            bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.global_world_size)],
+            strategy=PlacementStrategy.SPREAD,
+        )
 
     def create_model(self, config: NanoVLLMConfig):
         object_refs = []
         for data_parallel_rank in range(self.data_parallel_size):
             for tensor_parallel_rank in range(self.tensor_parallel_size):
                 global_rank = data_parallel_rank * self.tensor_parallel_size + tensor_parallel_rank
-                node_id = self.node_ids[global_rank % len(self.node_ids)]
-                object_ref = ModelRunner.options(pinned_node_id=node_id).remote(
+                object_ref = ModelRunner.options(placement_group=self.pg, bundle_index=global_rank).remote(
                     config, rank=global_rank, actor_config=None, blocking=False
                 )
                 object_refs.append(object_ref)
