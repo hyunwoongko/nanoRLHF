@@ -1,4 +1,4 @@
-# initialzation
+# initialization
 
 ## Overview
 

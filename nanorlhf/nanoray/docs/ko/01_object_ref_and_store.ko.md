@@ -178,14 +178,14 @@ ObjectStore의 put은 값을 저장하고, 그 값을 가리키는 ObjectRef를 
 
 ```python
 store_1 = ObjectStore("node-A")
-ref_1 = storeA.put([1, 2, 3])
+ref_1 = store_1.put([1, 2, 3])
 
 payload = store_1.get_bytes(ref_1.object_id)
 
-store_b = ObjectStore("node-B")
-ref_b = store_b.put_bytes(payload)
+store_2 = ObjectStore("node-B")
+ref_2 = store_2.put_bytes(payload)
 
-print(storeB.get(ref_b))  # [1, 2, 3]
+print(store_2.get(ref_2))  # [1, 2, 3]
 ```
 
 이 `get_bytes` / `put_bytes`는 사용자용 고수준 API라기보다, Ray에서 원격 fetch를 구현할 때 필요한 저수준 빌딩블록에 가깝습니다.

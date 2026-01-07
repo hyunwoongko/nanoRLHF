@@ -21,19 +21,19 @@ RemoteFunction / ActorClass / ActorMethod
   v
 Session.submit(Task)
   |
-  | (네트워크/스케줄링을 거쳐) 특정 노드에 전달
   v
-Worker.rpc_execute_task(Task)
+Scheduler.try_place 또는 Scheduler.drain 내부
   |
-  | Task의 종류를 보고 실행 경로 선택
+  | 노드 선택 이후
   v
-Worker.execute_task
+WorkerLike.execute_task(Task)
   |
-  +--> 일반 함수 실행: execute_task_call -> ThreadPoolExecutor
+  +--> 로컬이면 Worker.execute_task(Task)
   |
-  +--> 생성 요청: execute_actor_create -> ActorRuntime.create
-  |
-  +--> 메서드 호출: execute_actor_call -> ActorRuntime.call
+  +--> 원격이면 RemoteWorkerProxy.execute_task(Task)
+          -> RpcClient.execute_task
+          -> RpcServer rpc_execute_task
+          -> Worker.rpc_execute_task(Task)
   |
   v
 ObjectStore.put_future -> ObjectRef 반환

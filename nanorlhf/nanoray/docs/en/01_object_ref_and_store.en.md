@@ -178,14 +178,14 @@ In a multi-node setup, you may need to fetch a value from another node’s Objec
 
 ```python
 store_1 = ObjectStore("node-A")
-ref_1 = storeA.put([1, 2, 3])
+ref_1 = store_1.put([1, 2, 3])
 
 payload = store_1.get_bytes(ref_1.object_id)
 
-store_b = ObjectStore("node-B")
-ref_b = store_b.put_bytes(payload)
+store_2 = ObjectStore("node-B")
+ref_2 = store_2.put_bytes(payload)
 
-print(storeB.get(ref_b))  # [1, 2, 3]
+print(storeB.get(ref_2))  # [1, 2, 3]
 ```
 
 These get_bytes / put_bytes APIs are not really a high-level user API; they are closer to low-level building blocks needed to implement remote fetch in Ray.

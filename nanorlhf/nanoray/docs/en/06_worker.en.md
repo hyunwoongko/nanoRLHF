@@ -21,22 +21,22 @@ RemoteFunction / ActorClass / ActorMethod
   v
 Session.submit(Task)
   |
-  | (via networking or scheduling) delivered to a specific node
   v
-Worker.rpc_execute_task(Task)
+inside Scheduler.try_place or Scheduler.drain
   |
-  | choose an execution path based on the Task kind
+  | after choosing a node
   v
-Worker.execute_task
+WorkerLike.execute_task(Task)
   |
-  +--> normal function execution: execute_task_call -> ThreadPoolExecutor
+  +--> local: Worker.execute_task(Task)
   |
-  +--> create request: execute_actor_create -> ActorRuntime.create
-  |
-  +--> method call: execute_actor_call -> ActorRuntime.call
+  +--> remote: RemoteWorkerProxy.execute_task(Task)
+          -> RpcClient.execute_task
+          -> RpcServer rpc_execute_task
+          -> Worker.rpc_execute_task(Task)
   |
   v
-ObjectStore.put_future -> returns ObjectRef
+ObjectStore.put_future -> returns an ObjectRef
 ```
 
 The core flow is:
