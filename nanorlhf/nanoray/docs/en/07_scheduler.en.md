@@ -95,7 +95,7 @@ With a PlacementGroup, it is a bit different. PACK and SPREAD perform reserve_bu
 If a PlacementGroup exists, the Scheduler records placement decisions in placement_group_assignment.
 
 - PACK
-  - records the locked node id under the __pack__ key
+  - records the locked node id under the `__pack__` key
   - on first placement, reserves all bundles in the group on one node via reserve_bundle and locks it
 - SPREAD
   - records which node each bundle_index was assigned to

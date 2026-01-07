@@ -95,7 +95,7 @@ PlacementGroup이 있는 경우는 조금 다릅니다. PACK, SPREAD는 번들 �
 PlacementGroup이 있으면 Scheduler는 placement_group_assignment에 배치 결정을 기록합니다.
 
 - PACK
-  - __pack__ 키에 잠긴 노드 id를 기록합니다
+  - `__pack__` 키에 잠긴 노드 id를 기록합니다
   - 최초 배치 시 그룹의 모든 번들을 한 노드에 reserve_bundle로 잡고 잠급니다
 - SPREAD
   - bundle_index별로 어떤 노드에 갔는지 기록합니다
