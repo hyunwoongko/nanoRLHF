@@ -125,6 +125,7 @@ This structure enables the following in distributed execution.
 ## Remote Execution RPC
 
 Worker has an entrypoint that accepts external requests to execute Tasks. rpc_execute_task calls the internal execute_task, then constructs an ObjectRef for external use.
+Difference is that size_bytes information is included in the ObjectRef. The caller can use this value to know the result size in advance.
 
 ```python
 def rpc_execute_task(self, task: Task) -> ObjectRef:

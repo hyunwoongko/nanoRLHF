@@ -125,6 +125,7 @@ return self.store.put_future(future, object_id=task_result_object_id(task.task_i
 ## 원격 실행 RPC
 
 Worker는 외부에서 Task 실행을 요청받는 진입점이 있습니다. rpc_execute_task는 내부 execute_task를 호출한 뒤, 외부로 넘길 ObjectRef를 구성합니다.
+차이점은 size_bytes 정보를 ObjectRef에 포함한다는 점입니다. 이 값을 활용해서 호출자가 결과 크기를 미리 알 수 있습니다.
 
 ```python
 def rpc_execute_task(self, task: Task) -> ObjectRef:

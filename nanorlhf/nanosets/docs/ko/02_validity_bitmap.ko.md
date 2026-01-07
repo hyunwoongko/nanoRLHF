@@ -1,4 +1,4 @@
-~~# Validity Bitmap
+# Validity Bitmap
 이 문서에서는 Validity Bitmap에 대해 설명합니다.
 
 ## 1. Validity Bitmap은 무엇인가요?

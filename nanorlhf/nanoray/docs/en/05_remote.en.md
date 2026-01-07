@@ -30,7 +30,7 @@ o = a.inc.remote(10)
 
 The important point here is that in both cases, the remote call does not immediately return the result value, but submits work to the session.
 
-## Core Idea
+## Usage
 
 In this project, you can think of the remote decorator as creating one of two wrappers depending on the input target.
 
