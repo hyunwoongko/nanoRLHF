@@ -1,4 +1,4 @@
-# Validity Bitmap
+~~# Validity Bitmap
 이 문서에서는 Validity Bitmap에 대해 설명합니다.
 
 ## 1. Validity Bitmap은 무엇인가요?
@@ -359,4 +359,4 @@ def set_validity(buffer: Buffer, offset: int, i: int, valid: bool):
 ## Validity Bitmap: 3줄 요약
 - Validity Bitmap은 결측치 정보를 비트 단위로 저장하여 메모리 사용량을 줄이고 연속된 메모리 레이아웃을 유지합니다.
 - 연속된 메모리 레이아웃은 SIMD 최적화와 캐시 효율성을 높여 성능 향상에 기여합니다.
-- Bitmap은 비트 단위로 조희, 저장, 슬라이싱 기능을 구현하여 효율적으로 결측치를 관리할 수 있습니다.
+- Bitmap은 비트 단위로 조희, 저장, 슬라이싱 기능을 구현하여 효율적으로 결측치를 관리할 수 있습니다.~~

@@ -24,6 +24,12 @@ class Worker:
         self.actors = ActorRuntime(node_id=self.node_id)
 
     def execute_task(self, task: Task) -> ObjectRef:
+        """
+        Execute a task locally.
+
+        Args:
+            task (Task): The task to execute.
+        """
         ctx = getattr(task, "runtime_env", None)
         ctx_mgr = ctx.apply() if ctx is not None else nullcontext()
 
@@ -39,6 +45,16 @@ class Worker:
             return self.execute_task_call(task)
 
     def execute_actor_create(self, task: Task, fn: Dict[str, Any]) -> ObjectRef:
+        """
+        Execute an actor creation task.
+
+        Args:
+            task (Task): The task representing the actor creation.
+            fn (Dict[str, Any]): The function descriptor containing actor class and init args.
+
+        Returns:
+            ObjectRef: A reference to the created actor.
+        """
         actor_id, ready_future = self.actors.create(
             cls=fn["cls"],
             init_args=tuple(fn.get("args", ())),
@@ -56,6 +72,16 @@ class Worker:
         return self.store.put_future(future, object_id=task_result_object_id(task.task_id))
 
     def execute_actor_call(self, task: Task, fn: Dict[str, Any]) -> ObjectRef:
+        """
+        Execute an actor method call task.
+
+        Args:
+            task (Task): The task representing the actor method call.
+            fn (Dict[str, Any]): The function descriptor containing actor_id and method name.
+
+        Returns:
+            ObjectRef: A reference to the result of the actor method call.
+        """
         future = self.actors.call(
             actor_id=fn["actor_id"],
             call_id=task.task_id,
@@ -67,6 +93,15 @@ class Worker:
         return self.store.put_future(future, object_id=task_result_object_id(task.task_id))
 
     def execute_task_call(self, task: Task) -> ObjectRef:
+        """
+        Execute a regular task call.
+
+        Args:
+            task (Task): The task to execute.
+
+        Returns:
+            ObjectRef: A reference to the result of the task execution.
+        """
         payload = dumps((task.fn, task.args, task.kwargs))
         max_concurrency = max(int(task.max_concurrency or 1), 1)
 
@@ -79,9 +114,27 @@ class Worker:
         return self.store.put_future(future, object_id=task_result_object_id(task.task_id))
 
     def rpc_read_object_bytes(self, object_id: str) -> bytes:
+        """
+        Fetch serialized object bytes for RPC.
+
+        Args:
+            object_id (str): The ID of the object to fetch.
+
+        Returns:
+            bytes: Raw object bytes.
+        """
         return self.store.get_bytes(object_id)
 
     def rpc_execute_task(self, task: Task) -> ObjectRef:
+        """
+        Execute a task via RPC.
+
+        Args:
+            task (Task): The task to execute.
+
+        Returns:
+            ObjectRef: A reference to the result of the task execution.
+        """
         ref = self.execute_task(task)
         return ObjectRef(
             object_id=ref.object_id,
@@ -90,6 +143,9 @@ class Worker:
         )
 
     def shutdown(self):
+        """
+        Shutdown the worker and its resources.
+        """
         self.actors.shutdown()
         for _, executor in list(self.task_executors.items()):
             executor.shutdown(wait=False)

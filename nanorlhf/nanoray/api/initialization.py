@@ -178,6 +178,13 @@ def init(
 
 
 def shutdown():
+    """
+    Shutdown the nanoray runtime, including RPC servers and local workers.
+
+    This is a best-effort cleanup; any exceptions are caught and ignored.
+    1) Cleans up the global session, including placement groups and local workers.
+    2) Stops any RPC servers that were started during `init()`.
+    """
     logger.info("Shutting down nanoray runtime")
 
     # 1) placement group / session cleanup (best-effort)

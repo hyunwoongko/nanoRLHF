@@ -29,6 +29,16 @@ def actor_main_process(
     response_queue,
     initial_max_concurrency: int,
 ):
+    """
+    Main process function for an actor.
+
+    Args:
+        actor_id (str): Unique identifier for the actor.
+        create_payload (bytes): Serialized payload to create the actor instance.
+        request_queue: Queue to receive requests.
+        response_queue: Queue to send responses.
+        initial_max_concurrency (int): Initial maximum concurrency level.
+    """
     cls, init_args, init_kwargs = loads(create_payload)
     setproctitle.setproctitle(f"nanoray:{cls.__name__}")
     instance = cls(*init_args, **(init_kwargs or {}))
@@ -136,12 +146,18 @@ class ActorHandle:
     listener_thread: threading.Thread | None = None
     is_closed: bool = False
 
-    def start(self) -> None:
+    def start(self):
+        """
+        Start the actor process and the listener thread.
+        """
         self.process.start()
         self.listener_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listener_thread.start()
 
-    def listen_loop(self) -> None:
+    def listen_loop(self):
+        """
+        Listen for responses from the actor process and handle them accordingly.
+        """
         while True:
             response = self.response_q.get()
 
@@ -183,6 +199,19 @@ class ActorHandle:
         kwargs: Dict[str, Any],
         max_concurrency: int,
     ) -> Future:
+        """
+        Submit a method call to the actor.
+
+        Args:
+            call_id (str): Unique identifier for the call.
+            method_name (str): Name of the method to invoke.
+            args (Tuple[Any, ...]): Positional arguments for the method.
+            kwargs (Dict[str, Any]): Keyword arguments for the method.
+            max_concurrency (int): Desired maximum concurrency level.
+
+        Returns:
+            Future: A future representing the result of the method call.
+        """
         if self.is_closed:
             raise RuntimeError(f"Actor {self.actor_id} is closed.")
 
@@ -219,6 +248,15 @@ class ActorRuntime:
         init_kwargs: Dict[str, Any],
         max_concurrency: int,
     ) -> Tuple[str, Future]:
+        """
+        Create a new actor instance.
+
+        Args:
+            cls: The actor class to instantiate.
+            init_args (Tuple[Any, ...]): Positional arguments for the actor's constructor.
+            init_kwargs (Dict[str, Any]): Keyword arguments for the actor's constructor.
+            max_concurrency (int): Maximum concurrency level for the actor.
+        """
         actor_id = new_actor_id()
         max_concurrency = max(int(max_concurrency or 1), 1)
 
@@ -261,12 +299,26 @@ class ActorRuntime:
         kwargs: Dict[str, Any],
         max_concurrency: int,
     ) -> Future:
+        """
+        Call a method on the specified actor.
+
+        Args:
+            actor_id (str): Unique identifier for the actor.
+            call_id (str): Unique identifier for the call.
+            method_name (str): Name of the method to invoke.
+            args (Tuple[Any, ...]): Positional arguments for the method.
+            kwargs (Dict[str, Any]): Keyword arguments for the method.
+            max_concurrency (int): Desired maximum concurrency level.
+        """
         handle = self.actors.get(actor_id)
         if handle is None:
             raise RuntimeError(f"Actor {actor_id} not found on node {self.node_id}.")
         return handle.submit(call_id, method_name, args, kwargs, max_concurrency=max_concurrency)
 
     def shutdown(self) -> None:
+        """
+        Shutdown all actors managed by this runtime.
+        """
         for _, handle in list(self.actors.items()):
             handle.shutdown()
         self.actors.clear()

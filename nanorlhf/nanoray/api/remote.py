@@ -54,6 +54,22 @@ class ActorClass:
         bundle_index: Optional[int] = None,
         max_concurrency: Optional[int] = 1,
     ) -> "ActorClass":
+        """
+        Create a new ActorClass with updated options.
+
+        Args:
+            num_cpus (float): Number of CPUs to allocate.
+            num_gpus (float): Number of GPUs to allocate.
+            resources (Optional[Dict[str, float]]): Custom named resources.
+            pinned_node_id (Optional[str]): Node ID to pin the actor to.
+            runtime_env (Optional[RuntimeEnv]): Runtime environment configuration.
+            placement_group (Optional[PlacementGroup]): Placement group for scheduling.
+            bundle_index (Optional[int]): Bundle index within the placement group.
+            max_concurrency (Optional[int]): Maximum concurrency for the actor.
+
+        Returns:
+            ActorClass: A new ActorClass instance with updated options.
+        """
         return ActorClass(
             cls=self.cls,
             num_cpus=num_cpus,
@@ -67,6 +83,17 @@ class ActorClass:
         )
 
     def remote(self, *args: Any, blocking: bool = False, **kwargs: Any):
+        """
+        Create a new actor instance with the given arguments.
+
+        Args:
+            *args (Any): Positional arguments for the actor constructor.
+            blocking (bool): If True, block until the actor is created.
+            **kwargs (Any): Keyword arguments for the actor constructor.
+
+        Returns:
+            Optional[ActorRef]: An ActorRef to the created actor instance.
+        """
         sess = get_session()
         task = Task(
             fn={
@@ -118,6 +145,21 @@ class ActorMethod:
         bundle_index: Optional[int] = None,
         max_concurrency: Optional[int] = 1,
     ) -> "ActorMethod":
+        """
+        Create a new ActorMethod with updated options.
+
+        Args:
+            num_cpus (float): Number of CPUs to allocate.
+            num_gpus (float): Number of GPUs to allocate.
+            resources (Optional[Dict[str, float]]): Custom named resources.
+            runtime_env (Optional[RuntimeEnv]): Runtime environment configuration.
+            placement_group (Optional[PlacementGroup]): Placement group for scheduling.
+            bundle_index (Optional[int]): Bundle index within the placement group.
+            max_concurrency (Optional[int]): Maximum concurrency for the method.
+
+        Returns:
+            ActorMethod: A new ActorMethod instance with updated options.
+        """
         return ActorMethod(
             self.ref,
             self.method_name,
@@ -131,6 +173,17 @@ class ActorMethod:
         )
 
     def remote(self, *args: Any, blocking: bool = False, **kwargs: Any):
+        """
+        Invoke the actor method with the given arguments.
+
+        Args:
+            *args (Any): Positional arguments for the actor method.
+            blocking (bool): If True, block until the result is available.
+            **kwargs (Any): Keyword arguments for the actor method.
+
+        Returns:
+            Optional[ObjectRef]: An ObjectRef to the result of the actor method call.
+        """
         sess = get_session()
         task = Task(
             fn={
@@ -181,6 +234,22 @@ class RemoteFunction:
         pinned_node_id: Optional[str] = None,
         max_concurrency: Optional[int] = None,
     ) -> "RemoteFunction":
+        """
+        Create a new RemoteFunction with updated options.
+
+        Args:
+            num_cpus (Optional[float]): Number of CPUs to allocate.
+            num_gpus (Optional[float]): Number of GPUs to allocate.
+            resources (Optional[Dict[str, float]]): Custom named resources.
+            runtime_env (Optional[RuntimeEnv]): Runtime environment configuration.
+            placement_group (Optional[PlacementGroup]): Placement group for scheduling.
+            bundle_index (Optional[int]): Bundle index within the placement group.
+            pinned_node_id (Optional[str]): Node ID to pin the task to.
+            max_concurrency (Optional[int]): Maximum concurrency for the task.
+
+        Returns:
+            RemoteFunction: A new RemoteFunction instance with updated options.
+        """
         return RemoteFunction(
             fn=self.fn,
             num_cpus=self.num_cpus if num_cpus is None else float(num_cpus),
@@ -194,6 +263,16 @@ class RemoteFunction:
         )
 
     def task(self, *args: Any, **kwargs: Any) -> Task:
+        """
+        Create a Task object for the remote function with the given arguments.
+
+        Args:
+            *args (Any): Positional arguments for the remote function.
+            **kwargs (Any): Keyword arguments for the remote function.
+
+        Returns:
+            Task: A Task object representing the remote function call.
+        """
         return Task.from_call(
             self.fn,
             args=tuple(args),
@@ -209,12 +288,35 @@ class RemoteFunction:
         )
 
     def remote(self, *args: Any, blocking: bool = False, **kwargs: Any) -> Optional[ObjectRef]:
+        """
+        Invoke the remote function with the given arguments.
+
+        Args:
+            *args (Any): Positional arguments for the remote function.
+            blocking (bool): If True, block until the result is available.
+            **kwargs (Any): Keyword arguments for the remote function.
+
+        Returns:
+            Optional[ObjectRef]: An ObjectRef to the result of the remote function call.
+        """
         task = self.task(*args, **kwargs)
         sess = get_session()
         return sess.submit(task, blocking=blocking)
 
 
 def remote(obj: Optional[Union[type, Callable[..., Any]]] = None, **opts: Any):
+    """
+    A decorator to define remote functions or actor classes.
+
+    Args:
+        obj (Optional[Union[type, Callable[..., Any]]]): The class or function to be made remote.
+        **opts (Any): Options to configure the remote behavior.
+
+    Returns:
+        Union[ActorClass, RemoteFunction, Callable[[Union[type, Callable[..., Any]]], Union[ActorClass, RemoteFunction]]]:
+            If `obj` is provided, returns an `ActorClass` or `RemoteFunction` instance.
+            If `obj` is None, returns a decorator that can be applied to a class or function.
+    """
     def _wrap(x: Union[type, Callable[..., Any]]):
         if inspect.isclass(x):
             return ActorClass(cls=x, **opts)

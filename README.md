@@ -65,7 +65,7 @@ The goal is to understand how columnar data formats work without copying and how
 
 ### 2) `nanoray`: Distributed Computing Engine
 - Implementation: [nanoray](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray)
-- Textbook: In progress
+- Textbook: [English](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray/docs/en),  [Korean](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray/docs/ko)
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanoray.py)
 - References: [ray](https://github.com/ray-project/ray)
 
@@ -74,7 +74,7 @@ The goal is to understand how distributed execution works and how to build a sim
 
 ### 3) `nanotron`: 3D Parallelism Engine
 - Implementation: [nanotron](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanotron)
-- Textbook: Not started
+- Textbook: In progress
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanotron.py)
 - References: [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)
 

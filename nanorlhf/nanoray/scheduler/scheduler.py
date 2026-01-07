@@ -174,6 +174,25 @@ class Scheduler:
         return produced
 
     def eligible_nodes(self, task: Task) -> List[str]:
+        """
+        Get the list of node IDs that can run the given task.
+
+        Args:
+            task (Task): The task to evaluate.
+
+        Returns:
+            List[str]: List of eligible node IDs.
+
+        Discussion:
+            Q. How are placement groups handled here?
+                If the task is part of a placement group, we check the group's
+                strategy (PACK or SPREAD) and the bundle requirements to filter
+                eligible nodes accordingly.
+
+            Q. What if the task is pinned to a specific node?
+                If the task has a `pinned_node_id`, we only consider that node
+                for eligibility, applying placement group constraints if applicable.
+        """
         pg_id = getattr(task, "placement_group_id", None)
         bundle_index = getattr(task, "bundle_index", 0) or 0
 
@@ -275,6 +294,29 @@ class Scheduler:
         return list(self.state.keys())
 
     def try_place(self, task: Task) -> Optional[ObjectRef]:
+        """
+        Try to place and execute the task immediately.
+
+        Args:
+            task (Task): Declarative description of a remote function call.
+
+        Returns:
+            Optional[ObjectRef]: Result reference if placed now, else `None`.
+
+        Discussion:
+            Q. How are placement groups handled here?
+                If the task is part of a placement group, we check the group's
+                strategy (PACK or SPREAD) and the bundle requirements to
+                reserve resources accordingly before execution.
+
+            Q. What happens if the task cannot be placed?
+                If no eligible node is found or if placement group constraints
+                cannot be satisfied, the method returns `None`.
+
+            Q. What if the task is successfully placed?
+                The task is executed on the selected worker, and an `ObjectRef`
+                to the result is returned.
+        """
         cands = self.eligible_nodes(task)
         if not cands:
             return None
@@ -346,6 +388,17 @@ class Scheduler:
         self.placement_group_assignment.setdefault(pg.pg_id, {})
 
     def unregister_placement_group(self, pg_id: str):
+        """
+        Unregister a placement group and release its reserved resources.
+
+        Args:
+            pg_id (str): The ID of the placement group to unregister.
+
+        Discussion:
+            Q. What happens to resources reserved by the placement group?
+                The method releases all resources reserved by the placement group
+                on the nodes where they were allocated.
+        """
         pg = self.placement_groups.get(pg_id, None)
         assign = self.placement_group_assignment.get(pg_id, {})
 

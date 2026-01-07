@@ -23,4 +23,10 @@ class RemoteWorkerProxy:
         self.rpc = rpc
 
     def execute_task(self, task: Task) -> ObjectRef:
+        """
+        Execute a task remotely via RPC.
+
+        Args:
+            task (Task): The task to execute.
+        """
         return self.rpc.execute_task(self.node_id, task)
