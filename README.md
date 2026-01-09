@@ -14,7 +14,6 @@ A few years ago, it still felt possible for an individual to meaningfully train 
 ## Requirements and Limitations
 I worked on this project using a single server with 8 * H200 GPUs.
 It should also run well on A100 80GB GPUs, but to fully experiment with all features including 3D parallelism, a server with at least 8 GPUs is required.
-
 Note that this repository only supports single node multi-GPU training, so multi-node distributed training is not supported.
 
 ## Installation
