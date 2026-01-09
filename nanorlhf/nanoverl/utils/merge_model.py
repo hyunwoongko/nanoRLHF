@@ -19,6 +19,14 @@ from nanorlhf.nanoverl.configs.sft_config import SFTConfig
 
 @nanoray.remote
 class ModelMerger:
+    """
+    Model merger that loads a parallelized model and saves the merged version.
+
+    Args:
+        model_config: Configuration object containing model settings.
+        rank (int): The rank of the current process in a distributed setup.
+        model_parallel_world_size (int): The total number of model parallel ranks.
+    """
     def __init__(self, model_config, rank, model_parallel_world_size):
         if model_config.zero_stage == 3:
             data_parallel_size = model_parallel_world_size
@@ -55,6 +63,12 @@ class ModelMerger:
         self.model.parallelize()
 
     def save_pretrained(self, save_dir):
+        """
+        Save the merged model and tokenizer to the specified directory.
+
+        Args:
+            save_dir (str): The directory where the merged model and tokenizer will be saved.
+        """
         merged_save_dir = os.path.join(save_dir, "merged")
         self.model.from_parallelized(save_dir)
         self.model.save_parallelized(merged_save_dir, merge_checkpoints=True)
@@ -63,6 +77,12 @@ class ModelMerger:
 
 
 def merge_model(args):
+    """
+    Merge a parallelized model into a single model and save it.
+
+    Args:
+        args: Command-line arguments containing model path, config path, and training type.
+    """
     if args.training_type == "sft":
         config = SFTConfig.from_yaml(args.config)
         model_config = config.model

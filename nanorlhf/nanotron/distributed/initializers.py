@@ -48,6 +48,10 @@ class ProcessGroupInitializer(ABC):
 
 
 class DataParallelGroupInitializer(ProcessGroupInitializer):
+    """
+    Data parallel process group initializer.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.group_world_size % self.data_parallel_size == 0, (
@@ -91,6 +95,10 @@ class DataParallelGroupInitializer(ProcessGroupInitializer):
 
 
 class PipelineParallelGroupInitializer(ProcessGroupInitializer):
+    """
+    Pipeline parallel process group initializer.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert (
@@ -133,6 +141,10 @@ class PipelineParallelGroupInitializer(ProcessGroupInitializer):
 
 
 class TensorParallelGroupInitializer(ProcessGroupInitializer):
+    """
+    Tensor parallel process group initializer.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert (
@@ -175,6 +187,10 @@ class TensorParallelGroupInitializer(ProcessGroupInitializer):
 
 
 class TiedEmbeddingGroupInitializer(ProcessGroupInitializer):
+    """
+    Tied embedding process group initializer.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.group_world_size % self.data_parallel_size == 0

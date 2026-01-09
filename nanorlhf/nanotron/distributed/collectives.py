@@ -13,6 +13,13 @@ def require_divisible(tensor: torch.Tensor, dim: int, world_size: int):
 
 
 class Collectives:
+    """
+    A class encapsulating collective communication operations for distributed training.
+
+    Args:
+        mpu (MPU): The model parallel unit for managing process groups.
+        mode (ParallelMode): The parallel mode for communication.
+    """
     def __init__(self, mpu: MPU, mode: ParallelMode):
         self.mpu = mpu
         self.mode = mode
@@ -21,6 +28,17 @@ class Collectives:
     def maybe_async_return(
         self, output: torch.Tensor, work: Optional[dist.Work], async_op: bool
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Return output tensor and optionally the work handle for asynchronous operations.
+
+        Args:
+            output (torch.Tensor): The output tensor from the collective operation.
+            work (Optional[dist.Work]): The work handle for asynchronous operations.
+            async_op (bool): Flag indicating whether the operation is asynchronous.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]: The output tensor and optionally the work handle.
+        """
         return (output, work) if async_op else output
 
     def all_gather(
@@ -30,6 +48,18 @@ class Collectives:
         on_cpu: bool = False,
         async_op: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Gather tensors from all processes and concatenate them along a specified dimension.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be gathered.
+            dim (int): The dimension along which to gather.
+            on_cpu (bool): Whether to perform the operation on CPU.
+            async_op (bool): Whether to perform the operation asynchronously.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]: The gathered tensor and optionally the work handle.
+        """
         if self.world_size == 1:
             return self.maybe_async_return(tensor, None, async_op)
 
@@ -58,6 +88,20 @@ class Collectives:
         on_cpu: bool = False,
         async_op: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Reduce and scatter the input tensor across all processes.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be reduced and scattered.
+            dim (int): The dimension along which to scatter.
+            op (ReduceOp): The reduction operation to apply.
+            on_cpu (bool): Whether to perform the operation on CPU.
+            async_op (bool): Whether to perform the operation asynchronously.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+                The reduced and scattered tensor and optionally the work handle.
+        """
         if self.world_size == 1:
             return self.maybe_async_return(tensor, None, async_op)
 
@@ -82,6 +126,19 @@ class Collectives:
         on_cpu: bool = False,
         async_op: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Perform an all-reduce operation on the input tensor.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be all-reduced.
+            op (ReduceOp): The reduction operation to apply.
+            on_cpu (bool): Whether to perform the operation on CPU.
+            async_op (bool): Whether to perform the operation asynchronously.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+                The all-reduced tensor and optionally the work handle.
+        """
         if self.world_size == 1:
             return self.maybe_async_return(tensor, None, async_op)
 
@@ -97,6 +154,19 @@ class Collectives:
         on_cpu: bool = False,
         async_op: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Broadcast the input tensor from the source process to all other processes.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be broadcasted.
+            src (int): The source process rank.
+            on_cpu (bool): Whether to perform the operation on CPU.
+            async_op (bool): Whether to perform the operation asynchronously.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+                The broadcasted tensor and optionally the work handle.
+        """
         if self.world_size == 1:
             return self.maybe_async_return(tensor, None, async_op)
 
@@ -113,6 +183,20 @@ class Collectives:
         on_cpu: bool = False,
         async_op: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+        """
+        Reduce the input tensor to the destination process.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be reduced.
+            dst (int): The destination process rank.
+            op (ReduceOp): The reduction operation to apply.
+            on_cpu (bool): Whether to perform the operation on CPU.
+            async_op (bool): Whether to perform the operation asynchronously.
+
+        Returns:
+            Union[torch.Tensor, Tuple[torch.Tensor, dist.Work]]:
+                The reduced tensor and optionally the work handle.
+        """
         if self.world_size == 1:
             return self.maybe_async_return(tensor, None, async_op)
 
@@ -122,6 +206,16 @@ class Collectives:
         return self.maybe_async_return(output, work, async_op)
 
     def scatter(self, tensor: torch.Tensor, dim: int) -> torch.Tensor:
+        """
+        Scatter the input tensor across all processes along a specified dimension.
+
+        Args:
+            tensor (torch.Tensor): The input tensor to be scattered.
+            dim (int): The dimension along which to scatter.
+
+        Returns:
+            torch.Tensor: The scattered tensor for the local process.
+        """
         if self.world_size == 1:
             return tensor
 

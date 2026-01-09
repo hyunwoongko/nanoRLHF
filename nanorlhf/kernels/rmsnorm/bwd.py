@@ -20,6 +20,26 @@ def rmsnorm_kernel_bwd(
     stride_dxn,
     block_size: tl.constexpr,
 ):
+    """
+    A kernel to compute the backward pass of RMSNorm.
+
+    Args:
+        x_ptr: Pointer to the input tensor of shape (M, N).
+        w_ptr: Pointer to the weight tensor of shape (N,).
+        dy_ptr: Pointer to the gradient of the output tensor of shape (M, N).
+        dx_ptr: Pointer to the gradient of the input tensor of shape (M, N).
+        dw_ptr: Pointer to the gradient of the weight tensor of shape (N,).
+        M: Number of rows in the input/output tensors.
+        N: Number of columns in the input/output tensors.
+        eps: Small epsilon value for numerical stability.
+        stride_xm: Stride for rows in the input tensor.
+        stride_xn: Stride for columns in the input tensor.
+        stride_dym: Stride for rows in the output gradient tensor.
+        stride_dyn: Stride for columns in the output gradient tensor.
+        stride_dxm: Stride for rows in the input gradient tensor.
+        stride_dxn: Stride for columns in the input gradient tensor.
+        block_size: Block size for processing columns.
+    """
     row = tl.program_id(0)
     offs = tl.arange(0, block_size)
     mask = offs < N

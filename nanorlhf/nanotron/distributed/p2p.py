@@ -238,6 +238,12 @@ class P2P:
         # after packing/unpacking to/from a dict type.
 
     def enable_huggingface_cache_support(self):
+        """
+        Enable support for huggingface cache objects.
+
+        Returns:
+            bool: True if huggingface cache support is enabled, False otherwise.
+        """
         try:
             from transformers import cache_utils
         except Exception:
@@ -415,11 +421,25 @@ class P2P:
         return self.instructions[_type]["recv"](src_rank=src_rank)  # noqa
 
     def send_type(self, data: type, dst_rank: int, send_type: bool = False):
+        """
+        Send a type to the destination rank.
+
+        Args:
+            data (type): The type to send.
+            dst_rank (int): The destination rank to send the data to.
+            send_type (bool): Whether to send the type information.
+        """
         assert isinstance(data, type), f"Wrong type: {data} must be {type} type."
         tensor = torch.tensor([self.dtype_to_id[data]], dtype=torch.long, device=current_device())
         dist.send(tensor, dst=dst_rank, group=self.group)
 
     def recv_type(self, src_rank: int) -> type:
+        """
+        Receive a type from the source rank.
+
+        Args:
+            src_rank (int): The source rank to receive the data from.
+        """
         tensor = torch.tensor([0], dtype=torch.long, device=current_device())
         dist.recv(tensor, src=src_rank, group=self.group)
         return self.id_to_dtype[tensor.item()]

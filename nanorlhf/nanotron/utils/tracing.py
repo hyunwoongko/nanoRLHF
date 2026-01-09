@@ -66,6 +66,13 @@ class ModelParallelPlan:
 
 
 class ModelParallelTracer:
+    """
+    Trace a PyTorch model to generate a model parallelization plan.
+
+    Args:
+        model (nn.Module): The PyTorch model to trace.
+    """
+
     def __init__(self, model: nn.Module):
         self.name2module = {}
         self.id2name = {}
@@ -80,6 +87,12 @@ class ModelParallelTracer:
         self.output_embedding = self.get_output_embedding()
 
     def trace(self) -> ModelParallelPlan:
+        """
+        Trace the model to generate a model parallelization plan.
+
+        Returns:
+            ModelParallelPlan: The generated model parallelization plan.
+        """
         # 1. build name graph
         self.build_name_graph()
 
@@ -167,6 +180,20 @@ class ModelParallelTracer:
         attention_type_map: Optional[Dict[int, AttentionType]] = None,
         attention_last_2d_map: Optional[Dict[int, int]] = None,
     ) -> Optional[ModuleParallelPlan]:
+        """
+        Build a module parallelization plan for a given module.
+
+        Args:
+            module (nn.Module): The module to build the plan for.
+            is_head (bool): Whether the module is the model head.
+            attention_parents (Optional[List[nn.Module]]): List of attention parent modules.
+            attention_type_map (Optional[Dict[int, AttentionType]]): Map of attention child types.
+            attention_last_2d_map (Optional[Dict[int, int]]): Map of last 2D weights in attention parents.
+
+        Returns:
+            Optional[ModuleParallelPlan]:
+                The generated module parallelization plan, or `None` if the module has no parameters.
+        """
         if not self.has_parameters(module):
             return None
 
@@ -190,6 +217,9 @@ class ModelParallelTracer:
         )
 
     def build_name_graph(self):
+        """
+        Build mappings between module names, ids, and parent-child relationships.
+        """
         for name, module in self.model.named_modules():
             module_id = id(module)
             self.name2module[name] = module
@@ -211,6 +241,14 @@ class ModelParallelTracer:
         is_head: bool,
         attention_parents: Optional[List[nn.Module]] = None,
     ) -> ModuleType:
+        """
+        Detect the module type for a given module.
+
+        Args:
+            module (nn.Module): The module to detect the type for.
+            is_head (bool): Whether the module is the model head.
+            attention_parents (Optional[List[nn.Module]]): List of attention parent modules.
+        """
         if is_head:
             return ModuleType.HEAD
 
@@ -236,6 +274,15 @@ class ModelParallelTracer:
         return ModuleType.OTHER
 
     def detect_attention_type(self, attention_parent: nn.Module) -> Dict[int, AttentionType]:
+        """
+        Detect the attention type for the children of a given attention parent module.
+
+        Args:
+            attention_parent (nn.Module): The attention parent module to analyze.
+
+        Returns:
+            Dict[int, AttentionType]: A mapping from child module ids to their detected attention types.
+        """
         # TODO: add deepseek-v3 style MLA detection
         parent_name = attention_parent.__class__.__qualname__
         children = list(self.iter_2d_weight_children(attention_parent))
@@ -293,6 +340,19 @@ class ModelParallelTracer:
         attention_last_2d_map: Optional[Dict[int, int]],
         is_reversed: bool,
     ):
+        """
+        Detect the slicing type for a given module.
+
+        Args:
+            module (nn.Module): The module to detect the slicing type for.
+            module_type (ModuleType): The detected module type.
+            attention_parents (Optional[List[nn.Module]]): List of attention parent modules.
+            attention_last_2d_map (Optional[Dict[int, int]]): Map of last 2D weights in attention parents.
+            is_reversed (bool): Whether the module's weight dimensions are reversed.
+
+        Returns:
+            Optional[SlicingType]: The detected slicing type, or `None` if undetermined.
+        """
         if module_type == ModuleType.HEAD:
             if is_causal_lm(self.model):
                 return SlicingType.COLUMN
@@ -331,6 +391,16 @@ class ModelParallelTracer:
 
     @staticmethod
     def detect_is_reversed(module: nn.Module, module_type: ModuleType) -> Optional[bool]:
+        """
+        Detect whether the weight dimensions of a given module are reversed.
+
+        Args:
+            module (nn.Module): The module to analyze.
+            module_type (ModuleType): The detected module type.
+
+        Returns:
+            Optional[bool]: `True` if reversed, `False` if not, or `None` if undetermined.
+        """
         if module_type in (ModuleType.EMBEDDING, ModuleType.NORM, ModuleType.OTHER):
             return None
         elif isinstance(module, nn.Embedding):
@@ -341,6 +411,15 @@ class ModelParallelTracer:
             return False
 
     def collect_attention_parents(self, block: nn.Module) -> List[nn.Module]:
+        """
+        Collect topmost attention parent modules within a given block.
+
+        Args:
+            block (nn.Module): The block to analyze.
+
+        Returns:
+            List[nn.Module]: A list of topmost attention parent modules.
+        """
         candidates: List[nn.Module] = []
         for module in block.modules():
             if self.class_name_has_attention(module):
@@ -360,6 +439,15 @@ class ModelParallelTracer:
         return topmost
 
     def build_attention_last_2d_map(self, block: nn.Module) -> Dict[int, int]:
+        """
+        Build a map of the last 2D weight child for each attention parent in a given block.
+
+        Args:
+            block (nn.Module): The block to analyze.
+
+        Returns:
+            Dict[int, int]: A mapping from attention parent ids to their last 2D weight child ids.
+        """
         parents = self.collect_attention_parents(block)
         last_map: Dict[int, int] = {}
         for parent in parents:
@@ -385,6 +473,15 @@ class ModelParallelTracer:
         return last_map
 
     def build_attention_child_type_map_for_block(self, block: nn.Module) -> Dict[int, AttentionType]:
+        """
+        Build a map of attention child types for all attention parents in a given block.
+
+        Args:
+            block (nn.Module): The block to analyze.
+
+        Returns:
+            Dict[int, AttentionType]: A mapping from child module ids to their detected attention types.
+        """
         child_map: Dict[int, AttentionType] = {}
         attention_parents = self.collect_attention_parents(block)
         for parent in attention_parents:
@@ -393,6 +490,16 @@ class ModelParallelTracer:
         return child_map
 
     def iter_2d_weight_children(self, parent: nn.Module):
+        """
+        Iterate over 2D weight children of a given parent module.
+
+        Args:
+            parent (nn.Module): The parent module to analyze.
+
+        Yields:
+            Tuple[nn.Module, int, int]:
+                Yields tuples of (child module, number of elements in weight, call order).
+        """
         default_order = 10**12
         for submodule in parent.modules():
             if submodule is parent:
@@ -405,6 +512,16 @@ class ModelParallelTracer:
 
     @staticmethod
     def in_out_from_weight(weight: torch.Tensor, is_reversed: Optional[bool]) -> Tuple[int, int]:
+        """
+        Get the input and output dimensions from a weight tensor.
+
+        Args:
+            weight (torch.Tensor): The weight tensor to analyze.
+            is_reversed (Optional[bool]): Whether the weight dimensions are reversed.
+
+        Returns:
+            Tuple[int, int]: A tuple of (input dimension, output dimension).
+        """
         if is_reversed is True:
             out_dim, in_dim = weight.shape[0], weight.shape[1]
         else:
@@ -413,10 +530,28 @@ class ModelParallelTracer:
 
     @staticmethod
     def is_weight_1d_norm(module: nn.Module) -> bool:
+        """
+        Check if a module is a 1D weight normalization layer.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if the module is a 1D weight normalization layer, False otherwise.
+        """
         weight = getattr(module, "weight", None)
         return isinstance(weight, torch.Tensor) and weight.dim() == 1
 
     def is_token_embedding(self, module: nn.Module) -> bool:
+        """
+        Check if a module is the token embedding layer of the model.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if the module is the token embedding layer, False otherwise.
+        """
         input_embedding = self.input_embedding
         if input_embedding is None:
             return False
@@ -432,6 +567,16 @@ class ModelParallelTracer:
 
     @staticmethod
     def have_same_storage(w1: Optional[torch.Tensor], w2: Optional[torch.Tensor]) -> bool:
+        """
+        Check if two tensors share the same underlying storage.
+
+        Args:
+            w1 (Optional[torch.Tensor]): The first tensor.
+            w2 (Optional[torch.Tensor]): The second tensor.
+
+        Returns:
+            bool: True if both tensors share the same storage and shape, False otherwise.
+        """
         try:
             return (
                 isinstance(w1, torch.Tensor)
@@ -444,10 +589,28 @@ class ModelParallelTracer:
 
     @staticmethod
     def class_name_has_attention(module: nn.Module) -> bool:
+        """
+        Check if the class name of a module indicates it is an attention module.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if the module's class name contains "attention" or "attn", False otherwise.
+        """
         name = module.__class__.__qualname__.lower()
         return ("attention" in name) or ("attn" in name)
 
     def has_attention_in_ancestors(self, module: nn.Module) -> bool:
+        """
+        Check if any ancestor of a module is an attention module.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if any ancestor is an attention module, False otherwise.
+        """
         current = self.id2parent.get(id(module))
         while current is not None:
             parent_module = self.name2module[self.id2name[current]]
@@ -457,6 +620,15 @@ class ModelParallelTracer:
         return False
 
     def has_2d_weight(self, module: nn.Module) -> bool:
+        """
+        Check if a module has any 2D weight parameters.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if the module has any 2D weight parameters, False otherwise.
+        """
         weight = getattr(module, "weight", None)
         if isinstance(weight, torch.Tensor) and weight.dim() == 2:
             return True
@@ -466,17 +638,46 @@ class ModelParallelTracer:
         return False
 
     def has_tied_embedding(self, embedding: Optional[nn.Module], head: Optional[nn.Module]) -> bool:
+        """
+        Check if the embedding and head modules share tied weights.
+
+        Args:
+            embedding (Optional[nn.Module]): The embedding module.
+            head (Optional[nn.Module]): The head module.
+
+        Returns:
+            bool: True if the embedding and head share tied weights, False otherwise.
+        """
         if embedding is not None and head is not None:
             if self.have_same_storage(getattr(embedding, "weight", None), getattr(head, "weight", None)):
                 return True
         return False
 
     def has_parameters(self, module: nn.Module) -> bool:
+        """
+        Check if a module has any parameters.
+
+        Args:
+            module (nn.Module): The module to check.
+
+        Returns:
+            bool: True if the module has parameters, False otherwise.
+        """
         for _ in module.parameters(recurse=False):
             return True
         return False
 
     def nearest_attention_parent(self, module: nn.Module, attention_parents: List[nn.Module]) -> Optional[nn.Module]:
+        """
+        Find the nearest attention parent module for a given module.
+
+        Args:
+            module (nn.Module): The module to analyze.
+            attention_parents (List[nn.Module]): List of attention parent modules.
+
+        Returns:
+            Optional[nn.Module]: The nearest attention parent module, or `None` if not found.
+        """
         current = self.id2parent.get(id(module), None)
         attention_ids = {id(a) for a in attention_parents}
         while current is not None:
@@ -486,6 +687,12 @@ class ModelParallelTracer:
         return None
 
     def ensure_dummy_input(self) -> torch.Tensor:
+        """
+        Ensure a dummy input tensor for the model.
+
+        Returns:
+            torch.Tensor: A dummy input tensor.
+        """
         try:
             device = next(self.model.parameters()).device
         except StopIteration:
@@ -493,6 +700,12 @@ class ModelParallelTracer:
         return torch.randint(0, 10, (1, 4), dtype=torch.long, device=device)
 
     def record_call_order(self, inputs: torch.Tensor) -> Dict[int, int]:
+        """
+        Record the call order of modules during a forward pass.
+
+        Args:
+            inputs (torch.Tensor): The input tensor for the model.
+        """
         first_seen: Dict[int, int] = {}
         counter = {"i": 0}
         handles = []
@@ -519,6 +732,12 @@ class ModelParallelTracer:
         return first_seen
 
     def detect_main_module_list(self, min_len: int) -> Tuple[Optional[str], List[Tuple[int, int]]]:
+        """
+        Detect the main module list based on call order.
+
+        Args:
+            min_len (int): Minimum length of the module list to consider.
+        """
         best_name: Optional[str] = None
         best_ordered: List[Tuple[int, int]] = []
         best_count = -1
@@ -542,6 +761,17 @@ class ModelParallelTracer:
     def collect_called_outside(
         self, module_ids_set: set[int], module_list: nn.Module, root_id: int
     ) -> List[Tuple[int, int]]:
+        """
+        Collect modules called outside the main module list.
+
+        Args:
+            module_ids_set (set[int]): Set of module ids in the main module list.
+            module_list (nn.Module): The main module list.
+            root_id (int): The id of the root model module.
+
+        Returns:
+            List[Tuple[int, int]]: List of tuples of (module id, call order index).
+        """
         ancestors = self.collect_ancestors(list(module_ids_set))
         ancestors.add(id(module_list))
         ancestors.add(root_id)
@@ -566,6 +796,18 @@ class ModelParallelTracer:
         first_index: int,
         last_index: int,
     ) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+        """
+        Split outside called modules into pre and post lists.
+
+        Args:
+            outside (List[Tuple[int, int]]): List of tuples of (module id, call order index).
+            first_index (int): The first index of the main module list.
+            last_index (int): The last index of the main module list.
+
+        Returns:
+            Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
+                Two lists of tuples of (module id, call order index) for pre and post modules.
+        """
         topmost_ids = self.topmost([module_id for module_id, _ in outside])
         topmost_with_index = [(module_id, self.call_order_map[module_id]) for module_id in topmost_ids]
         topmost_with_index.sort(key=lambda t: t[1])
@@ -582,6 +824,16 @@ class ModelParallelTracer:
     def collect_pre_modules(
         self, pre_candidates: List[Tuple[int, int]]
     ) -> Tuple[Optional[nn.Module], List[nn.Module]]:
+        """
+        Collect embedding and pre modules from pre candidates.
+
+        Args:
+            pre_candidates (List[Tuple[int, int]]): List of tuples of (module id, call order index).
+
+        Returns:
+            Tuple[Optional[nn.Module], List[nn.Module]]:
+                The embedding module (if any) and a list of pre modules.
+        """
         embedding: Optional[nn.Module] = None
         pre_module_list: List[nn.Module] = []
         for module_id, _ in pre_candidates:
@@ -595,6 +847,16 @@ class ModelParallelTracer:
     def collect_post_modules(
         self, post_candidates: List[Tuple[int, int]]
     ) -> Tuple[Optional[nn.Module], List[nn.Module]]:
+        """
+        Collect head and post modules from post candidates.
+
+        Args:
+            post_candidates (List[Tuple[int, int]]): List of tuples of (module id, call order index).
+
+        Returns:
+            Tuple[Optional[nn.Module], List[nn.Module]]:
+                The head module (if any) and a list of post modules.
+        """
         head_by_order: Optional[nn.Module] = None
         post_module_list: List[nn.Module] = []
         if post_candidates:
@@ -611,6 +873,15 @@ class ModelParallelTracer:
         return head_by_order, post_module_list
 
     def collect_ancestors(self, module_ids: List[int]) -> set[int]:
+        """
+        Collect all ancestor module ids for a list of module ids.
+
+        Args:
+            module_ids (List[int]): List of module ids to analyze.
+
+        Returns:
+            set[int]: A set of ancestor module ids.
+        """
         ancestors: set[int] = set()
         for module_id in module_ids:
             parent = self.id2parent.get(module_id)
@@ -623,6 +894,16 @@ class ModelParallelTracer:
         return ancestors
 
     def is_descendant(self, module_id: int, ancestor_ids: set[int]) -> bool:
+        """
+        Check if a module is a descendant of any module in a set of ancestor ids.
+
+        Args:
+            module_id (int): The module id to check.
+            ancestor_ids (set[int]): Set of ancestor module ids.
+
+        Returns:
+            bool: True if the module is a descendant of any ancestor, False otherwise.
+        """
         current = module_id
         while current is not None:
             if current in ancestor_ids:
@@ -631,6 +912,15 @@ class ModelParallelTracer:
         return False
 
     def topmost(self, candidates: List[int]) -> List[int]:
+        """
+        Get the topmost modules from a list of candidate module ids.
+
+        Args:
+            candidates (List[int]): List of candidate module ids.
+
+        Returns:
+            List[int]: List of topmost module ids.
+        """
         candidate_set = set(candidates)
         topmost: List[int] = []
         for module_id in candidates:
@@ -646,6 +936,12 @@ class ModelParallelTracer:
         return topmost
 
     def get_input_embedding(self) -> Optional[nn.Module]:
+        """
+        Get the input embedding module of the model.
+
+        Returns:
+            Optional[nn.Module]: The input embedding module, or `None` if not found.
+        """
         try:
             if hasattr(self.model, "get_input_embeddings"):
                 return self.model.get_input_embeddings()
@@ -654,6 +950,12 @@ class ModelParallelTracer:
         return None
 
     def get_output_embedding(self) -> Optional[nn.Module]:
+        """
+        Get the output embedding module of the model.
+
+        Returns:
+            Optional[nn.Module]: The output embedding module, or `None` if not found.
+        """
         try:
             if hasattr(self.model, "get_output_embeddings"):
                 return self.model.get_output_embeddings()

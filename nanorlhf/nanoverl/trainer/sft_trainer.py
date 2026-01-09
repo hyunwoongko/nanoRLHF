@@ -14,6 +14,12 @@ from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_sft
 
 
 class SFTTrainer(BaseTrainer):
+    """
+    Trainer for supervised fine-tuning (SFT) of language models.
+
+    Args:
+        config (str): Path to the SFT configuration yaml file.
+    """
     def __init__(self, config: str):
         super().__init__(config=SFTConfig.from_yaml(config))
         self.train_dataloader = self.load_dataloader(self.config, split="train")
@@ -32,6 +38,13 @@ class SFTTrainer(BaseTrainer):
         self.sft_worker_group = SFTWorkerGroup(self.config, sft_workers)
 
     def load_dataloader(self, config, split: str):
+        """
+        Load the dataloader for the specified split.
+
+        Args:
+            config: Configuration object containing data settings.
+            split (str): The data split to load ('train' or 'valid').
+        """
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
         file_path = config.data.train_data if split == "train" else config.data.valid_data
         dataset = SFTDataset(file_path)
@@ -52,6 +65,12 @@ class SFTTrainer(BaseTrainer):
         )
 
     def init_ray(self, config):
+        """
+        Initialize the nanoray distributed framework.
+
+        Args:
+            config: Configuration object containing model settings.
+        """
         nodes = {}
         if self.global_world_size > 1:
             for rank in range(self.global_world_size):
@@ -80,12 +99,24 @@ class SFTTrainer(BaseTrainer):
             )
 
     def create_placement_groups(self):
+        """
+        Create placement groups for the SFT workers.
+        """
         return nanoray.create_placement_group(
             bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.global_world_size)],
             strategy=PlacementStrategy.SPREAD,
         )
 
     def spawn_workers(self, config):
+        """
+        Spawn SFT workers across the placement groups.
+
+        Args:
+            config: Configuration object containing model and training settings.
+
+        Returns:
+            List of remote SFT worker instances.
+        """
         object_refs = []
         for global_rank in range(self.global_world_size):
             object_ref = SFTWorker.options(placement_group=self.pg, bundle_index=global_rank).remote(
@@ -95,6 +126,9 @@ class SFTTrainer(BaseTrainer):
         return nanoray.get(object_refs)
 
     def fit(self):
+        """
+        Start the supervised fine-tuning training loop.
+        """
         for epoch in range(self.config.training.total_epochs):
             pbar = tqdm(
                 self.train_dataloader,

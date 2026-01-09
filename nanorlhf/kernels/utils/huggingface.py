@@ -18,6 +18,16 @@ from nanorlhf.kernels.api import (
 
 
 def maybe_repeat_kv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+    """
+    Repeat key and value tensors to match the number of query heads if necessary.
+    This is helpful when the model uses group query attention, where the number of
+    key/value heads is less than the number of query heads.
+
+    Args:
+        q (torch.Tensor): Query tensor of shape (..., num_heads_q, head_dim).
+        k (torch.Tensor): Key tensor of shape (..., num_heads_kv, head_dim).
+        v (torch.Tensor): Value tensor of shape (..., num_heads_kv, head_dim).
+    """
     if k.shape[-2] == q.shape[-2]:
         return q, k, v
 
@@ -37,6 +47,16 @@ def maybe_repeat_kv(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
 
 
 def get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[torch.dtype]:
+    """
+    Determine the target dtype for Flash Attention based on the query tensor and module configuration.
+
+    Args:
+        query (torch.Tensor): The query tensor.
+        module (torch.nn.Module): The attention module.
+
+    Returns:
+        Optional[torch.dtype]: The target dtype for Flash Attention, or None if not applicable.
+    """
     if query.dtype == torch.float32:
         if torch.is_autocast_enabled():
             return (
@@ -52,6 +72,15 @@ def get_target_dtype(query: torch.Tensor, module: torch.nn.Module) -> Optional[t
 
 
 def convert_4d_mask_to_2d_mask(attention_mask):
+    """
+    Convert a 4D attention mask to a 2D padding mask.
+
+    Args:
+        attention_mask (torch.Tensor): The attention mask, either 4D or 2D.
+
+    Returns:
+        Optional[torch.Tensor]: The converted 2D padding mask, or None if no mask is provided.
+    """
     padding_mask = None
     if attention_mask is not None:
         if attention_mask.dim() == 4:
@@ -83,6 +112,41 @@ def _flash_attention_forward(
     target_dtype: Optional[torch.dtype] = None,
     **kwargs,
 ):
+    """
+    Core Flash Attention forward function handling various input formats.
+
+    Args:
+        query_states (torch.Tensor): Query tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        key_states (torch.Tensor): Key tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        value_states (torch.Tensor): Value tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        attention_mask (Optional[torch.Tensor]): Attention mask tensor.
+        query_length (int): Length of the query sequence.
+        is_causal (bool): Whether to apply causal masking.
+        softmax_scale (Optional[float]): Scaling factor for softmax.
+        position_ids (Optional[torch.Tensor]): Position IDs for packed sequences.
+        cu_seq_lens_q (Optional[torch.LongTensor]): Cumulative sequence lengths for queries.
+        cu_seq_lens_k (Optional[torch.LongTensor]): Cumulative sequence lengths for keys.
+        max_length_q (Optional[int]): Maximum length for queries.
+        max_length_k (Optional[int]): Maximum length for keys.
+        target_dtype (Optional[torch.dtype]): Target dtype for Flash Attention.
+
+    Returns:
+        torch.Tensor: Output tensor after applying Flash Attention.
+
+    Discussion:
+        Q. Why are there multiple input formats supported?
+            Flash Attention can handle different input formats to accommodate various model architectures
+            and data representations. This includes support for packed sequences with position IDs,
+            variable-length sequences with cumulative lengths, and standard fixed-length sequences
+            with attention masks. By supporting these formats, Flash Attention can be seamlessly integrated
+            into a wide range of transformer models.
+
+        Q. How does the function decide which Flash Attention implementation to use?
+            The function checks the presence of position IDs and cumulative sequence lengths to determine
+            if the input represents packed sequences or variable-length sequences. If either of these
+            conditions is met, it uses the variable-length Flash Attention implementation. Otherwise,
+            it defaults to the fixed-length implementation.
+    """
     query_states, key_states, value_states = fa_peft_integration_check(
         query_states, key_states, value_states, target_dtype
     )
@@ -167,6 +231,21 @@ def flash_attention_forward(
     is_causal: Optional[bool] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
+    """
+    Forward function for Flash Attention compatible with Hugging Face transformers.
+
+    Args:
+        module (torch.nn.Module): The attention module.
+        query (torch.Tensor): Query tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        key (torch.Tensor): Key tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        value (torch.Tensor): Value tensor of shape (batch_size, seq_len, num_heads, head_dim).
+        attention_mask (Optional[torch.Tensor]): Attention mask tensor.
+        scaling (Optional[float]): Scaling factor for softmax.
+        is_causal (Optional[bool]): Whether to apply causal masking.
+
+    Returns:
+        tuple[torch.Tensor, None]: Output tensor after applying Flash Attention and None for compatibility.
+    """
     if kwargs.get("output_attentions", False):
         logger.warning_once(
             "nanoRLHF `flash_attention` does not support `output_attentions=True`."

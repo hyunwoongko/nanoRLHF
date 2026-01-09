@@ -18,6 +18,15 @@ class Zero3ParamMeta:
 
 
 class ZeroGradReducer(ABC):
+    """
+    The abstract class for ZeRO gradient reducer.
+
+    Args:
+        model (nn.Module): The model whose gradients are to be reduced.
+        mpu (MPU): The model parallel unit.
+        zero_stage (int): The ZeRO optimization stage (0, 1, 2, or 3).
+        accum_steps (int): The number of accumulation steps for gradient reduction.
+    """
 
     def __init__(self, model: nn.Module, mpu: MPU, zero_stage: int, accum_steps: int = 1):
         assert zero_stage in (0, 1, 2, 3), f"Unsupported ZeRO stage: {zero_stage}"
@@ -39,6 +48,9 @@ class ZeroGradReducer(ABC):
         raise NotImplementedError
 
     def attach_model_hooks(self):
+        """
+        Attach hooks to the model for gradient reduction after backward pass.
+        """
         def on_model_fwd_pre(_m: nn.Module, _in: Sequence[Any]):
             self._fwd_started = True
 
@@ -55,6 +67,15 @@ class ZeroGradReducer(ABC):
 
 
 class ZeroGradReducerStage0(ZeroGradReducer):
+    """
+    ZeRO stage-0 gradient reducer with bucketed all-reduce.
+    It is same with DDP.
+
+    Args:
+        model (nn.Module): The model whose gradients are to be reduced.
+        mpu (MPU): The model parallel unit.
+        accum_steps (int): The number of accumulation steps for gradient reduction.
+    """
 
     DEFAULT_BUCKET_SIZE_BYTES = 25 * 1024 * 1024
 
@@ -119,6 +140,9 @@ class ZeroGradReducerStage0(ZeroGradReducer):
         self._buckets = buckets
 
     def model_bwd_post_hook(self):
+        """
+        Perform bucketed all-reduce of gradients after backward pass.
+        """
         if self.world_size == 1:
             return
         if not self._buckets:
@@ -149,18 +173,27 @@ class ZeroGradReducerStage0(ZeroGradReducer):
 
 
 class ZeroGradReducerStage1(ZeroGradReducerStage0):
+    """
+    ZeRO stage-1 gradient reducer, same as stage-0.
+    """
 
     def __init__(self, model: nn.Module, mpu: MPU, accum_steps: int = 1):
         super().__init__(model, mpu, accum_steps=accum_steps)
 
 
 class ZeroGradReducerStage2(ZeroGradReducer):
+    """
+    ZeRO stage-2 gradient reducer with parameter-wise reduction.
+    """
 
     def __init__(self, model: nn.Module, mpu: MPU, accum_steps: int = 1):
         super().__init__(model, mpu, zero_stage=2, accum_steps=accum_steps)
         self.owners: List[int] = [idx % self.world_size for idx, _ in enumerate(self.params)]
 
     def model_bwd_post_hook(self):
+        """
+        Perform parameter-wise gradient reduction after backward pass.
+        """
         if self.world_size == 1:
             return
 
@@ -179,6 +212,18 @@ class ZeroGradReducerStage2(ZeroGradReducer):
 
 
 class ZeroGradReducerStage3(ZeroGradReducer):
+    """
+    ZeRO stage-3 gradient reducer with flat parameter shard reduction.
+
+    Args:
+        model (nn.Module): The model whose gradients are to be reduced.
+        mpu (MPU): The model parallel unit.
+        flat_param (nn.Parameter): The flat parameter tensor containing all model parameters.
+        param_metas (List[Zero3ParamMeta]): The metadata for each parameter in the model.
+        total_numel (int): The total number of elements in all parameters.
+        shard_size (int): The size of the parameter shard for each data parallel rank.
+        accum_steps (int): The number of accumulation steps for gradient reduction.
+    """
 
     def __init__(
         self,
@@ -263,6 +308,22 @@ def build_zero_grad_reducer(
     total_numel: Optional[int] = None,
     shard_size: Optional[int] = None,
 ) -> ZeroGradReducer:
+    """
+    Build a ZeRO gradient reducer based on the specified ZeRO stage.
+
+    Args:
+        model (nn.Module): The model whose gradients are to be reduced.
+        mpu (MPU): The model parallel unit.
+        zero_stage (int): The ZeRO optimization stage (0, 1, 2, or 3).
+        accum_steps (int): The number of accumulation steps for gradient reduction.
+        flat_param (nn.Parameter, optional): The flat parameter tensor for stage-3.
+        param_metas (List[Zero3ParamMeta], optional): The metadata for each parameter for stage-3.
+        total_numel (int, optional): The total number of elements in all parameters for stage-3.
+        shard_size (int, optional): The size of the parameter shard for each data parallel rank for stage-3.
+
+    Returns:
+        ZeroGradReducer: The constructed ZeRO gradient reducer.
+    """
     if zero_stage == 0:
         return ZeroGradReducerStage0(model, mpu, accum_steps=accum_steps)
     if zero_stage == 1:

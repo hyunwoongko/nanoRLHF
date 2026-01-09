@@ -14,6 +14,15 @@ from nanorlhf.nanovllm.utils.config import NanoVLLMConfig, MIN_TEMPERATURE
 
 @nanoray.remote
 class ModelRunner:
+    """
+    ModelRunner is responsible for running inference on a language model
+    using tensor parallelism and CUDA graph optimizations.
+
+    Args:
+        config (NanoVLLMConfig): Configuration for the model runner.
+        rank (int): The global rank of this model runner.
+        actor_config: Optional configuration for actor models.
+    """
     def __init__(self, config: NanoVLLMConfig, rank: int, actor_config=None):
         self.config = config
         self.rank = rank
@@ -81,6 +90,15 @@ class ModelRunner:
             self.capture_decode_cudagraphs()
 
     def make_graph_batch_size_list(self, max_batch_size: int) -> List[int]:
+        """
+        Create a list of batch size buckets for CUDA graph decoding.
+
+        Args:
+            max_batch_size (int): The maximum batch size for decoding.
+
+        Returns:
+            List[int]: A list of batch size buckets.
+        """
         batch_sizes = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
         output = [b for b in batch_sizes if b <= max_batch_size]
         if not output:
@@ -90,15 +108,35 @@ class ModelRunner:
         return output
 
     def select_batch_size_bucket(self, batch_size: int) -> int:
+        """
+        Select the appropriate batch size bucket for CUDA graph decoding.
+
+        Args:
+            batch_size (int): The current batch size.
+
+        Returns:
+            int: The selected batch size bucket.
+        """
         for batch_size_cap in self.graph_batch_size_list:
             if batch_size <= batch_size_cap:
                 return batch_size_cap
         return self.graph_batch_size_list[-1]
 
     def get_config(self):
+        """
+        Get the configuration of the model runner.
+        This is because there's no way to pass attribute of remote actor in nanoray.
+
+        Returns:
+            NanoVLLMConfig: The configuration of the model runner.
+        """
         return self.config
 
     def warmup_model(self):
+        """
+        Warm up the model by running a dummy forward pass to initialize caches.
+        This helps to allocate necessary resources and optimize performance for subsequent inference calls.
+        """
         dtype = getattr(self.config.hf_config, "torch_dtype", torch.float16)
         for module in self.model.modules():
             if "Attention" in module.__class__.__qualname__:
@@ -116,6 +154,9 @@ class ModelRunner:
         torch.cuda.empty_cache()
 
     def allocate_kv_cache(self):
+        """
+        Allocate the key-value cache for the model based on available GPU memory.
+        """
         config = self.config
         hf_config = config.hf_config
         free, total = torch.cuda.mem_get_info()
@@ -159,6 +200,15 @@ class ModelRunner:
                     break
 
     def prepare_block_tables(self, sequences):
+        """
+        Prepare block tables for a list of sequences.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+
+        Returns:
+            torch.Tensor or None: The prepared block tables tensor or None if any sequence has an empty block table.
+        """
         if any(len(sequence.block_table) == 0 for sequence in sequences):
             return None
         max_len = max(len(sequence.block_table) for sequence in sequences)
@@ -167,6 +217,15 @@ class ModelRunner:
         return block_tables
 
     def prepare_prefill(self, sequences):
+        """
+        Prepare inputs for prefill step.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: input_ids, position_ids, attention_mask
+        """
         lengths = [len(s) for s in sequences]
         seq_lens_q = []
         seq_lens_k = []
@@ -236,6 +295,15 @@ class ModelRunner:
         return input_ids, position_ids, attention_mask
 
     def prepare_decode(self, sequences):
+        """
+        Prepare inputs for decode step.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor, torch.Tensor]: input_ids, position_ids, attention_mask
+        """
         input_ids, position_ids = [], []
         slot_mapping, context_lens = [], []
 
@@ -258,6 +326,16 @@ class ModelRunner:
         return input_ids, position_ids, attention_mask
 
     def sample(self, logits, sequences):
+        """
+        Sample token ids from logits based on the sampling parameters of each sequence.
+
+        Args:
+            logits (torch.Tensor): The logits tensor of shape (batch_size, vocab_size).
+            sequences (List[Sequence]): The list of sequences with sampling parameters.
+
+        Returns:
+            torch.Tensor: The sampled token ids of shape (batch_size,).
+        """
         device = logits.device
         temperatures = torch.tensor(
             [seq.temperature for seq in sequences],
@@ -307,6 +385,9 @@ class ModelRunner:
 
     @torch.inference_mode()
     def capture_decode_cudagraphs(self):
+        """
+        Capture CUDA graphs for decode step with different batch size buckets.
+        """
         hf_config = self.config.hf_config
         vocab_size = int(getattr(hf_config, "vocab_size"))
         torch.cuda.synchronize()
@@ -362,6 +443,13 @@ class ModelRunner:
             torch.cuda.synchronize()
 
     def fill_decode_graph_vars(self, sequences: List[Sequence], bs_cap: int):
+        """
+        Fill the CUDA graph variables for decode step.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+            bs_cap (int): The batch size cap for the CUDA graph.
+        """
         graph_vars = self.graph_vars[bs_cap]
         batch_size = len(sequences)
 
@@ -403,6 +491,15 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run_decode_with_graph(self, sequences: List[Sequence]) -> torch.Tensor:
+        """
+        Run decode step using CUDA graph for a list of sequences.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+
+        Returns:
+            torch.Tensor: The logits for sampling of shape (batch_size, vocab_size).
+        """
         batch_size = len(sequences)
         batch_size_cap = self.select_batch_size_bucket(batch_size)
         actual_batch_size = self.fill_decode_graph_vars(sequences, batch_size_cap)
@@ -416,6 +513,16 @@ class ModelRunner:
 
     @torch.inference_mode()
     def run(self, sequences, is_prefill):
+        """
+        Run the model for a list of sequences, either in prefill or decode mode.
+
+        Args:
+            sequences (List[Sequence]): The list of sequences.
+            is_prefill (bool): Whether to run in prefill mode.
+
+        Returns:
+            List[int]: The generated token IDs.
+        """
         try:
             if is_prefill:
                 # prefill

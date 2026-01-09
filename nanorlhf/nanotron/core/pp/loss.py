@@ -19,6 +19,14 @@ class MicroLossTensor(torch.Tensor):
 
     @classmethod
     def set_arguments(cls, mpu: MPU, buffer: PipelineBuffer, buffer_id: int):
+        """
+        Set class-level arguments for MicroLossTensor.
+
+        Args:
+            mpu (MPU): The model parallel unit.
+            buffer (PipelineBuffer): The pipeline buffer.
+            buffer_id (int): The buffer slot index.
+        """
         cls.p2p = P2P(mpu, mode=ParallelMode.PIPELINE)
         cls.buffer = buffer
         cls.buffer_id = buffer_id
@@ -33,6 +41,9 @@ class MicroLossTensor(torch.Tensor):
         cls.is_last_stage = cls.stage_id == cls.num_stages - 1
 
     def backward(self, **kwargs):
+        """
+        Custom backward method for MicroLossTensor to handle pipeline parallelism.
+        """
         if not self.is_last_stage:
             self.exec_recv_gradient(self.buffer_id)
 
@@ -42,6 +53,12 @@ class MicroLossTensor(torch.Tensor):
             self.exec_send_gradient(self.buffer_id)
 
     def exec_send_gradient(self, buffer_id: int):
+        """
+        Send gradients to the previous pipeline stage.
+
+        Args:
+            buffer_id (int): The buffer slot index.
+        """
         assert len(self.buffer.inputs[buffer_id]) > 0, (
             "Input buffer of pipeline parallelized model is empty. "
             "You must call `loss.backward()` inside of micro batch for loop context."
@@ -58,9 +75,22 @@ class MicroLossTensor(torch.Tensor):
         self.free_buffers("grads", buffer_id)
 
     def exec_recv_gradient(self, buffer_id: int):
+        """
+        Receive gradients from the next pipeline stage.
+
+        Args:
+            buffer_id (int): The buffer slot index.
+        """
         self.buffer.grads[buffer_id] = self.p2p.recv(self.next_stage)
 
     def exec_backward_pass(self, buffer_id: int, **kwargs):
+        """
+        Execute the backward pass using the received gradients.
+
+        Args:
+            buffer_id (int): The buffer slot index.
+            **kwargs: Additional arguments for the backward function.
+        """
         if self.is_last_stage:
             super().backward(**kwargs)
             return

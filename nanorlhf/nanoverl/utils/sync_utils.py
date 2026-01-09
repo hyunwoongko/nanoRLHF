@@ -7,6 +7,15 @@ from nanorlhf.nanotron.utils.wrapping import tag_module
 
 
 class ParameterSyncManager:
+    """
+    Manages synchronization of model parameters between actor and rollout models
+
+    Args:
+        model: The model whose parameters are to be synchronized.
+        mpu: Model Parallel Unit managing parallelism.
+        config: Configuration object containing parallelism settings.
+        is_rollout (bool): Flag indicating if the current model is a rollout model.
+    """
     def __init__(self, model, mpu, config, is_rollout: bool):
         self.model = model
         self.mpu = mpu
@@ -35,11 +44,20 @@ class ParameterSyncManager:
         self.stage_objects = self.scan_stage_objects()
 
     def get_mp_plan(self):
+        """
+        Retrieve the model parallelization plan from the model.
+
+        Returns:
+            The model parallelization plan.
+        """
         if hasattr(self.model, "__nanotron__mp_plan__"):
             return self.model.__nanotron__mp_plan__
         raise RuntimeError("mp_plan not found. parallelize() must have been called.")
 
     def build_actor_rollout_sync_groups(self):
+        """
+        Build synchronization groups between actor and rollout models.
+        """
         for tensor_parallel_rank in range(self.actor_tensor_parallel_size):
             for pipeline_parallel_rank in range(self.actor_pipeline_parallel_size):
                 actor_sender_global_rank = (
@@ -55,12 +73,25 @@ class ParameterSyncManager:
                 self.sync_groups[(tensor_parallel_rank, pipeline_parallel_rank)] = dist.new_group(ranks=ranks)
 
     def get_tag_rank(self, tensor: torch.Tensor, mode: ParallelMode):
+        """
+        Get the parallel rank tag for a tensor.
+
+        Args:
+            tensor (torch.Tensor): The tensor to check.
+            mode (ParallelMode): The parallel mode to check for.
+
+        Returns:
+            The parallel rank tag for the tensor in the specified mode.
+        """
         mapping = getattr(tensor, "__nanotron_parallel__", None)
         if not mapping:
             return 0
         return mapping.get(mode, 0)
 
     def tag_pipeline_ranks_for_rollout(self):
+        """
+        Tag modules with pipeline parallel ranks for rollout model.
+        """
         mp_plan = self.get_mp_plan()
         module_list = mp_plan.main_module_list
 
@@ -83,6 +114,15 @@ class ParameterSyncManager:
                     tag_module(module, ParallelMode.PIPELINE, pipeline_parallel_rank)
 
     def modules_for_pipeline_stage(self, pipeline_parallel_rank: int):
+        """
+        Get the list of modules for a specific pipeline stage.
+
+        Args:
+            pipeline_parallel_rank (int): The pipeline parallel rank of the stage.
+
+        Returns:
+            List of modules for the specified pipeline stage.
+        """
         mp_plan = self.get_mp_plan()
         module_list = mp_plan.main_module_list
         partitions = partition_layers(self.actor_pipeline_parallel_size, len(module_list))
@@ -105,6 +145,12 @@ class ParameterSyncManager:
         return modules
 
     def scan_stage_objects(self):
+        """
+        Scan and collect tensors for each pipeline stage and tensor parallel rank.
+
+        Returns:
+            A dictionary mapping (tensor_parallel_rank, pipeline_parallel_rank) to a list of tensors.
+        """
         stage_objects = {
             (tensor_parallel_rank, pipeline_parallel_rank): []
             for tensor_parallel_rank in range(self.actor_tensor_parallel_size)
@@ -145,11 +191,25 @@ class ParameterSyncManager:
         return stage_objects
 
     def broadcast(self, tensor: torch.Tensor, src: int, group: dist.ProcessGroup):
+        """
+        Broadcast a tensor from the source rank to all other ranks in the group.
+
+        Args:
+            tensor (torch.Tensor): The tensor to broadcast.
+            src (int): The source rank from which to broadcast.
+            group (dist.ProcessGroup): The process group for broadcasting.
+        """
         # make a tensor bfloat16 because policy model is fp32 and rollout model is bfloat16.
         temp = tensor.bfloat16().contiguous()
         dist.broadcast(temp, src=src, group=group)
 
     def sync_actor_to_rollout(self):
+        """
+        Synchronize parameters from the actor model to the rollout model.
+
+        Returns:
+            A dictionary containing synchronization statistics.
+        """
         num_tensors_synced = 0
 
         if self.is_rollout:

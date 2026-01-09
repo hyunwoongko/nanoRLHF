@@ -2,6 +2,20 @@ import torch
 
 
 def load_kv_from_cache_prefill(context, cu_seq_lens_k, key_cache, value_cache, num_heads, dim):
+    """
+    Load keys and values from cache during prefill phase.
+
+    Args:
+        context: An object containing block_tables.
+        cu_seq_lens_k (torch.Tensor): Cumulative sequence lengths for keys.
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        num_heads (int): Number of attention heads.
+        dim (int): Dimension of each head.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Loaded keys and values tensors.
+    """
     assert context.block_tables is not None
 
     device = key_cache.device
@@ -62,7 +76,21 @@ def load_kv_from_cache_prefill(context, cu_seq_lens_k, key_cache, value_cache, n
     return k_used, v_used
 
 
+# deprecated, kept for reference
 def load_kv_from_cache_decode(context, key_cache, value_cache, num_heads, dim):
+    """
+    Load keys and values from cache during decode phase.
+
+    Args:
+        context: An object containing block_tables and context_lens.
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        num_heads (int): Number of attention heads.
+        dim (int): Dimension of each head.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: Loaded keys and values tensors.
+    """
     assert context.block_tables is not None
     assert context.context_lens is not None
 

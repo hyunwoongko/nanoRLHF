@@ -7,6 +7,16 @@ from nanorlhf.nanosets import load_dataset
 
 
 def filter_by_length(sample, max_prompt_length):
+    """
+    Filters samples based on the maximum prompt length.
+
+    Args:
+        sample (dict): A sample from the dataset containing 'input_ids'.
+        max_prompt_length (int): The maximum allowed length for 'input_ids'.
+
+    Returns:
+        bool: True if the sample's 'input_ids' length is less than or equal to max_prompt_length, False otherwise.
+    """
     if sample is None:
         return False
     input_ids = sample["input_ids"]

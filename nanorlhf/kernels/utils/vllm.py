@@ -40,6 +40,9 @@ def set_context(
     max_seq_len_q=None,
     max_seq_len_k=None,
 ):
+    """
+    Set the global context for flash attention operations.
+    """
     global GLOBAL_CONTEXT
     GLOBAL_CONTEXT = Context(
         is_prefill=is_prefill,
@@ -59,6 +62,16 @@ def reset_context():
 
 
 def store_cache(context, key_states_not_repeated, value_states_not_repeated, key_cache, value_cache):
+    """
+    Store key and value states into the KV cache based on the current context.
+
+    Args:
+        context (Context): The current context containing slot mapping and prefill status.
+        key_states_not_repeated (torch.Tensor): New key states of shape (bsz, length, kv_heads, dim).
+        value_states_not_repeated (torch.Tensor): New value states of shape (bsz, length, kv_heads, dim).
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+    """
     if context.is_prefill:
         assert context.cu_seq_lens_q is not None
         store_kv_to_cache(
@@ -91,6 +104,23 @@ def compute_prefill(
     scaling,
     is_causal,
 ):
+    """
+    Compute the flash attention output during the prefill phase.
+
+    Args:
+        context (Context): The current context containing sequence lengths and block tables.
+        query_states (torch.Tensor): Query states of shape (1, q_len, num_heads, dim).
+        key_states (torch.Tensor): Key states of shape (1, k_len, num_heads, dim).
+        value_states (torch.Tensor): Value states of shape (1, k_len, num_heads, dim).
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        dim (int): Dimension of each head.
+        scaling (float): Scaling factor for attention scores.
+        is_causal (bool): Whether to apply causal masking.
+
+    Returns:
+        Tuple[torch.Tensor, None]: Output tensor of shape (1, q_len, num_heads, dim) and None.
+    """
     assert context.cu_seq_lens_q is not None and context.cu_seq_lens_k is not None
     assert context.max_seq_len_q is not None and context.max_seq_len_k is not None
 
@@ -153,6 +183,24 @@ def compute_decode(
     scaling,
     is_causal,
 ):
+    """
+    Compute the flash attention output during the decode phase.
+
+    Args:
+        context (Context): The current context containing block tables and context lengths.
+        query_states (torch.Tensor): Query states of shape (batch_size, seq_len_q, num_heads, dim).
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        batch_size (int): Batch size.
+        seq_len_q (int): Sequence length of queries.
+        num_heads (int): Number of attention heads.
+        dim (int): Dimension of each head.
+        scaling (float): Scaling factor for attention scores.
+        is_causal (bool): Whether to apply causal masking.
+
+    Returns:
+        Tuple[torch.Tensor, None]: Output tensor of shape (batch_size, seq_len_q, num_heads, dim) and None.
+    """
     assert seq_len_q == 1
     assert context.block_tables is not None
     assert context.context_lens is not None
@@ -197,6 +245,23 @@ def paged_flash_attention_forward(
     is_causal: Optional[bool] = None,
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
+    """
+    Flash attention forward function with KV cache support for NanoVLLM.
+
+    Args:
+        module (torch.nn.Module): The attention module.
+        query (torch.Tensor): Query tensor of shape (batch_size, num_heads, seq_len_q, dim).
+        key (torch.Tensor): Key tensor of shape (batch_size, num_heads, seq_len_k, dim).
+        value (torch.Tensor): Value tensor of shape (batch_size, num_heads, seq_len_k, dim).
+        attention_mask (Optional[torch.Tensor]): Attention mask tensor.
+        scaling (Optional[float]): Scaling factor for attention scores.
+        position_ids (Optional[torch.Tensor]): Position IDs tensor.
+        is_causal (Optional[bool]): Whether to apply causal masking.
+        **kwargs: Additional keyword arguments.
+
+    Returns:
+        Tuple[torch.Tensor, None]: Output tensor and None.
+    """
     context = get_context()
     if kwargs.get("output_attentions", False):
         logger.warning_once(

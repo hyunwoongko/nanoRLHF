@@ -22,6 +22,15 @@ logger = logging.getLogger(__name__)
 
 
 def is_causal_lm(model):
+    """
+    Check if the model is a causal language model.
+
+    Args:
+        model (nn.Module): The Hugging Face model to check.
+
+    Returns:
+        bool: True if the model is a causal language model, False otherwise.
+    """
     class_name = model.__class__.__qualname__
     return class_name.endswith("CausalLM") or class_name.endswith("LMHeadModel")
 
@@ -32,6 +41,18 @@ def run_layer(
     input_param_name: str,
     gradient_checkpointing_enable: bool,
 ) -> torch.Tensor:
+    """
+    Run a model layer with optional gradient checkpointing.
+
+    Args:
+        layer (nn.Module): The model layer to run.
+        inputs (Dict[str, Any]): The input arguments for the layer.
+        input_param_name (str): The name of the primary input parameter.
+        gradient_checkpointing_enable (bool): Whether to enable gradient checkpointing.
+
+    Returns:
+        torch.Tensor: The output of the layer.
+    """
     hidden_states = inputs[input_param_name]
     if gradient_checkpointing_enable:
 
@@ -49,6 +70,15 @@ def run_layer(
 
 
 def get_output_type(model: nn.Module):
+    """
+    Get the appropriate output type for the given Hugging Face model.
+
+    Args:
+        model (nn.Module): The Hugging Face model.
+
+    Returns:
+        Type[ModelOutput]: The corresponding ModelOutput subclass.
+    """
     class_name = model.__class__.__qualname__
     if is_causal_lm(model):
         return CausalLMOutputWithPast
@@ -69,6 +99,20 @@ def post_process_hf_model(
     payload: Dict[str, Any],
     tp_mode: ParallelMode = ParallelMode.TENSOR,
 ) -> ModelOutput:
+    """
+    Post-process the outputs of a Hugging Face model based on the presence of labels
+    and the model type.
+
+    Args:
+        model (nn.Module): The Hugging Face model.
+        mpu (MPU): The model parallel unit for distributed operations.
+        logits (torch.Tensor): The logits output from the model.
+        payload (Dict[str, Any]): The input payload containing user inputs and other info.
+        tp_mode (ParallelMode): The tensor parallel mode for distributed operations.
+
+    Returns:
+        ModelOutput: The processed model output.
+    """
     input_ids = payload["user_inputs"].get("input_ids", None)
     labels = payload["user_inputs"].get("labels", None)
     last_hidden_state = payload.get("hidden_states", None)

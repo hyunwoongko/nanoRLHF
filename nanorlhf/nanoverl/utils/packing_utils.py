@@ -4,6 +4,16 @@ import torch
 
 
 def packed_collate_fn_for_sft(batch):
+    """
+    Collate function to pack a batch of sequences for supervised fine-tuning (SFT).
+
+    Args:
+        batch (List[Dict[str, Any]]): A list of samples, each containing 'input_ids' and 'loss_mask'.
+
+    Returns:
+        Dict[str, torch.Tensor]: A dictionary containing packed 'input_ids', 'labels', 'position_ids',
+                                 'cu_seq_lens_q', and 'cu_seq_lens_k'.
+    """
     input_ids = []
     loss_mask = []
     position_ids = []
@@ -36,6 +46,16 @@ def packed_collate_fn_for_sft(batch):
 
 
 def packed_collate_fn_for_rl(batch):
+    """
+    Collate function to pack a batch of sequences for reinforcement learning (RL).
+
+    Args:
+        batch (List[Dict[str, Any]]): A list of samples, each containing 'input_ids' and 'reward_model'.
+
+    Returns:
+        Dict[str, torch.Tensor]: A dictionary containing packed 'input_ids', 'position_ids',
+                                 'cu_seq_lens_q', 'cu_seq_lens_k', and 'reward_model'.
+    """
     input_ids = []
     position_ids = []
     cu_seq_lens = [0]
@@ -64,6 +84,19 @@ def split_packed_batch(
     num_chunks: int,
     cu_seq_lens: Optional[torch.Tensor] = None,
 ):
+    """
+    Split a packed batch into micro-batches for data parallelism and gradient accumulation.
+
+    Args:
+        batch (Dict[str, Any]): The packed batch containing various tensors.
+        chunk_idx (int): The index of the current chunk (micro-batch).
+        num_chunks (int): The total number of chunks to split the batch into.
+        cu_seq_lens (Optional[torch.Tensor]): Cumulative sequence lengths tensor.
+            If None, it will be computed from position_ids.
+
+    Returns:
+        Dict[str, Any]: The local batch corresponding to the specified chunk index.
+    """
     if cu_seq_lens is None:
         if "position_ids" not in batch:
             raise KeyError("batch must contain 'position_ids' to split as micro batches")
@@ -116,6 +149,17 @@ def split_packed_batch(
 
 
 def unpack_sequences(input_ids, position_ids, reward_model_list):
+    """
+    Unpack a packed sequence into individual sequences.
+
+    Args:
+        input_ids (torch.Tensor): The packed input IDs tensor of shape (1, total_length).
+        position_ids (torch.Tensor): The packed position IDs tensor of shape (1, total_length).
+        reward_model_list (Optional[List[Any]]): A list of reward models corresponding to each sequence.
+
+    Returns:
+        List[Dict[str, Any]]: A list of unpacked sequences, each represented as a dictionary.
+    """
     assert input_ids.size(0) == 1
     starts = (position_ids[0] == 0).nonzero(as_tuple=False).flatten().tolist()
     ends = starts[1:] + [input_ids.numel()]
@@ -139,6 +183,16 @@ def unpack_sequences(input_ids, position_ids, reward_model_list):
 
 
 def repack_sequences(unpacked_sequences):
+    """
+    Repack individual sequences into a single packed sequence.
+
+    Args:
+        unpacked_sequences (List[Dict[str, Any]]): A list of unpacked sequences, each represented as a dictionary.
+
+    Returns:
+        Dict[str, torch.Tensor]: A dictionary containing packed 'input_ids', 'position_ids',
+                                 and optionally 'loss_mask' and 'reward_model'.
+    """
     packed_input_ids = []
     packed_position_ids = []
     packed_loss_mask = []

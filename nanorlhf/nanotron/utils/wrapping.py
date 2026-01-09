@@ -15,6 +15,14 @@ from nanorlhf.nanotron.utils.tracing import ModelParallelTracer
 
 
 def tag_param(t: torch.Tensor, mode: ParallelMode, local_rank: int):
+    """
+    Tag a tensor with its parallel mode and local rank.
+
+    Args:
+        t (torch.Tensor): The tensor to tag.
+        mode (ParallelMode): The parallel mode to tag the tensor with.
+        local_rank (int): The local rank within the parallel group.
+    """
     if t is None:
         return
     mapping = dict(getattr(t, "__nanotron_parallel__", {}))
@@ -23,6 +31,14 @@ def tag_param(t: torch.Tensor, mode: ParallelMode, local_rank: int):
 
 
 def tag_module(module: nn.Module, mode: ParallelMode, local_rank: int):
+    """
+    Tag all parameters and buffers of a module with its parallel mode and local rank.
+
+    Args:
+        module (nn.Module): The module to tag.
+        mode (ParallelMode): The parallel mode to tag the module with.
+        local_rank (int): The local rank within the parallel group.
+    """
     for p in module.parameters(recurse=False):
         tag_param(p, mode, local_rank)
     for b in module.buffers(recurse=False):
@@ -30,11 +46,26 @@ def tag_module(module: nn.Module, mode: ParallelMode, local_rank: int):
 
 
 def tag_modules(modules: List[nn.Module], mode: ParallelMode, local_rank: int):
+    """
+    Tag a list of modules with their parallel mode and local rank.
+
+    Args:
+        modules (List[nn.Module]): The list of modules to tag.
+        mode (ParallelMode): The parallel mode to tag the modules with.
+        local_rank (int): The local rank within the parallel group.
+    """
     for module in modules:
         tag_module(module, mode, local_rank)
 
 
 def restrict_embedding_resizing(model):
+    """
+    Restrict resizing of token embeddings after model parallelization.
+
+    Args:
+        model (nn.Module): The model to restrict embedding resizing for.
+    """
+
     def resize_token_embeddings(new_num_tokens: Optional[int] = None, **kwargs):
         raise RuntimeError(
             "you can't use ``model.resize_token_embeddings()`` after calling `model.parallelize()`\n"
@@ -47,6 +78,13 @@ def restrict_embedding_resizing(model):
 
 
 def restore_embedding_resizing(model):
+    """
+    Restore the original resizing of token embeddings after deparallelization.
+
+    Args:
+        model (nn.Module): The model to restore embedding resizing for.
+    """
+
     if hasattr(model, "__nanotron_resize_token_embeddings__"):
         setattr(model, "resize_token_embeddings", model.__nanotron_resize_token_embeddings__)
         delattr(model, "__nanotron_resize_token_embeddings__")
@@ -54,6 +92,14 @@ def restore_embedding_resizing(model):
 
 
 class ParallelizationWrapper(ABC):
+    """
+    The abstract class for parallelization wrappers.
+
+    Args:
+        model (nn.Module): The model to be parallelized.
+        mpu (MPU): The model parallel unit for distributed operations.
+        parallelization_priority (int): The priority of this wrapper during parallelization.
+    """
     def __init__(self, model: nn.Module, mpu: MPU, parallelization_priority: int):
         self.mpu = mpu
         self.model = model
@@ -79,6 +125,9 @@ class ParallelizationWrapper(ABC):
         raise NotImplementedError
 
     def parallelize(self):
+        """
+        Parallelize the model by applying the wrapper and moving parameters/buffers to appropriate devices.
+        """
         if hasattr(self.model, "__nanotron_wrappers__"):
             # sorting wrappers to fix parallelization order
             # higher priority wrappers are applied first
@@ -170,6 +219,9 @@ class ParallelizationWrapper(ABC):
         restrict_embedding_resizing(self.model)
 
     def deparallelize(self):
+        """
+        Deparallelize the model by removing wrappers and moving parameters/buffers back to CPU.
+        """
         if hasattr(self.model, "__nanotron_wrappers__"):
             self.model.__nanotron_wrappers__ = OrderedDict(
                 sorted(
@@ -209,6 +261,13 @@ class ParallelizationWrapper(ABC):
 
 
 class NoParallelWrapper(ParallelizationWrapper):
+    """
+    A no-op parallelization wrapper that does not modify the model.
+
+    Args:
+        model (nn.Module): The model to be parallelized.
+        mpu (MPU): The model parallel unit for distributed operations.
+    """
     def __init__(self, model: nn.Module, mpu: MPU):
         super().__init__(model, mpu, parallelization_priority=99)
 
@@ -223,6 +282,15 @@ class NoParallelWrapper(ParallelizationWrapper):
 
 
 def register_wrapper(module: nn.Module, mode: ParallelMode, wrapper: ParallelizationWrapper):
+    """
+    Register a parallelization wrapper to a module.
+
+    Args:
+        module (nn.Module): The module to register the wrapper to.
+        mode (ParallelMode): The parallel mode associated with the wrapper.
+        wrapper (ParallelizationWrapper): The parallelization wrapper to register.
+    """
+
     if hasattr(module, "__nanotron_wrappers__"):
         module.__nanotron_wrappers__[mode] = wrapper
     else:

@@ -11,22 +11,6 @@ This project aims to perform RLHF training from scratch, implementing almost all
 ## Motivation
 A few years ago, it still felt possible for an individual to meaningfully train and contribute a model, and I was fortunate to do so with [Polyglot-Ko](https://github.com/EleutherAI/polyglot), the first commercially usable open-source Korean LLM, despite not owning a single GPU, thanks to support from the open-source community. But as the field entered an era where large companies train [massive](https://huggingface.co/deepseek-ai/DeepSeek-R1) [models](https://huggingface.co/Qwen/Qwen3-235B-A22B) at unimaginable scale and release them freely, individual efforts began to feel small by comparison. The same shift happened in libraries. [Open sources](https://github.com/volcengine/verl) [maintained](https://github.com/NVIDIA/Megatron-LM) [by full-time corporate teams](https://github.com/langchain-ai/langchain) quickly outpaced what a single person could sustainably build or maintain. I have always loved developing my own open source, but in this reality, facing clear limits in time and capital, I found myself stepping back from it for a while. Eventually, I reframed the question, not how to compete, but how a single person could still create something genuinely useful. Inspired by projects like [Karpathy’s nano series](https://github.com/karpathy/nanoGPT), I returned to building small, clear, educational implementations, focused not on scale or efficiency, but on understanding and teaching. Even without massive resources, I still believe that individuals can create meaningful work that influences and helps others.
 
-## Takeaways
-The goal of this repository is not just to run RLHF once, but to understand the moving parts well enough to build and modify them yourself.
-
-By the end, you should be able to:
-- Understand how datasets become efficient columnar storage.
-- Reason about distributed execution and why large training pipelines require it.
-- Understand parallelism and how training is scaled across GPUs.
-- Recognize why certain kernels matter and what they optimize.
-- Understand what makes inference fast in practice.
-- Tie everything together into a RLHF training workflow.
-
-Practical benefits:
-- Debug issues in real-world frameworks with less guesswork.
-- Make targeted custom changes with more confidence.
-- Analyze performance drops and locate the real bottleneck faster.
-
 ## Requirements and Limitations
 I worked on this project using a single server with 8 * H200 GPUs.
 It should also run well on A100 80GB GPUs, but to fully experiment with all features including 3D parallelism, a server with at least 8 GPUs is required.
@@ -51,12 +35,11 @@ cd nanoRLHF
 pip install -e .
 ```
 
-## Courses
-I recommend approaching this repository as a learn-by-building course: first install the library, then study the modules below in order from top to bottom, running each module’s example as you go. Once you’ve worked through all modules, finish by running the full RLHF training pipeline end-to-end.
+## Modules
+I recommend approaching this repository as a learn-by-building: first install the library, then study the modules, running each module’s example as you go. Once you’ve worked through all modules, finish by running the full RLHF training pipeline end-to-end.
 
 ### 1) `nanosets`: Arrow-like Zero-copy Dataset Library
 - Implementation: [nanosets](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets)
-- Textbook: [English](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs/en),  [Korean](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanosets/docs/ko)
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanosets.py)
 - References: [arrow](https://github.com/apache/arrow), [datasets](https://github.com/huggingface/datasets)
 
@@ -65,7 +48,6 @@ The goal is to understand how columnar data formats work without copying and how
 
 ### 2) `nanoray`: Distributed Computing Engine
 - Implementation: [nanoray](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray)
-- Textbook: [English](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray/docs/en),  [Korean](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoray/docs/ko)
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanoray.py)
 - References: [ray](https://github.com/ray-project/ray)
 
@@ -74,7 +56,6 @@ The goal is to understand how distributed execution works and how to build a sim
 
 ### 3) `nanotron`: 3D Parallelism Engine
 - Implementation: [nanotron](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanotron)
-- Textbook: In progress
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanotron.py)
 - References: [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [oslo](https://github.com/EleutherAI/oslo)
 
@@ -83,7 +64,6 @@ The goal is to understand why and how large models are parallelized across many 
 
 ### 4) `kernels`: Set of Triton Kernels
 - Implementation: [kernels](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/kernels)
-- Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/kernels.py)
 - References: [flash-attention](https://github.com/Dao-AILab/flash-attention/), [trident](https://github.com/kakaobrain/trident)
 
@@ -92,7 +72,6 @@ The goal is to understand what optimizations matter in practice and how they are
 
 ### 5) `nanovllm`: High Performance Inference Engine
 - Implementation: [nanovllm](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanovllm)
-- Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/examples/nanovllm.py)
 - References: [vllm](https://github.com/vllm-project/vllm), [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)
 
@@ -102,7 +81,6 @@ Thanks to the excellent [nano-vllm](https://github.com/GeeeekExplorer/nano-vllm)
 
 ### 6) `nanoverl`: RLHF Training Framework
 - Implementation: [nanoverl](https://github.com/hyunwoongko/nanoRLHF/tree/main/nanorlhf/nanoverl)
-- Textbook: Not started
 - Example: [available](https://github.com/hyunwoongko/nanoRLHF/tree/main/scripts)
 - References: [verl](https://github.com/volcengine/verl), [OpenRLHF](https://github.com/OpenRLHF/OpenRLHF)
 

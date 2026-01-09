@@ -9,6 +9,13 @@ from nanorlhf.nanotron.distributed.mpu import MPU
 
 
 class ZeroOptimizer:
+    """
+    Base class for ZeRO optimizers.
+
+    Args:
+        base_optim (torch.optim.Optimizer): The base optimizer to be wrapped.
+        mpu (MPU): The model parallel unit.
+    """
 
     def __init__(self, base_optim: torch.optim.Optimizer, mpu: MPU):
         self.base = base_optim
@@ -38,6 +45,13 @@ class ZeroOptimizer:
 
 
 def build_owner_map_from_model(model: Optional[nn.Module], world_size: int):
+    """
+    Build a mapping from parameter IDs to their owning ranks based on the model.
+
+    Args:
+        model (Optional[nn.Module]): The model to build the mapping from.
+        world_size (int): The total number of data parallel ranks.
+    """
     if model is None:
         return {}
     mapping = {}
@@ -51,6 +65,14 @@ def build_owner_map_from_model(model: Optional[nn.Module], world_size: int):
 
 
 class ZeroOptimizerStage1(ZeroOptimizer):
+    """
+    ZeRO Stage 1 optimizer implementation.
+
+    Args:
+        base_optim (torch.optim.Optimizer): The base optimizer to be wrapped.
+        mpu (MPU): The model parallel unit.
+        model (Optional[nn.Module]): The model to determine parameter ownership.
+    """
 
     def __init__(self, base_optim: torch.optim.Optimizer, mpu: MPU, model: Optional[nn.Module] = None):
         super().__init__(base_optim, mpu)
@@ -72,12 +94,22 @@ class ZeroOptimizerStage1(ZeroOptimizer):
                         self._owned_param_ids.add(id(param))
 
     def _get_owner_group_rank(self, p: nn.Parameter, local_idx: int) -> int:
+        """
+        Get the owner rank of a parameter within the data parallel group.
+
+        Args:
+            p (nn.Parameter): The parameter to check.
+            local_idx (int): The local index of the parameter in its group.
+        """
         if self._param_owner:
             return self._param_owner.get(id(p), local_idx % self.world_size)
         return local_idx % self.world_size
 
     @torch.no_grad()
     def step(self, closure=None):
+        """
+        Perform a ZeRO Stage 1 optimization step.
+        """
         masked_params: List[nn.Parameter] = []
         masked_grads: List[torch.Tensor] = []
 
@@ -107,12 +139,27 @@ class ZeroOptimizerStage1(ZeroOptimizer):
 
 
 class ZeroOptimizerStage2(ZeroOptimizerStage1):
+    """
+    ZeRO Stage 2 optimizer implementation.
+    This class currently behaves the same as ZeRO Stage 1.
+    """
 
     def __init__(self, base_optim: torch.optim.Optimizer, mpu: MPU, model: Optional[nn.Module] = None):
         super().__init__(base_optim, mpu, model=model)
 
 
 class ZeroOptimizerStage3(ZeroOptimizer):
+    """
+    ZeRO Stage 3 optimizer implementation.
+
+    Args:
+        base_optim (torch.optim.Optimizer): The base optimizer to be wrapped.
+        mpu (MPU): The model parallel unit.
+        param_metas: Metadata for the parameters to be sharded.
+        total_numel (int): Total number of elements across all parameters.
+        device (torch.device): Device to store the sharded parameters.
+        dtype (torch.dtype): Data type for the sharded parameters.
+    """
 
     def __init__(
         self,

@@ -11,6 +11,13 @@ from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 @nanoray.remote
 class RolloutWorker:
+    """
+    Rollout worker that handles model inference for rollouts.
+
+    Args:
+        config: Configuration object containing rollout and actor settings.
+        rank (int): The rank of the worker in a distributed setup.
+    """
     def __init__(self, config, rank: int):
         self.config = config
         self.rank = rank
@@ -36,11 +43,27 @@ class RolloutWorker:
         )
 
     def get_rollout_config(self):
+        """
+        Get the rollout configuration.
+
+        Returns:
+            NanoVLLMConfig: The rollout configuration.
+        """
         return self.runner.get_config()
 
     @torch.inference_mode()
     def generate(self, sequences: List[Sequence], is_prefill: bool) -> List[int]:
+        """
+        Generate tokens for the given sequences.
+
+        Args:
+            sequences (List[Sequence]): List of sequences to generate tokens for.
+            is_prefill (bool): Whether the generation is in prefill mode.
+        """
         return self.runner.run(sequences, is_prefill)
 
     def sync_actor_to_rollout(self):
+        """
+        Synchronize parameters from the actor model to the rollout model.
+        """
         return self.parameter_sync_manager.sync_actor_to_rollout()

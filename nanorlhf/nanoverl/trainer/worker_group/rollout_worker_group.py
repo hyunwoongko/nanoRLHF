@@ -10,6 +10,13 @@ from nanorlhf.nanovllm.core.sequence import Sequence
 
 
 class RolloutWorkerGroup:
+    """
+    Worker group that manages rollout workers for model inference during rollouts.
+
+    Args:
+        config: Configuration object containing rollout settings.
+        workers: List of remote worker instances.
+    """
 
     def __init__(self, config, workers):
         self.config = config
@@ -28,6 +35,12 @@ class RolloutWorkerGroup:
         )
 
     def create_schedulers(self):
+        """
+        Create schedulers for each data parallel rank.
+
+        Returns:
+            List[Scheduler]: List of schedulers for each data parallel rank.
+        """
         schedulers = []
         for data_parallel_rank in range(self.data_parallel_size):
             worker = self.workers[data_parallel_rank][0]
@@ -36,6 +49,17 @@ class RolloutWorkerGroup:
         return schedulers
 
     def generate(self, batches):
+        """
+        Generate tokens for the given batches.
+
+        Args:
+            batches: The input batches for generation.
+
+        Returns:
+            total_tokens_repacked: The repacked total tokens batch.
+            prompt_tokens_unpacked: The unpacked prompt tokens.
+            response_tokens_unpacked: The unpacked response tokens.
+        """
         # full batches -> data parallel batches
         data_parallel_batches = self.split_data_parallel_batch(batches)
 
@@ -65,9 +89,24 @@ class RolloutWorkerGroup:
         return total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked
 
     def async_generate(self, batches):
+        """
+        Asynchronously generate tokens for the given batches.
+
+        Args:
+            batches: The input batches for generation.
+        """
         return self.async_executor.submit(self.generate, batches)
 
     def split_data_parallel_batch(self, batch):
+        """
+        Split the input batch into data parallel chunks.
+
+        Args:
+            batch: The input batch to be split.
+
+        Returns:
+            List[dict]: List of data parallel chunks.
+        """
         assert "cu_seq_lens_q" in batch
         cu_seq_lens_q = batch["cu_seq_lens_q"]
         data_parallel_chunks = []
@@ -87,6 +126,16 @@ class RolloutWorkerGroup:
         return data_parallel_chunks
 
     def add_request(self, data_parallel_rank, unpacked_prompts):
+        """
+        Add generation requests to the scheduler for the given data parallel rank.
+
+        Args:
+            data_parallel_rank: The data parallel rank.
+            unpacked_prompts: The unpacked prompts for the given rank.
+
+        Returns:
+            List[Sequence]: List of sequences added to the scheduler.
+        """
         scheduler = self.schedulers[data_parallel_rank]
         sequences = []
         for prompt in unpacked_prompts:
@@ -99,6 +148,9 @@ class RolloutWorkerGroup:
         return sequences
 
     def run_model(self):
+        """
+        Run the model until all sequences are finished.
+        """
         while not all(scheduler.is_finished() for scheduler in self.schedulers):
             launches = []  # (dp_rank, sequences, object_refs)
             flat_object_refs = []
@@ -131,6 +183,18 @@ class RolloutWorkerGroup:
                 scheduler.postprocess(sequences, results[0])
 
     def repack_outputs(self, data_parallel_unpacked_batches, data_parallel_outputs):
+        """
+        Repack the outputs from data parallel unpacked batches and outputs.
+
+        Args:
+            data_parallel_unpacked_batches: The unpacked batches per data parallel rank.
+            data_parallel_outputs: The outputs per data parallel rank.
+
+        Returns:
+            total_tokens_repacked: The repacked total tokens batch.
+            prompt_tokens_unpacked: The unpacked prompt tokens.
+            response_tokens_unpacked: The unpacked response tokens.
+        """
         total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked = [], [], []
         for unpacked_batch_per_rank, outputs_per_rank in zip(data_parallel_unpacked_batches, data_parallel_outputs):
             for prompt, output in zip(unpacked_batch_per_rank, outputs_per_rank):
@@ -158,6 +222,12 @@ class RolloutWorkerGroup:
         return total_tokens_repacked, prompt_tokens_unpacked, response_tokens_unpacked
 
     def sync_actor_to_rollout(self):
+        """
+        Synchronize parameters from the actor model to the rollout model across all workers.
+
+        Returns:
+            List of object references for the synchronization tasks.
+        """
         object_refs = []
         for data_parallel_rank in range(self.data_parallel_size):
             for tensor_parallel_rank in range(self.tensor_parallel_size):

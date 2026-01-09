@@ -5,6 +5,15 @@ import xxhash
 
 
 class Block:
+    """
+    A block is a fixed-size chunk of token IDs.
+
+    Attributes:
+        block_id (int): The unique identifier for the block.
+        ref_count (int): The number of sequences currently using this block.
+        hash (int): The hash value of the block's token IDs.
+        token_ids (list): The list of token IDs in the block.
+    """
     def __init__(self, block_id):
         self.block_id = block_id
         self.ref_count = 0
@@ -13,16 +22,36 @@ class Block:
         self.token_ids = []
 
     def update(self, hash, token_ids):
+        """
+        Update the block's hash and token IDs.
+
+        Args:
+            hash (int): The new hash value for the block.
+            token_ids (list): The new list of token IDs for the block.
+        """
         self.hash = hash
         self.token_ids = token_ids
 
     def reset(self):
+        """
+        Reset the block's attributes to default values.
+        """
         self.ref_count = 1
         self.hash = -1
         self.token_ids = []
 
 
 class BlockManager:
+    """
+    BlockManager manages a pool of blocks for sequences.
+
+    Attributes:
+        block_size (int): The size of each block.
+        blocks (list): The list of Block objects.
+        hash_to_block_id (dict): A mapping from block hash to block ID.
+        free_block_ids (deque): A deque of free block IDs.
+        used_block_ids (set): A set of used block IDs.
+    """
     def __init__(self, num_blocks, block_size):
         self.block_size = block_size
         self.blocks = [Block(i) for i in range(num_blocks)]
@@ -32,6 +61,16 @@ class BlockManager:
 
     @classmethod
     def compute_hash(cls, token_ids, prefix=-1):
+        """
+        Compute the hash value for a block of token IDs.
+
+        Args:
+            token_ids (list): The list of token IDs in the block.
+            prefix (int): The hash of the previous block, or -1 if none.
+
+        Returns:
+            int: The computed hash value.
+        """
         # (previous blocks + current block) is hashed for uniqueness.
         h = xxhash.xxh64()
         if prefix != -1:
@@ -40,6 +79,15 @@ class BlockManager:
         return h.intdigest()
 
     def allocate_block(self, block_id):
+        """
+        Allocate a block by block_id.
+
+        Args:
+            block_id (int): The ID of the block to allocate.
+
+        Returns:
+            Block: The allocated Block object.
+        """
         # get a block by block_id from free_block_ids, move it to used_block_ids,
         # and set its ref_count to 1 (this means it is being used by one sequence)
         block = self.blocks[block_id]
@@ -50,6 +98,12 @@ class BlockManager:
         return self.blocks[block_id]
 
     def deallocate_block(self, block_id):
+        """
+        Deallocate a block by block_id.
+
+        Args:
+            block_id (int): The ID of the block to deallocate.
+        """
         # release a block by block_id which is no longer used by any sequence,
         # so we remove it from used_block_ids and add it back to free_block_ids again.
         assert self.blocks[block_id].ref_count == 0
@@ -57,9 +111,21 @@ class BlockManager:
         self.free_block_ids.append(block_id)
 
     def can_allocate(self, sequence):
+        """
+        Check if there are enough free blocks to allocate for the sequence.
+
+        Args:
+            sequence (Sequence): The sequence to allocate blocks for.
+        """
         return len(self.free_block_ids) >= sequence.num_blocks
 
     def allocate(self, sequence):
+        """
+        Allocate blocks for the given sequence.
+
+        Args:
+            sequence (Sequence): The sequence to allocate blocks for.
+        """
         assert not sequence.block_table
         h = -1
         cache_miss = False
@@ -105,6 +171,12 @@ class BlockManager:
             sequence.block_table.append(block_id)
 
     def deallocate(self, sequence):
+        """
+        Deallocate all blocks used by the given sequence.
+
+        Args:
+            sequence (Sequence): The sequence to deallocate blocks for.
+        """
         for block_id in reversed(sequence.block_table):
             block = self.blocks[block_id]
             assert block.ref_count > 0
@@ -115,14 +187,29 @@ class BlockManager:
         sequence.num_cached_tokens = 0
         sequence.block_table.clear()
 
-    def can_append(self, seq):
-        num_tokens_in_last_block = len(seq) % self.block_size
+    def can_append(self, sequence):
+        """
+        Check if there is enough space to append a token to the sequence.
+
+        Args:
+            sequence (Sequence): The sequence to check.
+
+        Returns:
+            bool: True if there is enough space to append, False otherwise.
+        """
+        num_tokens_in_last_block = len(sequence) % self.block_size
         need_new_block = 1 if num_tokens_in_last_block == 1 else 0
         # if num_tokens_in_last_block is 1, this means we just started a new block,
         # so we need to ensure that there is at least one free block available.
         return len(self.free_block_ids) >= need_new_block
 
     def may_append(self, sequence):
+        """
+        Update the block manager state after appending a token to the sequence.
+
+        Args:
+            sequence (Sequence): The sequence that has been appended to.
+        """
         block_table = sequence.block_table
         last_block = self.blocks[block_table[-1]]
         num_tokens_in_last_block = len(sequence) % self.block_size

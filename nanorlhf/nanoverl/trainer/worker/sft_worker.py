@@ -1,8 +1,3 @@
-"""
-python3 -m nanorlhf.nanoverl.worker.sft_worker \
-    --config ./configs/train_sft.yaml
-"""
-
 import torch
 import torch.distributed as dist
 from torch.optim import AdamW
@@ -17,6 +12,16 @@ from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 
 def initialize_model(config, rank):
+    """
+    Initialize the model, optimizer, and parallelism wrappers.
+
+    Args:
+        config: Configuration object containing model and training settings.
+        rank (int): The rank of the current process in a distributed setup.
+
+    Returns:
+        model: The initialized and parallelized model.
+    """
     model = AutoModelForCausalLM.from_pretrained(
         config.model.model_name_or_path,
         trust_remote_code=True,
@@ -85,6 +90,14 @@ def initialize_model(config, rank):
 
 @nanoray.remote
 class SFTWorker:
+    """
+    Supervised Fine-Tuning (SFT) worker that handles model training and evaluation.
+
+    Args:
+        config: Configuration object containing model and training settings.
+        rank (int): The rank of the worker in a distributed setup.
+        total_steps (int): Total number of training steps for scheduler initialization.
+    """
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
@@ -96,6 +109,16 @@ class SFTWorker:
         self.scheduler = get_scheduler(config, self.optimizer, total_steps)
 
     def step(self, input_batch: dict, train: bool):
+        """
+        Perform a single training or evaluation step.
+
+        Args:
+            input_batch (dict): A batch of input data.
+            train (bool): Whether to perform a training step (True) or evaluation step (False).
+
+        Returns:
+            dict: A dictionary containing the loss and learning rate.
+        """
         batch = {}
         for k, v in input_batch.items():
             batch[k] = v.cuda(non_blocking=True) if torch.is_tensor(v) else v
@@ -158,6 +181,12 @@ class SFTWorker:
         return {"loss": float(final_loss), "lr": float(lr)}
 
     def save_parallelized(self, save_dir: str):
+        """
+        Save the parallelized model and tokenizer to the specified directory.
+
+        Args:
+            save_dir (str): Directory to save the model and tokenizer.
+        """
         self.model.save_parallelized(save_dir)
         if self.mpu is None or self.mpu.get_global_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)

@@ -13,6 +13,12 @@ logger = getLogger(__name__)
 
 
 def get_any_param_dtype(model: nn.Module) -> torch.dtype:
+    """
+    Get the data type of any parameter in the model.
+
+    Args:
+        model (nn.Module): The model to inspect.
+    """
     for param in model.parameters():
         if param is not None:
             return param.dtype
@@ -20,6 +26,13 @@ def get_any_param_dtype(model: nn.Module) -> torch.dtype:
 
 
 def load_zero3_flat_param(model, state_dict):
+    """
+    Load ZeRO-3 flat parameter from state_dict into the model.
+
+    Args:
+        model (nn.Module): The model to load parameters into.
+        state_dict (Dict[str, Any]): The state dictionary containing the flat parameter.
+    """
     reducer = getattr(model, "__nanotron_zero_reducer__", None)
     if reducer is None:
         raise RuntimeError("from_parallelized(ZeRO-3): __nanotron_zero_reducer__ not found on model")
@@ -53,6 +66,17 @@ def save_parallelized_with_merge(
     state_dict: Optional[Dict[str, Any]] = None,
     save_function: Callable = torch.save,
 ):
+    """
+    Save a parallelized model by merging its parameters into a single state dictionary.
+
+    Args:
+        self (nn.Module): The model to save.
+        mpu (MPU): The model parallel unit for managing process groups.
+        save_directory (Union[str, os.PathLike]): The directory to save the model.
+        save_config (bool): Whether to save the model configuration.
+        state_dict (Optional[Dict[str, Any]]): The state dictionary to save. If None, use the model's state_dict().
+        save_function (Callable): The function to use for saving the state dictionary.
+    """
     from nanorlhf.nanotron.api import TensorParallel, PipelineParallel, DataParallel
 
     tp_rank = mpu.get_local_rank(ParallelMode.TENSOR)
@@ -135,6 +159,17 @@ def save_parallelized_without_merge(
     state_dict: Optional[Dict[str, Any]] = None,
     save_function: Callable = torch.save,
 ):
+    """
+    Save a parallelized model without merging its parameters.
+
+    Args:
+        self (nn.Module): The model to save.
+        mpu (MPU): The model parallel unit for managing process groups.
+        save_directory (Union[str, os.PathLike]): The directory to save the model.
+        save_config (bool): Whether to save the model configuration.
+        state_dict (Optional[Dict[str, Any]]): The state dictionary to save. If None, use the model's state_dict().
+        save_function (Callable): The function to use for saving the state dictionary.
+    """
     tp_rank = mpu.get_local_rank(ParallelMode.TENSOR)
     pp_rank = mpu.get_local_rank(ParallelMode.PIPELINE)
     dp_rank = mpu.get_local_rank(ParallelMode.DATA)
@@ -183,6 +218,12 @@ def save_parallelized_without_merge(
 
 
 def raise_if_rollout_model(self):
+    """
+    Raise an error if the model is a rollout model.
+
+    Args:
+        self (nn.Module): The model to check.
+    """
     found_rollout_group = False
     if hasattr(self, "__nanotron_wrappers__"):
         for parallel_mode, wrapper in self.__nanotron_wrappers__.items():
@@ -206,6 +247,18 @@ def save_parallelized(
     save_function: Callable = torch.save,
     merge_checkpoints: bool = False,
 ):
+    """
+    Save a parallelized model.
+
+    Args:
+        self (nn.Module): The model to save.
+        mpu (MPU): The model parallel unit for managing process groups.
+        save_directory (Union[str, os.PathLike]): The directory to save the model.
+        save_config (bool): Whether to save the model configuration.
+        state_dict (Optional[Dict[str, Any]]): The state dictionary to save. If None, use the model's state_dict().
+        save_function (Callable): The function to use for saving the state dictionary.
+        merge_checkpoints (bool): Whether to merge checkpoints before saving.
+    """
     with torch.no_grad():
         if os.path.isfile(save_directory):
             raise ValueError(f"Provided path ({save_directory}) should be a directory, not a file")
@@ -244,6 +297,15 @@ def from_parallelized(
     load_directory: Union[str, os.PathLike],
     strict: bool = False,
 ):
+    """
+    Load a parallelized model from a checkpoint.
+
+    Args:
+        self (nn.Module): The model to load parameters into.
+        mpu (MPU): The model parallel unit for managing process groups.
+        load_directory (Union[str, os.PathLike]): The directory to load the model from.
+        strict (bool): Whether to strictly enforce that the keys in state_dict match the model's keys.
+    """
     with torch.no_grad():
         if not os.path.isdir(load_directory):
             raise NotADirectoryError(f"directory named {load_directory} is not valid.")

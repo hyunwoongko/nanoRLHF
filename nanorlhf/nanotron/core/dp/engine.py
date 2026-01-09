@@ -17,6 +17,15 @@ from nanorlhf.nanotron.utils.wrapping import ParallelizationWrapper, tag_module
 
 
 class DataParallelWrapper(ParallelizationWrapper):
+    """
+    Data parallel wrapper with ZeRO optimization support.
+
+    Args:
+        model (nn.Module): The model to be parallelized.
+        mpu (MPU): The model parallel unit.
+        zero_stage (int): The ZeRO optimization stage (0, 1, 2, or 3).
+        accum_steps (int): The number of accumulation steps for gradient reduction.
+    """
     def __init__(self, model: nn.Module, mpu: MPU, zero_stage: int = 0, accum_steps: int = 1):
         super().__init__(model, mpu, parallelization_priority=2)
         if zero_stage not in (0, 1, 2, 3):
@@ -35,6 +44,13 @@ class DataParallelWrapper(ParallelizationWrapper):
         return self.model_forward(*args, **kwargs)
 
     def build_zero3_param_metas(self) -> Tuple[List[Zero3ParamMeta], int]:
+        """
+        Build ZeRO stage 3 parameter metadata.
+
+        Returns:
+            Tuple[List[Zero3ParamMeta], int]:
+                A tuple containing the list of parameter metadata and the total number of elements.
+        """
         metas: List[Zero3ParamMeta] = []
         total = 0
         for p in self.model.parameters():
@@ -46,6 +62,15 @@ class DataParallelWrapper(ParallelizationWrapper):
         return metas, total
 
     def get_zero_optimizer(self, optimizer: torch.optim.Optimizer) -> Union[torch.optim.Optimizer, ZeroOptimizer]:
+        """
+        Wrap the given optimizer with ZeRO optimization according to the specified stage.
+
+        Args:
+            optimizer (torch.optim.Optimizer): The original optimizer.
+
+        Returns:
+            Union[torch.optim.Optimizer, ZeroOptimizer]: The wrapped optimizer with ZeRO support.
+        """
         pp_world_size = self.mpu.get_world_size(ParallelMode.PIPELINE)
         tp_world_size = self.mpu.get_world_size(ParallelMode.TENSOR)
 
@@ -97,6 +122,9 @@ class DataParallelWrapper(ParallelizationWrapper):
         return zero_opt
 
     def _parallelize(self):
+        """
+        Parallelize the model with ZeRO optimization support.
+        """
         dp_rank = self.mpu.get_local_rank(ParallelMode.DATA)
         dp_world_size = self.mpu.get_world_size(ParallelMode.DATA)
         tag_module(self.model, ParallelMode.DATA, dp_rank)
@@ -160,6 +188,9 @@ class DataParallelWrapper(ParallelizationWrapper):
         self.zero_reducer = reducer
 
     def _deparallelize(self):
+        """
+        Deparallelize the model and gather ZeRO stage 3 parameters if applicable.
+        """
         if self.zero_stage == 3 and self.zero3_flat_param is not None:
             dp_group = self.mpu.get_group(ParallelMode.DATA)
             dp_world = self.mpu.get_world_size(ParallelMode.DATA)

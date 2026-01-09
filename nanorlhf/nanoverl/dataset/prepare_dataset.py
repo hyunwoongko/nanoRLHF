@@ -28,6 +28,25 @@ def prepare_dataset(
     answer_key: str = "answer",
     reward_type: str = "math_rlvr",
 ):
+    """
+    Prepare dataset for SFT or RL training.
+
+    Args:
+        files (str): Comma-separated input data files (json or jsonl).
+        output_path (str): Directory to save the processed dataset.
+        tokenizer_name_or_path (str): Path to the tokenizer.
+        max_length (int): Maximum sequence length.
+        training_type (str): Type of training ('sft' or 'rl').
+        batch_size (int): Batch size for saving the dataset.
+        seed (int): Random seed for shuffling the data.
+        num_workers (int): Number of processes for data preprocessing.
+        mp_chunksize (int): Chunk size for multiprocessing.
+        messages_key (str): Key for messages in the sft data.
+        tools_key (str): Key for tools in the sft data.
+        prompt_key (str): Key for prompt in the rl data.
+        answer_key (str): Key for answer in the rl data.
+        reward_type (str): Type of reward for rl data.
+    """
     assert training_type in ["sft", "rl"], f"Unsupported training type: {training_type}"
 
     files = files.split(",")
@@ -123,6 +142,15 @@ def prepare_dataset(
 
 
 def extract_generation_prompt(tokenizer):
+    """
+    Extract the generation prompt tokens from the tokenizer.
+
+    Args:
+        tokenizer: The tokenizer object.
+
+    Returns:
+        list: The generation prompt token IDs.
+    """
     token1 = tokenizer.apply_chat_template(
         [{"role": "user", "content": ""}], add_generation_prompt=False, tokenize=True
     )
@@ -143,6 +171,23 @@ def preprocess_sft(
     max_length,
     formatting_prompt,
 ):
+    """
+    Preprocess a single sample for SFT training.
+
+    Args:
+        sample: The input sample containing messages and tools.
+        tokenizer: The tokenizer object.
+        messages_key (str): Key for messages in the sample.
+        tools_key (str): Key for tools in the sample.
+        enable_thinking_key (str): Key to enable thinking mode.
+        allow_thinking (bool): Whether to allow thinking mode.
+        generation_prompt (list): The generation prompt token IDs.
+        max_length (int): Maximum sequence length.
+        formatting_prompt (str): Formatting prompt to apply to user messages.
+
+    Returns:
+        tuple: A tuple containing input_ids and loss_mask.
+    """
     messages = sample.get(messages_key, [])
     tools = sample.get(tools_key, None)
     if not messages:
@@ -200,6 +245,22 @@ def preprocess_rl(
     max_length,
     formatting_prompt,
 ):
+    """
+    Preprocess a single sample for RL training.
+
+    Args:
+        sample: The input sample containing prompt and answer.
+        tokenizer: The tokenizer object.
+        prompt_key (str): Key for prompt in the sample.
+        answer_key (str): Key for answer in the sample.
+        enable_thinking_key (str): Key to enable thinking mode.
+        allow_thinking (bool): Whether to allow thinking mode.
+        max_length (int): Maximum sequence length.
+        formatting_prompt (str): Formatting prompt to apply to user messages.
+
+    Returns:
+        tuple: A tuple containing input_ids and answer.
+    """
     prompt = sample.get(prompt_key, "")
     answer = sample.get(answer_key, "")
     if not prompt or not answer:

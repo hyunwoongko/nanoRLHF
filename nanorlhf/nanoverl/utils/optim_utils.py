@@ -7,6 +7,16 @@ from nanorlhf.nanotron.core.dp.optim import ZeroOptimizer
 
 
 def get_optimizer_param_groups(model, weight_decay: float):
+    """
+    Create parameter groups for optimizer with and without weight decay.
+
+    Args:
+        model: The model whose parameters are to be grouped.
+        weight_decay (float): The weight decay value to be applied to applicable parameters.
+
+    Returns:
+        A list of parameter groups for the optimizer.
+    """
     no_decay_ids = set()
     for module in model.modules():
         weight = getattr(module, "weight", None)
@@ -33,6 +43,17 @@ def get_optimizer_param_groups(model, weight_decay: float):
 
 
 def get_scheduler(config, optimizer, total_steps):
+    """
+    Create a learning rate scheduler based on the configuration.
+
+    Args:
+        config: Configuration object containing optimizer settings.
+        optimizer: The optimizer for which the scheduler is to be created.
+        total_steps: Total number of training steps.
+
+    Returns:
+        A learning rate scheduler instance or None if no scheduler is specified.
+    """
     scheduler_name = config.optim.lr_scheduler
     if scheduler_name is None:
         return None

@@ -6,6 +6,12 @@ import wandb
 
 
 class BaseTrainer:
+    """
+    Base class for trainers.
+
+    Args:
+        config: Configuration object containing training settings.
+    """
     def __init__(self, config):
         self.config = config
         pprint("Training configuration:")
@@ -14,6 +20,9 @@ class BaseTrainer:
         self.maybe_init_logger()
 
     def maybe_init_logger(self):
+        """
+        Initializes the Weights & Biases (wandb) logger if enabled in the configuration.
+        """
         if not self.config.training.wandb:
             return
 
@@ -24,5 +33,11 @@ class BaseTrainer:
         )
 
     def log(self, metrics: Dict[str, Any]):
+        """
+        Logs metrics to Weights & Biases (wandb) if enabled.
+
+        Args:
+            metrics (Dict[str, Any]): A dictionary of metrics to log.
+        """
         if self.config.training.wandb:
             wandb.log(metrics, step=self.global_step)

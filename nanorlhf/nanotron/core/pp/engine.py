@@ -389,6 +389,15 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         }
 
     def run_forward_pass_remained_stages(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run the forward pass for non-first pipeline stages.
+
+        Args:
+            payload (Dict[str, Any]): The input payload containing hidden states and other information.
+
+        Returns:
+            Dict[str, Any]: The output payload after processing through the local layers.
+        """
         input_param_name = payload["input_param_name"]
         module_list_kwargs = payload.get("module_list_kwargs", {})
         layer_inputs = {input_param_name: payload["hidden_states"], **module_list_kwargs}
@@ -453,6 +462,12 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         self.buffer.outputs[buffer_id] = payload
 
     def exec_postprocess(self, buffer_id: int):
+        """
+        Post-process the outputs after the forward pass.
+
+        Args:
+            buffer_id (int): The buffer slot index to post-process.
+        """
         if self.is_last_stage:
             payload = self.buffer.outputs[buffer_id]
             last_hidden_states = payload["hidden_states"]
@@ -490,11 +505,24 @@ class PipelineParallelWrapper(ParallelizationWrapper):
         return modeling_output
 
     def convert_tensor_to_micro_loss(self, loss: torch.Tensor, micro_idx: int):
+        """
+        Convert a standard loss tensor to a MicroLossTensor for pipeline parallelism.
+
+        Args:
+            loss (torch.Tensor): The original loss tensor.
+            micro_idx (int): The micro-batch index.
+
+        Returns:
+            MicroLossTensor: The converted micro loss tensor.
+        """
         loss.__class__ = MicroLossTensor
         loss.set_arguments(self.mpu, self.buffer, micro_idx)  # noqa
         return loss
 
     def exec_all_reduce_embedding(self):
+        """
+        All-reduce gradients for tied embeddings across pipeline stages.
+        """
         for head, embedding in self.buffer.embeddings.items():
             if head.grad is not None and embedding.grad is not None:
                 dist.all_reduce(

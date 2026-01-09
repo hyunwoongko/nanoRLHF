@@ -23,6 +23,18 @@ from nanorlhf.nanovllm.utils.config import MIN_TEMPERATURE
 
 
 def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
+    """
+    Initialize the model, optimizer, and model parallel unit (MPU) based on the specified role.
+
+    Args:
+        config: Configuration object containing model and training settings.
+        rank (int): The global rank of the current process.
+        mpu (MPU, optional): pre-initialized model parallel unit. Defaults to None.
+        role (str): The role of the model to initialize. Must be one of 'actor', 'ref', or 'critic'.
+
+    Returns:
+        tuple: A tuple containing the initialized model, optimizer (or None for 'ref'), and MPU.
+    """
     assert role in ["actor", "ref", "critic"], "role must be one of ['actor', 'ref', 'critic']"
 
     if role == "critic":
@@ -109,6 +121,14 @@ def initialize_model(config, rank, mpu: MPU = None, role: str = "actor"):
 
 @nanoray.remote
 class ActorCriticRefWorker:
+    """
+    The Actor-Critic-Reference worker for PPO training.
+
+    Args:
+        config: Configuration object containing model and training settings.
+        rank (int): The global rank of the current process.
+        total_steps (int): Total number of training steps.
+    """
     def __init__(self, config, rank, total_steps: int):
         self.config = config
         self.rank = rank
@@ -134,6 +154,17 @@ class ActorCriticRefWorker:
         self.metrics = MetricsAccumulator(device=torch.device(torch.cuda.current_device()))
 
     def whiten_advantages(self, advantages, loss_mask, eps=1e-8):
+        """
+        Whitens the advantages using only the valid tokens indicated by the loss_mask.
+
+        Args:
+            advantages (torch.Tensor): The advantages tensor of shape (batch_size, sequence_length).
+            loss_mask (torch.Tensor): The loss mask tensor of shape (batch_size, sequence_length).
+            eps (float): A small value to avoid division by zero.
+
+        Returns:
+            torch.Tensor: The whitened advantages tensor of the same shape as input advantages.
+        """
         assert advantages.dim() == 2 and loss_mask.dim() == 2
         loss_mask = loss_mask.to(dtype=torch.bool, device=advantages.device)
 
@@ -150,6 +181,16 @@ class ActorCriticRefWorker:
         return whitened
 
     def compute_kl_per_token(self, actor_logprobs, ref_logprobs):
+        """
+        Compute the KL divergence per token between the actor and reference log probabilities.
+
+        Args:
+            actor_logprobs (torch.Tensor): Log probabilities from the actor model.
+            ref_logprobs (torch.Tensor): Log probabilities from the reference model.
+
+        Returns:
+            torch.Tensor: KL divergence per token.
+        """
         # This follows the k3 implementation of kl divergence approximation:
         # http://joschu.net/blog/kl-approx.html
         kl_per_token = (ref_logprobs - actor_logprobs).float()
@@ -165,6 +206,21 @@ class ActorCriticRefWorker:
         logits: Optional[torch.Tensor] = None,
         temperature: float = 1.0,
     ) -> torch.Tensor:
+        """
+        Compute the log probabilities of tokens given the model and input.
+
+        Args:
+            model: The language model to compute log probabilities.
+            input_ids (torch.Tensor): Input token IDs of shape (batch_size, sequence_length).
+            position_ids (torch.Tensor): Position IDs of shape (batch_size, sequence_length).
+            loss_mask (torch.Tensor): Loss mask of shape (batch_size, sequence_length).
+            enable_grad (bool): Whether to enable gradient computation.
+            logits (torch.Tensor, optional): Precomputed logits to use instead of model forward pass.
+            temperature (float): Temperature for scaling logits.
+
+        Returns:
+            torch.Tensor: Log probabilities of shape (batch_size, sequence_length).
+        """
         assert input_ids.dtype == torch.long
         assert input_ids.dim() == 2
         batch_size, sequence_length = input_ids.shape
@@ -212,6 +268,19 @@ class ActorCriticRefWorker:
         enable_grad: bool = False,
         logits: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        Compute the state values given the critic model and input.
+
+        Args:
+            input_ids (torch.Tensor): Input token IDs of shape (batch_size, sequence_length).
+            position_ids (torch.Tensor): Position IDs of shape (batch_size, sequence_length).
+            shift_for_actions (bool): Whether to shift the values for action alignment.
+            enable_grad (bool): Whether to enable gradient computation.
+            logits (torch.Tensor, optional): Precomputed logits to use instead of model forward pass.
+
+        Returns:
+            torch.Tensor: State values of shape (batch_size, sequence_length).
+        """
         if logits is None:
             with torch.set_grad_enabled(enable_grad):
                 outputs = self.critic(input_ids, position_ids=position_ids, attention_mask=None, use_cache=False)
@@ -236,6 +305,17 @@ class ActorCriticRefWorker:
         return values
 
     def assign_sequence_rewards_to_tokens(self, experience, reward_scores, num_sequences):
+        """
+        Assign sequence-level rewards to the last token of the response in each sequence.
+
+        Args:
+            experience (Experience): The experience object containing input data.
+            reward_scores (list): List of reward scores for each sequence.
+            num_sequences (int): Number of sequences in the batch.
+
+        Returns:
+            Experience: The updated experience object with assigned rewards.
+        """
         assert len(reward_scores) == num_sequences
         reward_scores = [float(x) for x in reward_scores]
         position_ids = experience.position_ids
@@ -257,6 +337,15 @@ class ActorCriticRefWorker:
         return experience
 
     def compute_returns_and_advantages(self, experience):
+        """
+        Compute returns and advantages using GAE-Lambda.
+
+        Args:
+            experience (Experience): The experience object containing input data.
+
+        Returns:
+            Experience: The updated experience object with computed returns and advantages.
+        """
         gamma = float(self.config.algorithm.gamma)
         lam = float(self.config.algorithm.lam)
         kl_loss_coef = float(self.config.algorithm.kl_loss_coef)
@@ -304,6 +393,16 @@ class ActorCriticRefWorker:
 
     @torch.inference_mode()
     def make_experience(self, input_batch, reward_scores):
+        """
+        Generate experience from the input batch and reward scores.
+
+        Args:
+            input_batch (dict): A batch of input data containing 'input_ids', 'position_ids', and 'loss_mask'.
+            reward_scores (list): List of reward scores for each sequence in the batch.
+
+        Returns:
+            dict: A dictionary containing rollout statistics.
+        """
         device = torch.cuda.current_device()
         input_ids = input_batch["input_ids"].to(device, non_blocking=True)
         position_ids = input_batch["position_ids"].to(device, non_blocking=True)
@@ -433,6 +532,12 @@ class ActorCriticRefWorker:
         }
 
     def step(self):
+        """
+        Perform a single PPO update step using the experience in the buffer.
+
+        Returns:
+            dict: A dictionary containing PPO training metrics.
+        """
         self.update_idx_for_rng += 1
         device = torch.cuda.current_device()
         experience = self.experience_buffer.popleft().to(device)
@@ -637,10 +742,22 @@ class ActorCriticRefWorker:
         return output
 
     def save_parallelized(self, save_dir: str):
+        """
+        Save the parallelized actor model and tokenizer to the specified directory.
+
+        Args:
+            save_dir (str): The directory to save the model and tokenizer.
+
+        Returns:
+            dict: A dictionary indicating the save status.
+        """
         self.actor.save_parallelized(save_dir)
         if self.mpu is None or self.mpu.get_global_rank() == 0:
             self.tokenizer.save_pretrained(save_dir)
         return {"ok": True, "save_dir": save_dir}
 
     def sync_actor_to_rollout(self):
+        """
+        Synchronize the actor model parameters to the rollout workers.
+        """
         return self.parameter_sync_manager.sync_actor_to_rollout()

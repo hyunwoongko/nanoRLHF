@@ -21,6 +21,37 @@ def store_kv_to_cache_kernel(
     dim: tl.constexpr,
     block_size_d: tl.constexpr,
 ):
+    """
+    A kernel to store key and value states into the KV cache based on slot mapping.
+
+    Args:
+        new_k_ptr: Pointer to the new key states tensor of shape (num_tokens, kv_heads, dim).
+        new_v_ptr: Pointer to the new value states tensor of shape (num_tokens, kv_heads, dim).
+        cache_k_ptr: Pointer to the key cache tensor of shape (num_slots, kv_heads, dim).
+        cache_v_ptr: Pointer to the value cache tensor of shape (num_slots, kv_heads, dim).
+        slot_mapping_ptr: Pointer to the slot mapping tensor of shape (num_tokens,), mapping each token to a cache slot.
+        num_tokens: Total number of new tokens.
+        stride_new_tok: Stride for tokens in the new key/value tensors.
+        stride_new_head: Stride for heads in the new key/value tensors.
+        stride_new_d: Stride for dimensions in the new key/value tensors.
+        stride_cache_slot: Stride for slots in the cache tensors.
+        stride_cache_head: Stride for heads in the cache tensors.
+        stride_cache_d: Stride for dimensions in the cache tensors.
+        kv_heads: Number of key/value heads.
+        dim: Dimension of each head.
+        block_size_d: Block size for dimension processing.
+
+    Discussion:
+        Q. What is the purpose of this kernel?
+            This kernel efficiently stores new key and value states into a pre-allocated KV cache based on a provided
+            slot mapping. Each token's new key and value vectors are written to specific slots in the cache, allowing
+            for dynamic updates of the KV cache during sequence generation or processing.
+
+        Q. How does the slot mapping work?
+            The slot mapping tensor indicates which cache slot each new token's key and value should be stored in.
+            A value of -1 in the slot mapping indicates that the corresponding token should not be stored in the cache.
+            This allows for flexible management of the KV cache, enabling reuse of slots and efficient memory usage.
+    """
     token = tl.program_id(0)
     head = tl.program_id(1)
     if token >= num_tokens or head >= kv_heads:
@@ -45,6 +76,16 @@ def store_kv_to_cache_kernel(
 
 
 def store_kv_to_cache(key_states_not_repeated, value_states_not_repeated, key_cache, value_cache, slot_mapping):
+    """
+    Store key and value states into the KV cache based on slot mapping.
+
+    Args:
+        key_states_not_repeated (torch.Tensor): New key states of shape (bsz, length, kv_heads, dim).
+        value_states_not_repeated (torch.Tensor): New value states of shape (bsz, length, kv_heads, dim).
+        key_cache (torch.Tensor): Key cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        value_cache (torch.Tensor): Value cache tensor of shape (num_blocks, block_size, kv_heads, head_dim).
+        slot_mapping (torch.Tensor): Slot mapping tensor of shape (num_tokens,), mapping each token to a cache slot.
+    """
     if not (key_cache.numel() and value_cache.numel()) or slot_mapping is None or slot_mapping.numel() == 0:
         return
 

@@ -11,10 +11,23 @@ from nanorlhf.nanotron.distributed.mpu import MPU
 
 
 class VocabParallelCrossEntropyFunction(torch.autograd.Function):
+    """
+    Vocab parallel cross-entropy loss function with custom forward and backward methods.
+    """
 
     @staticmethod
     @custom_fwd(cast_inputs=torch.float32, device_type="cuda")
     def forward(ctx: Any, vocab_parallel_logits: torch.Tensor, targets: torch.Tensor, mpu: MPU, mode: ParallelMode):
+        """
+        Forward pass for vocab parallel cross-entropy loss.
+
+        Args:
+            ctx (Any): Context object to save information for backward computation.
+            vocab_parallel_logits (torch.Tensor): Logits tensor partitioned across vocabulary.
+            targets (torch.Tensor): Target tensor with true class indices.
+            mpu (MPU): Model parallel unit for distributed operations.
+            mode (ParallelMode): Parallel mode for communication.
+        """
         collectives = Collectives(mpu, mode=mode)
 
         logits_max = torch.max(vocab_parallel_logits, dim=-1)[0]
@@ -52,6 +65,13 @@ class VocabParallelCrossEntropyFunction(torch.autograd.Function):
     @staticmethod
     @custom_bwd(device_type="cuda")
     def backward(ctx: Any, grad: torch.Tensor):
+        """
+        Backward pass for vocab parallel cross-entropy loss.
+
+        Args:
+            ctx (Any): Context object with saved tensors from forward pass.
+            grad (torch.Tensor): Gradient tensor from subsequent layers.
+        """
         softmax, target_mask, masked_target_1d = ctx.saved_tensors
 
         grad_input = softmax
@@ -66,6 +86,15 @@ class VocabParallelCrossEntropyFunction(torch.autograd.Function):
 
 
 class VocabParallelCrossEntropyLoss(_Loss):
+    """
+    Vocab parallel cross-entropy loss module.
+
+    Args:
+        reduce_mean (bool): Whether to average the loss over valid elements.
+        ignore_index (int): Index to ignore in the target tensor.
+        mpu (Optional[MPU]): Model parallel unit for distributed operations.
+        mode (ParallelMode): Parallel mode for communication.
+    """
     def __init__(
         self,
         reduce_mean: bool = True,
@@ -80,6 +109,13 @@ class VocabParallelCrossEntropyLoss(_Loss):
         self.mode = mode
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor):
+        """
+        Forward pass for vocab parallel cross-entropy loss.
+
+        Args:
+            logits (torch.Tensor): Logits tensor partitioned across vocabulary.
+            targets (torch.Tensor): Target tensor with true class indices.
+        """
         loss = VocabParallelCrossEntropyFunction.apply(logits, targets, self.mpu, self.mode)
         valid_count = (targets != self.ignore_index).sum()
         loss[targets == self.ignore_index] = 0.0
@@ -92,6 +128,15 @@ class VocabParallelCrossEntropyLoss(_Loss):
 
 
 def maybe_vocab_parallel_cross_entropy(logits: torch.Tensor, labels: torch.Tensor, mpu: MPU, mode: ParallelMode):
+    """
+    Compute cross-entropy loss, using vocab parallel version if in a distributed setting.
+
+    Args:
+        logits (torch.Tensor): Logits tensor.
+        labels (torch.Tensor): Target tensor with true class indices.
+        mpu (MPU): Model parallel unit for distributed operations.
+        mode (ParallelMode): Parallel mode for communication.
+    """
     if mpu is not None and mpu.get_world_size(mode) > 1:
         loss_fn = VocabParallelCrossEntropyLoss(mpu=mpu, mode=mode)
     else:

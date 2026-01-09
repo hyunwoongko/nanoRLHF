@@ -14,6 +14,13 @@ from nanorlhf.nanovllm.utils.config import NanoVLLMConfig
 
 
 class LLMEngine:
+    """
+    LLMEngine is responsible for managing the distributed LLM inference using NanoRay.
+
+    Args:
+        model (str): The model name or path.
+        **kwargs: Additional configuration parameters for NanoVLLMConfig.
+    """
     def __init__(self, model, **kwargs):
         config_fields = {field.name for field in fields(NanoVLLMConfig)}
         config_kwargs = {k: v for k, v in kwargs.items() if k in config_fields}
@@ -36,6 +43,12 @@ class LLMEngine:
         self.round_robin_counter = 0
 
     def init_ray(self, config):
+        """
+        Initialize the NanoRay session with the appropriate node configurations.
+
+        Args:
+            config (NanoVLLMConfig): The configuration for NanoVLLM.
+        """
         nodes = {}
         if self.global_world_size > 1:
             for global_rank in range(self.global_world_size):
@@ -64,12 +77,27 @@ class LLMEngine:
             )
 
     def create_placement_groups(self):
+        """
+        Create placement groups for the model runners.
+
+        Returns:
+            PlacementGroup: The created placement group.
+        """
         return nanoray.create_placement_group(
             bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.global_world_size)],
             strategy=PlacementStrategy.SPREAD,
         )
 
     def create_model(self, config: NanoVLLMConfig):
+        """
+        Create model runners for each data parallel and tensor parallel rank.
+
+        Args:
+            config (NanoVLLMConfig): The configuration for NanoVLLM.
+
+        Returns:
+            List[List[ModelRunner]]: A 2D list of model runners indexed by data parallel and tensor parallel ranks.
+        """
         object_refs = []
         for data_parallel_rank in range(self.data_parallel_size):
             for tensor_parallel_rank in range(self.tensor_parallel_size):
@@ -90,6 +118,17 @@ class LLMEngine:
         return runners
 
     def run_model(self, data_parallel_rank, sequences, is_prefill):
+        """
+        Run the model for the given data parallel rank and sequences.
+
+        Args:
+            data_parallel_rank (int): The data parallel rank.
+            sequences (List[Sequence]): The list of sequences to process.
+            is_prefill (bool): Whether the current step is a prefill step.
+
+        Returns:
+            List[int]: The generated token IDs.
+        """
         object_refs = []
         for tensor_parallel_rank in range(self.tensor_parallel_size):
             runner = self.model_runners[data_parallel_rank][tensor_parallel_rank]
@@ -99,6 +138,13 @@ class LLMEngine:
         return tokens
 
     def add_request(self, prompt, sampling_params):
+        """
+        Add a new generation request to the engine.
+
+        Args:
+            prompt (str or List[int]): The input prompt as a string or list of token IDs.
+            sampling_params: The sampling parameters for generation.
+        """
         if isinstance(prompt, str):
             prompt = self.tokenizer.encode(prompt)
 
@@ -108,6 +154,13 @@ class LLMEngine:
         self.schedulers[data_parallel_rank].add(sequence)
 
     def step(self):
+        """
+        Perform a single generation step across all data parallel ranks.
+
+        Returns:
+            Tuple[List[Tuple[int, List[int], str]], int]:
+                A tuple containing the list of outputs and the total number of tokens processed.
+        """
         all_outputs = []
         total_num_tokens = 0
 
@@ -133,9 +186,26 @@ class LLMEngine:
         return all_outputs, total_num_tokens
 
     def is_finished(self):
+        """
+        Check if all schedulers have finished processing.
+
+        Returns:
+            bool: True if all schedulers are finished, False otherwise.
+        """
         return all(s.is_finished() for s in self.schedulers)
 
     def generate(self, prompts, sampling_params, use_tqdm=True):
+        """
+        Generate text for a list of prompts.
+
+        Args:
+            prompts (List[str or List[int]]): The list of input prompts.
+            sampling_params (Union[SamplingParams, List[SamplingParams]]): The sampling parameters.
+            use_tqdm (bool): Whether to display a progress bar.
+
+        Returns:
+            List[Dict]: A list of generation results containing text, token IDs, and finish reasons.
+        """
         if use_tqdm:
             pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True)
 

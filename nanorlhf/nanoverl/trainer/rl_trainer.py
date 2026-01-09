@@ -17,6 +17,12 @@ from nanorlhf.nanoverl.utils.packing_utils import packed_collate_fn_for_rl
 
 
 class RLTrainer(BaseTrainer):
+    """
+    Reinforcement Learning Trainer that orchestrates the training process using actor-critic architecture.
+
+    Args:
+        config (str): Path to the RL configuration YAML file.
+    """
     def __init__(self, config: str):
         super().__init__(config=RLConfig.from_yaml(config))
         self.train_dataloader = self.load_dataloader(self.config, split="train")
@@ -39,6 +45,13 @@ class RLTrainer(BaseTrainer):
         self.rollout_worker_group = RolloutWorkerGroup(self.config, rollout_workers)
 
     def load_dataloader(self, config, split: str):
+        """
+        Load the dataloader for the specified split.
+
+        Args:
+            config: Configuration object containing data settings.
+            split (str): The data split to load ('train' or 'valid').
+        """
         assert split in ["train", "valid"], "split must be 'train' or 'valid'"
         file_path = config.data.train_data if split == "train" else config.data.valid_data
         dataset = RLDataset(file_path, max_prompt_length=config.rollout.max_prompt_len)
@@ -59,6 +72,12 @@ class RLTrainer(BaseTrainer):
         )
 
     def init_ray(self, config):
+        """
+        Initialize the nanoray distributed framework with the specified configuration.
+
+        Args:
+            config: Configuration object containing actor settings.
+        """
         nodes = {}
         for rank in range(self.actor_world_size):
             nodes[f"actor-global_rank={rank}"] = nanoray.NodeConfig(
@@ -87,6 +106,12 @@ class RLTrainer(BaseTrainer):
             )
 
     def create_placement_groups(self):
+        """
+        Create placement groups for actor and rollout workers.
+
+        Returns:
+            Tuple containing actor and rollout placement groups.
+        """
         actor_pg = nanoray.create_placement_group(
             bundles=[Bundle(cpus=1.0, gpus=1.0) for _ in range(self.actor_world_size)],
             strategy=PlacementStrategy.SPREAD,
@@ -98,6 +123,16 @@ class RLTrainer(BaseTrainer):
         return actor_pg, rollout_pg
 
     def spawn_workers(self, config, total_steps: int):
+        """
+        Spawn actor and rollout workers.
+
+        Args:
+            config: Configuration object containing actor and rollout settings.
+            total_steps (int): Total number of training steps for scheduler initialization.
+
+        Returns:
+            Tuple containing lists of actor and rollout worker references.
+        """
         actor_refs = []
         for actor_local_rank in range(self.actor_world_size):
             actor_ref = ActorCriticRefWorker.options(
@@ -130,11 +165,23 @@ class RLTrainer(BaseTrainer):
         return actors, rollouts
 
     def sync_actor_to_rollout(self):
+        """
+        Synchronize parameters from the actor model to the rollout model.
+
+        Returns:
+            List of synchronization information from each worker.
+        """
         actor_object_refs = self.actor_critic_ref_worker_group.sync_actor_to_rollout()
         rollout_object_refs = self.rollout_worker_group.sync_actor_to_rollout()
         return nanoray.get(actor_object_refs + rollout_object_refs)
 
     def create_continuous_iterator(self):
+        """
+        Create a continuous iterator over the training dataloader.
+
+        Yields:
+            Tuple containing the batch, progress bar, and epoch index.
+        """
         for epoch in range(self.config.training.total_epochs):
             pbar = tqdm(
                 self.train_dataloader,
@@ -145,6 +192,15 @@ class RLTrainer(BaseTrainer):
                 yield batch, pbar, epoch
 
     def async_generate_next_batch(self, iterator):
+        """
+        Asynchronously generate the next batch using the rollout worker group.
+
+        Args:
+            iterator: An iterator that yields batches.
+
+        Returns:
+            Tuple containing the rollout future, batch, progress bar, and epoch index.
+        """
         try:
             batch, pbar, epoch = next(iterator)
         except StopIteration:
@@ -161,6 +217,9 @@ class RLTrainer(BaseTrainer):
         return rollout_future, batch, pbar, epoch
 
     def fit(self):
+        """
+        Start the training loop for reinforcement learning.
+        """
         continuous_iterator = self.create_continuous_iterator()
         batch_data_future = self.async_generate_next_batch(continuous_iterator)
         mean_reward = 0

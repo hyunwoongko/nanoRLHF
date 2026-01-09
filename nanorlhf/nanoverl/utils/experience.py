@@ -25,6 +25,18 @@ class Experience:
         pin_memory: bool = False,
         detach: bool = False,
     ):
+        """
+        Move all tensor attributes to the specified device.
+
+        Args:
+            device (Optional[Union[torch.device, str]]): The target device to move tensors to.
+            non_blocking (bool): Whether to use non-blocking transfers.
+            pin_memory (bool): Whether to pin memory for CPU tensors.
+            detach (bool): Whether to detach tensors from the computation graph.
+
+        Returns:
+            Experience: The updated Experience object with tensors moved to the specified device.
+        """
         if device is not None and not isinstance(device, torch.device):
             device = torch.device(device)
 
@@ -46,6 +58,12 @@ class Experience:
         return self
 
     def to_dict(self):
+        """
+        Convert the Experience object to a dictionary, excluding None values.
+
+        Returns:
+            dict: A dictionary representation of the Experience object.
+        """
         result = {}
         for name, value in vars(self).items():
             if value is None:

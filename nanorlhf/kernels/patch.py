@@ -8,6 +8,16 @@ from nanorlhf.kernels.utils.vllm import paged_flash_attention_forward
 
 
 def patch_kernel(model, use_paged_attention=False):
+    """
+    Patch the model to use optimized kernels for attention and RMS normalization.
+
+    Args:
+        model: The model to be patched.
+        use_paged_attention (bool): Whether to use paged attention kernel. Defaults to False.
+
+    Returns:
+        The patched model.
+    """
     # patch flash attention kernel
     if use_paged_attention:
         attn_impl = "nanoRLHF_paged"

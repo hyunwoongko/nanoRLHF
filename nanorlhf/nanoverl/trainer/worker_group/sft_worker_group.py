@@ -4,6 +4,13 @@ from nanorlhf.nanoverl.utils.packing_utils import split_packed_batch
 
 
 class SFTWorkerGroup:
+    """
+    Worker group that manages supervised fine-tuning (SFT) workers.
+
+    Args:
+        config: Configuration object containing model settings.
+        workers: List of remote worker instances.
+    """
 
     def __init__(self, config, workers):
         self.config = config
@@ -26,6 +33,16 @@ class SFTWorkerGroup:
             self.data_parallel_ranks.append(dp_rank)
 
     def step(self, input_batch, train: bool):
+        """
+        Perform a training or evaluation step on the SFT workers.
+
+        Args:
+            input_batch: The input batch to be processed.
+            train (bool): Whether to perform a training step (True) or evaluation step (False).
+
+        Returns:
+            The output from the first worker after processing the input batch.
+        """
         per_data_parallel_batches = []
         for data_parallel_rank in range(self.config.model.data_parallel_size):
             data_parallel_batch = split_packed_batch(
@@ -42,6 +59,12 @@ class SFTWorkerGroup:
         return nanoray.get(object_refs)[0]
 
     def save_parallelized(self, global_step):
+        """
+        Save the state of all SFT workers in a parallelized manner.
+
+        Args:
+            global_step: The current global training step.
+        """
         experiment_dir = (
             f"{self.config.training.default_local_dir}"
             f"/{self.config.training.project_name}"

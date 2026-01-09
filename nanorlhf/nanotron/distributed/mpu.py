@@ -350,6 +350,12 @@ class MPU:
     # sanity check
     @staticmethod
     def check_parallel_mode(mode: ParallelMode) -> None:
+        """
+        Check if the given parallel mode is valid.
+
+        Args:
+            mode (ParallelMode): The parallel mode to check.
+        """
         if not isinstance(mode, ParallelMode):
             raise ValueError(f"Invalid parallel mode: {mode}. Expected one of {[m.value for m in ParallelMode]}.")
 
@@ -982,6 +988,19 @@ class MPU:
         pipeline_parallel_size: int,
         global_rank_offset: int = 0,
     ) -> Tuple[int, int, int]:
+        """
+        Get local ranks in data, tensor, and pipeline parallel groups from the given global rank.
+
+        Args:
+            global_rank (int): The global rank.
+            data_parallel_size (int): The data parallel size.
+            tensor_parallel_size (int): The tensor parallel size.
+            pipeline_parallel_size (int): The pipeline parallel size.
+            global_rank_offset (int): The global rank offset.
+
+        Returns:
+            Tuple[int, int, int]: A tuple containing the local ranks in data, tensor, and pipeline parallel groups.
+        """
         local_rank_in_slice = global_rank - global_rank_offset
         model_parallel_size = tensor_parallel_size * pipeline_parallel_size
         world_size_in_slice = data_parallel_size * model_parallel_size

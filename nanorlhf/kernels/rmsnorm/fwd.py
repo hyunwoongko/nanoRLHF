@@ -16,6 +16,22 @@ def rmsnorm_kernel_fwd(
     stride_yn,
     block_size: tl.constexpr,
 ):
+    """
+    A kernel to compute the forward pass of RMSNorm.
+
+    Args:
+        x_ptr: Pointer to the input tensor of shape (M, N).
+        w_ptr: Pointer to the weight tensor of shape (N,).
+        y_ptr: Pointer to the output tensor of shape (M, N).
+        M: Number of rows in the input/output tensors.
+        N: Number of columns in the input/output tensors.
+        eps: Small epsilon value for numerical stability.
+        stride_xm: Stride for rows in the input tensor.
+        stride_xn: Stride for columns in the input tensor.
+        stride_ym: Stride for rows in the output tensor.
+        stride_yn: Stride for columns in the output tensor.
+        block_size: Block size for processing columns.
+    """
     row = tl.program_id(0)
 
     offs = tl.arange(0, block_size)

@@ -35,6 +35,14 @@ ATTRS_TO_UPDATE = [
 
 
 class TensorParallelWrapper(ParallelizationWrapper):
+    """
+    Tensor parallel wrapper for model parallelism.
+
+    Args:
+        model (nn.Module): The model to be parallelized.
+        mpu (MPU): The model parallel unit.
+        mode (ParallelMode): The parallel mode, either TENSOR or ROLLOUT_TENSOR.
+    """
 
     def __init__(self, model: nn.Module, mpu: MPU, mode: ParallelMode):
         super().__init__(model, mpu, parallelization_priority=1)
@@ -48,6 +56,14 @@ class TensorParallelWrapper(ParallelizationWrapper):
         self.device = torch.cuda.current_device()
 
     def pad_tensor(self, module: nn.Module, name: str, dim: int):
+        """
+        Pad the tensor attribute of a module along a specified dimension
+
+        Args:
+            module (nn.Module): The module containing the tensor attribute.
+            name (str): The name of the tensor attribute to be padded.
+            dim (int): The dimension along which to pad the tensor.
+        """
         original_tensor = getattr(module, name)
         original_size = original_tensor.size(dim)
         resized_size = original_size
@@ -67,6 +83,9 @@ class TensorParallelWrapper(ParallelizationWrapper):
         return resized_size
 
     def pad_embedding_related_params(self):
+        """
+        Pad the embedding and head layers to be divisible by the tensor parallel world size.
+        """
         embedding = self.mp_plan.embedding_plan.module
         original_num_embeddings = embedding.weight.size(0)
         padded_num_embedding = self.pad_tensor(embedding, "weight", dim=0)
@@ -98,6 +117,15 @@ class TensorParallelWrapper(ParallelizationWrapper):
                 self.pad_tensor(head, "bias", dim=0)
 
     def load_data(self, kwargs: Dict[str, Any]):
+        """
+        Load input data onto the appropriate device for tensor parallelism.
+
+        Args:
+            kwargs (Dict[str, Any]): The input keyword arguments.
+
+        Returns:
+            Dict[str, Any]: The loaded keyword arguments.
+        """
         loaded = {}
         for k, v in kwargs.items():
             if torch.is_tensor(v):
@@ -108,6 +136,12 @@ class TensorParallelWrapper(ParallelizationWrapper):
         return loaded
 
     def update_existing_attrs(self, fn: Callable):
+        """
+        Update existing attributes in the model by applying a function.
+
+        Args:
+            fn (Callable): The function to apply to the attribute values.
+        """
         for module in self.model.modules():
             for attr in ATTRS_TO_UPDATE:
                 if hasattr(module, attr):
@@ -124,9 +158,18 @@ class TensorParallelWrapper(ParallelizationWrapper):
                     setattr(module, attr, updated_value)
 
     def replicate_module(self, plan: ModuleParallelPlan):
+        """
+        Replicate a module across tensor parallel ranks.
+
+        Args:
+            plan (ModuleParallelPlan): The module parallelization plan.
+        """
         tag_module(plan.module, self.mode, self.rank)
 
     def _parallelize(self):
+        """
+        Parallelize the model for tensor parallelism.
+        """
         self.pad_embedding_related_params()
         self.update_existing_attrs(lambda x: x // self.world_size)
 
@@ -163,6 +206,9 @@ class TensorParallelWrapper(ParallelizationWrapper):
             )
 
     def _deparallelize(self):
+        """
+        Deparallelize the model from tensor parallelism.
+        """
         self.update_existing_attrs(lambda x: x * self.world_size)
 
         # Deparallelize embedding
@@ -188,6 +234,9 @@ class TensorParallelWrapper(ParallelizationWrapper):
             )
 
     def _forward(self, *args, **kwargs):
+        """
+        Forward method with tensor parallelism support.
+        """
         _kwargs = to_kwargs(self.model_forward, args, kwargs)
         _kwargs = self.load_data(_kwargs)
 

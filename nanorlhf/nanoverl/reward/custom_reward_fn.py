@@ -6,6 +6,20 @@ tasks = {
 
 
 def compute_score(inputs):
+    """
+    Computes reward scores for a list of input samples.
+
+    Args:
+        inputs (list): A list of dictionaries, each containing:
+            - "prompt_str" (str): The prompt string.
+            - "response_str" (str): The model's response string.
+            - "reward_model" (dict): A dictionary with keys:
+                - "reward_type" (str): The type of reward model to use.
+                - "ground_truth" (str): The ground truth reference string.
+
+    Returns:
+        list: A list of computed scores for each input sample.
+    """
     assert len(inputs) > 0, "Inputs should not be empty"
 
     scores = []
