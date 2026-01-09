@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nanorlhf"
-version = "0.0"
+version = "1.0.0"
 description = "nanoRLHF: from-scratch journey into how LLMs and RLHF really work."
 readme = "README.md"
 requires-python = ">=3.9"
