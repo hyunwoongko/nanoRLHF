@@ -40,5 +40,19 @@ def main(tmp_dir="data/ipc_test"):
     print("✅ IPC round-trip passed:", path)
 
 
+def test_round_trip_of_sliced_table_keeps_nulls(tmp_path):
+    # Slicing from row 1 gives validity bitmaps that start mid-byte (bit_offset=1).
+    rows = gen_rows(20)
+    table = Table([RecordBatch.from_list(rows)])
+    for offset, length in [(1, 8), (3, 13), (6, 9)]:
+        sliced = table.slice(offset, length)
+        assert any(col.validity is not None and col.validity.bit_offset for b in sliced.batches for col in b.columns)
+        assert any(v is None for r in rows[offset:offset + length] for v in r.values())
+        path = tmp_path / f"slice_{offset}_{length}.nano"
+        with open(path, "wb") as fp:
+            write_table(fp, sliced)
+        assert read_table(str(path)).to_list() == rows[offset:offset + length]
+
+
 if __name__ == "__main__":
     main()
