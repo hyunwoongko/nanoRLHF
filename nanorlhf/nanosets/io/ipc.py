@@ -169,6 +169,8 @@ def write_table(fp, table: Table):
         if array.validity is not None:
             meta["validity"] = add_buffer(array.validity.buffer)
             meta["validity_length"] = len(array.validity)
+            # A sliced bitmap can start mid-byte, so store where its first bit is.
+            meta["validity_bit_offset"] = array.validity.bit_offset
 
         if isinstance(array, PrimitiveArray):
             meta["kind"] = "primitive"
@@ -397,7 +399,8 @@ def read_table(path: str) -> Table:
             if "validity" in inputs:
                 validity_buffer = buffers[inputs["validity"]]
                 validity_length = inputs.get("validity_length", logical_length)
-                validity = Bitmap(validity_length, validity_buffer)
+                validity_bit_offset = inputs.get("validity_bit_offset", 0)
+                validity = Bitmap(validity_length, validity_buffer, validity_bit_offset)
 
             indices = None
             if "indices" in inputs:
